@@ -1,0 +1,134 @@
+/* DSHDesktop 共享设计基础：数值与 dsh 设计系统对齐
+   （client/ui-theme/src/styles/design-platform.css）
+   - 深色：卡片 bluish-800 / 文字 bluish-50 / 次级 bluish-400
+   - 浅色：卡片纯白 / 文字 bluish-1000 / 次级 bluish-600
+   - 菜单卡片 r12/pad4；条目 min-h40/r10/14px；hover 8% / 按压 14%
+   供 tray-menu.html、dialog.html 引用；注入 dsh 页面的菜单脚本保持运行时
+   读 dsh 令牌，仅回退色与本文件一致。 */
+:root {
+  --dshd-card: #353638;
+  --dshd-text: #f9fafb;
+  --dshd-text-dim: #adb2b8;
+  --dshd-border: rgba(255, 255, 255, 0.06);
+  --dshd-hover: rgba(255, 255, 255, 0.08);
+  --dshd-pressed: rgba(255, 255, 255, 0.14);
+  --dshd-accent: #4d6bfe;
+  --dshd-accent-hover: #4160e6;
+  --dshd-accent-pressed: #3957cf;
+  --dshd-danger: #e81123;
+  --dshd-danger-pressed: #c50f1f;
+  --dshd-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --dshd-card: #ffffff;
+    --dshd-text: #0f1115;
+    --dshd-text-dim: #81858c;
+    --dshd-border: rgba(0, 0, 0, 0.06);
+    --dshd-hover: rgba(38, 49, 72, 0.06);
+    --dshd-pressed: rgba(38, 49, 72, 0.1);
+    --dshd-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  }
+}
+
+.dshd-body {
+  margin: 0;
+  font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  color: var(--dshd-text);
+  background: var(--dshd-card);
+  border: 1px solid var(--dshd-border);
+  user-select: none;
+}
+
+/* 菜单卡片：与 dsh Menu 卡片同规格（r12 / 内边距 4） */
+.dshd-card {
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--dshd-card);
+  border: 1px solid var(--dshd-border);
+  box-shadow: var(--dshd-shadow);
+}
+
+/* 菜单条目：min-h40 / r10 / pad 8-10 / 图标 16 / 分隔间距 8 */
+.dshd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dshd-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+}
+.dshd-row:hover { background: var(--dshd-hover); }
+.dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
+.dshd-row.danger:hover { background: var(--dshd-danger); color: #fff; }
+.dshd-row.danger:active, .dshd-row.danger.pressed { background: var(--dshd-danger-pressed); color: #fff; }
+.dshd-row .ic { flex: none; width: 16px; height: 16px; }
+.dshd-row .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dshd-row .dim { flex: none; font-size: 12px; color: var(--dshd-text-dim); }
+
+.dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
+
+/* 弹窗按钮 */
+.dshd-btn {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--dshd-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dshd-text);
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.dshd-btn:hover { background: var(--dshd-hover); }
+.dshd-btn:active { background: var(--dshd-pressed); }
+.dshd-btn.primary { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; }
+.dshd-btn.primary:hover { background: var(--dshd-accent-hover); }
+.dshd-btn.primary:active { background: var(--dshd-accent-pressed); }
+
+/* 弹窗头部/关闭按钮 */
+.dshd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dshd-border);
+  font-size: 14px;
+  font-weight: 600;
+}
+.dshd-head .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshd-x {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dshd-text-dim);
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+  font-size: 10px;
+  cursor: pointer;
+  outline: none;
+}
+.dshd-x:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+.dshd-x:active { background: var(--dshd-pressed); }
+
+/* 弹窗页脚 */
+.dshd-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--dshd-border);
+}

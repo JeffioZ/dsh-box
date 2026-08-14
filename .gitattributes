@@ -1,0 +1,24 @@
+# 统一换行符：文本文件入库为 LF（GitHub 标准），Windows 检出时按需转换
+* text=auto
+
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.svg   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+
+# PowerShell 脚本：Windows 习惯 CRLF（保留 UTF-8 BOM）
+*.ps1   text eol=crlf
+
+# 二进制文件
+*.png   binary
+*.ico   binary
+*.icns  binary
+*.exe   binary

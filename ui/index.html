@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeepSeek Harness Desktop</title>
+  <link rel="icon" href="assets/favicon.svg" />
+  <style>
+:root {
+  --bg: #151517;
+  --card: #17171d;
+  --line: #26262e;
+  --text: #ececf1;
+  --muted: #8b8b94;
+  --blue: #4d6bfe;
+  --blue-dim: #3a52c9;
+  --red: #f85149;
+  --green: #3fb950;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: radial-gradient(1200px 600px at 50% -10%, #1b1b26 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  display: flex; align-items: center; justify-content: center;
+  user-select: none; overflow: hidden;
+  /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪 */
+  transition: opacity .3s ease;
+}
+/* 就绪后由 app.js 添加：内容淡出，露出与 dsh 界面一致的深色背景 */
+body.fade-out { opacity: 0; }
+.stage { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
+.card { width: min(420px, 86vw); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.logo-wrap {
+  width: 84px; height: 84px; border-radius: 22px;
+  background: var(--blue);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 12px 40px rgba(77, 107, 254, .35);
+}
+.logo { width: 52px; height: 52px; }
+.logo path { fill: #fff; }
+.title { font-size: 22px; font-weight: 600; letter-spacing: .2px; margin-top: 6px; }
+
+.status { width: 100%; margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+.status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
+.status-detail { text-align: center; font-size: 12px; color: var(--muted); min-height: 16px; }
+.bar { height: 4px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
+.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #8aa2ff); transition: width .45s ease; animation: slide 1.4s ease-in-out infinite; }
+.bar-fill.determinate { animation: none; }
+.bar-fill.done { width: 100%; animation: none; }
+.bar-fill.err { width: 100%; background: var(--red); animation: none; }
+@keyframes slide { 0% { margin-left: -20%; } 100% { margin-left: 110%; } }
+
+.spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+.spinner.hidden { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-box { width: 100%; background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .35); border-radius: 12px; padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+.error-title { font-size: 14px; font-weight: 600; color: var(--red); }
+.error-msg { font-size: 12.5px; color: var(--muted); line-height: 1.5; word-break: break-all; max-height: 96px; overflow: auto; user-select: text; }
+.error-actions { display: flex; gap: 8px; }
+.update-box { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.update-line { font-size: 12.5px; color: var(--muted); }
+.update-actions { display: flex; gap: 8px; }
+
+.btn {
+  background: #23232b; color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 16px; font-size: 13px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.btn:hover { background: #2c2c36; border-color: #3a3a46; }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.primary:hover { background: var(--blue-dim); }
+.btn.small { padding: 4px 12px; font-size: 12px; }
+.hidden { display: none !important; }
+
+.footer { position: fixed; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); }
+.versions { opacity: .75; }
+
+/* 浅色系统主题适配（--bg 与 dsh 浅色主题纯白一致，切换无缝） */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --card: #ffffff;
+    --line: #e2e4ea;
+    --text: #1b1b22;
+    --muted: #6a6a76;
+    --blue: #4d6bfe;
+    --blue-dim: #3a52c9;
+  }
+  body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
+  .logo-wrap { box-shadow: 0 12px 40px rgba(77, 107, 254, .25); }
+  .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
+  .btn:hover { background: #e6e8ef; }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .btn.primary:hover { background: var(--blue-dim); }
+  .error-box { background: rgba(248, 81, 73, .06); }
+  .spinner { border-color: var(--line); border-top-color: var(--blue); }
+}
+
+/* 系统“减弱动态效果”：关闭全部动画 */
+@media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
+  .spinner { animation: none; }
+  .bar-fill { animation: none; transition: none; }
+}
+</style>
+</head>
+<body>
+  <main class="stage">
+    <div class="card">
+      <div class="logo-wrap">
+        <img class="logo" src="assets/favicon.svg" alt="DeepSeek" />
+      </div>
+      <h1 class="title">DeepSeek Harness Desktop</h1>
+
+      <div id="status" class="status">
+        <div class="status-line">
+          <span id="spinner" class="spinner"></span>
+          <span id="status-text">正在启动…</span>
+        </div>
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <div id="status-detail" class="status-detail"></div>
+      </div>
+
+      <div id="error-box" class="error-box hidden">
+        <div class="error-title">出错了</div>
+        <div id="error-msg" class="error-msg"></div>
+        <div class="error-actions">
+          <button id="btn-retry" class="btn primary">重试</button>
+          <button id="btn-logs" class="btn">打开日志</button>
+          <button id="btn-quit" class="btn">退出</button>
+        </div>
+      </div>
+
+      <div id="update-box" class="update-box hidden">
+        <div class="update-line"><span id="update-text">检查更新中…</span></div>
+        <div class="update-actions">
+          <button id="btn-update-check" class="btn small">检查更新</button>
+          <button id="btn-update-apply" class="btn small primary hidden">更新 dsh</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span id="versions" class="versions"></span>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

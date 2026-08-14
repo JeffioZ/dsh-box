@@ -1,0 +1,62 @@
+[package]
+name = "dsh-desktop"
+version = "0.1.16"
+description = "DeepSeek Harness (dsh) desktop shell"
+license-file = "../LICENSE"
+authors = ["JeffioZ <13286072+JeffioZ@users.noreply.github.com>"]
+edition = "2021"
+rust-version = "1.77"
+
+[[bin]]
+name = "DSHDesktop"
+path = "src/main.rs"
+
+[lib]
+name = "dsh_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# 启用 Tauri 不稳定 API（子 webview 自绘标题栏）；跨 crate feature cfg 要求应用侧同名声明
+default = ["unstable"]
+unstable = []
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  # 供 windows-sys 内部门控：CreateJobObjectW 需要该 feature 才会编译
+  "Win32_Security",
+  # 供 windows-sys 内部门控：SHGetFileInfoW 需要该 feature 才会编译
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+ureq = { version = "=2.8.0", default-features = false, features = ["tls", "json"] }
+url = "2"
+# 自定义协议 dshd:// 的请求/响应类型（与 tauri 内部同版本，类型必须一致）
+http = "1"
+# 图标 PNG 编码用（deflate）；miniz_oxide 纯 Rust 后端，不引入系统 zlib
+flate2 = "1"
+
+[profile.release]
+strip = true
+# thin LTO：链接速度显著快于 fat（增量构建收益大），体积/性能差异极小
+lto = "thin"
+codegen-units = 1
+# 无需栈回溯：体积更小、启动更快；本项目无 catch_unwind 依赖
+panic = "abort"
+# 全部 crate（含本项目）按体积优化（size-optimized），进一步压缩单 exe
+opt-level = "z"

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "DSHDesktop default capability: core IPC + dialog",
+  "windows": ["main", "titlebar", "tray-menu", "app-dialog"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:default"
+  ]
+}

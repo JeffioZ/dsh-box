@@ -1,0 +1,16 @@
+{
+  "name": "dsh-desktop",
+  "version": "0.1.16",
+  "private": true,
+  "description": "DeepSeek Harness (dsh) desktop shell - Tauri v2, single exe, tray, one-click updates",
+  "scripts": {
+    "icons": "node scripts/gen-icons.mjs",
+    "dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "dist": "cargo build --release --manifest-path src-tauri/Cargo.toml && node scripts/copy-exe.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  },
+  "license": "MIT"
+}

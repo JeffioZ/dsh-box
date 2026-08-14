@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="common.css" />
+  <style>
+    /* 托盘菜单：方形窗口，卡片样式取自 common.css（与 dsh 菜单同规格） */
+    html, body { height: 100%; overflow: hidden; }
+    body { padding: 4px; }
+    #list { display: flex; flex-direction: column; }
+  </style>
+</head>
+<body class="dshd-body dshd-card">
+  <div id="list"></div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const currentWindow = window.__TAURI__.window.getCurrentWindow();
+
+    let lastItemsKey = '';
+    function render(items) {
+      // 内容未变化时不重建 DOM（避免“按下-松开”之间重建打断点击），
+      // 但必须清除残留的按压高亮（隐藏窗口里 setTimeout 可能被暂停，自清不可靠）
+      const key = JSON.stringify(items || []);
+      if (key === lastItemsKey) {
+        document.querySelectorAll('.dshd-row.pressed').forEach((r) => r.classList.remove('pressed'));
+        return;
+      }
+      lastItemsKey = key;
+      const list = document.getElementById('list');
+      list.textContent = '';
+      for (const it of items) {
+        if (it.sep) {
+          const sep = document.createElement('div');
+          sep.className = 'dshd-sep';
+          list.append(sep);
+          continue;
+        }
+        const row = document.createElement('button');
+        row.className = 'dshd-row' + (it.id === 'quit' ? ' danger' : '');
+        const lb = document.createElement('span');
+        lb.className = 'lb';
+        lb.textContent = it.label;
+        row.append(lb);
+        row.addEventListener('mousedown', () => row.classList.add('pressed'));
+        row.addEventListener('mouseup', () => {
+          invoke('tray_menu_choose', { id: it.id }).catch(() => {});
+        });
+        row.addEventListener('mouseleave', () => row.classList.remove('pressed'));
+        list.append(row);
+      }
+    }
+
+    async function refresh() {
+      try {
+        render(await invoke('tray_menu_get'));
+      } catch (e) {}
+    }
+    // Rust 在窗口 show 后 eval 调用本函数：隐藏窗口收不到 emit 时的兜底
+    window.__dshdRefresh = refresh;
+
+    listen('tray-menu-open', (e) => render(e.payload));
+    window.addEventListener('focus', () => {
+      if (document.getElementById('list').children.length === 0) refresh();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refresh();
+    });
+    refresh();
+
+    // mousedown 后窗口会立即失焦（焦点争夺），不在此隐藏菜单：
+    // 收起交给 Rust（外部点击监视器）。Escape 手动关闭。
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.dshd-row.pressed').forEach((r) => r.classList.remove('pressed'));
+        currentWindow.hide();
+      }
+    });
+  </script>
+</body>
+</html>
