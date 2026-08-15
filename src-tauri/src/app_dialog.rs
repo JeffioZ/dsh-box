@@ -25,7 +25,7 @@ pub struct AppDialogOpen {
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏。
 pub fn precreate(app: &AppHandle) {
-    let win = match tauri::WebviewWindowBuilder::new(
+    match tauri::WebviewWindowBuilder::new(
         app,
         APP_DIALOG_WINDOW,
         WebviewUrl::App("dialog.html".into()),
@@ -36,43 +36,15 @@ pub fn precreate(app: &AppHandle) {
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    // 屏外停车位：预绘制时在此显示，不会在启动瞬间闪到屏幕上
-    .position(-32000.0, -32000.0)
     .visible(false)
     .build()
     {
-        Ok(win) => win,
+        Ok(_) => {}
         Err(e) => {
             crate::logging::log(&format!("app-dialog: 窗口预创建失败：{e}"));
-            return;
         }
-    };
-    pre_paint(app, &win);
+    }
 }
-
-/// 预绘制（仅 Windows）：隐藏窗口不绘制，首次 show 会先闪一帧白底。
-/// 启动时在屏外停车位显示一次，让页面完成首帧绘制，1.2s 后隐藏
-/// （代次守卫：期间用户已打开弹窗则不隐藏）。其余平台窗口保持隐藏。
-#[cfg(windows)]
-fn pre_paint(app: &AppHandle, win: &tauri::WebviewWindow) {
-    let gen = app.state::<AppState>().dialog_gen();
-    let _ = win.show();
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1200));
-        let h2 = handle.clone();
-        let _ = handle.run_on_main_thread(move || {
-            if h2.state::<AppState>().dialog_gen() == gen {
-                if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
-                    let _ = w.hide();
-                }
-            }
-        });
-    });
-}
-
-#[cfg(not(windows))]
-fn pre_paint(_app: &AppHandle, _win: &tauri::WebviewWindow) {}
 
 /// 居中于主窗口并显示（调用方已在主线程）。
 fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {

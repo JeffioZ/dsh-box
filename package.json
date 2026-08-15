@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "description": "DeepSeek Harness (dsh) desktop shell - Tauri v2, single exe, tray, one-click updates",
   "scripts": {
