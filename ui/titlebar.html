@@ -14,10 +14,16 @@ body {
   user-select: none;
 }
 .titlebar {
+  position: relative;
   height: 36px; display: flex; align-items: center; gap: 8px;
-  /* 方案 A：中间色均摊两侧色差；底边 1px 淡高光作为与 dsh 内容的分层线 */
+  /* 方案 A：中间色均摊两侧色差 */
   padding: 0 0 0 10px; background: #181819;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .06);
+}
+/* 与 dsh 内容的分层线：画在 36px 条内（box-shadow 落在条外会被子 webview 裁剪，
+   导致平时无分隔线、浮层展开加高时才“多出”一条线——错误观感） */
+.titlebar::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+  background: rgba(255, 255, 255, .06);
 }
 .brand { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #adb2b8; white-space: nowrap; }
 .brand-icon { width: 16px; height: 16px; -webkit-user-drag: none; user-drag: none; }
@@ -105,7 +111,8 @@ body.macos .titlebar { padding-left: 82px; }
 @media (prefers-color-scheme: light) {
   body { color: #1b1b22; }
   /* 方案 A：中间色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
-  .titlebar { background: #fcfcfd; box-shadow: 0 1px 0 rgba(0, 0, 0, .04); }
+  .titlebar { background: #fcfcfd; }
+  .titlebar::after { background: rgba(0, 0, 0, .04); }
   .brand { color: #6a6a76; }
   .balance-chip { background: #f4f5f8; border-color: #e2e4ea; }
   .balance-pop { background: #ffffff; border-color: #e2e4ea; box-shadow: 0 12px 32px rgba(0, 0, 0, .18); }
