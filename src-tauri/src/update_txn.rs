@@ -29,9 +29,30 @@ pub(crate) fn restore_directory(
     backup: &std::path::Path,
 ) -> Result<(), String> {
     if current.exists() {
-        std::fs::remove_dir_all(current).map_err(|e| format!("清理新版本安装目录失败：{e}"))?;
+        std::fs::remove_dir_all(current).map_err(|e| {
+            crate::locale::owned(
+                format!("清理新版本安装目录失败：{e}"),
+                format!("Failed to remove the new installation directory: {e}"),
+            )
+        })?;
     }
-    std::fs::rename(backup, current).map_err(|e| format!("恢复旧版本失败：{e}"))
+    std::fs::rename(backup, current).map_err(|e| {
+        crate::locale::owned(
+            format!("恢复旧版本失败：{e}"),
+            format!("Failed to restore the previous version: {e}"),
+        )
+    })
+}
+
+/// 回滚目录并在成功后结束事务；失败时必须保留 marker 与备份供下次启动恢复。
+pub(crate) fn rollback_directory(
+    current: &std::path::Path,
+    backup: &std::path::Path,
+    marker: &std::path::Path,
+) -> Result<(), String> {
+    restore_directory(current, backup)?;
+    remove_marker(marker);
+    Ok(())
 }
 
 /// 创建更新事务标记（create_new 保证互斥；写入并 fsync 后才生效）。
@@ -40,7 +61,12 @@ pub(crate) fn create_marker(path: &std::path::Path) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|e| format!("创建更新事务标记失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("创建更新事务标记失败：{e}"),
+                format!("Failed to create the update transaction marker: {e}"),
+            )
+        })?;
     use std::io::Write;
     if let Err(e) = file
         .write_all(b"in-progress\n")
@@ -48,7 +74,10 @@ pub(crate) fn create_marker(path: &std::path::Path) -> Result<(), String> {
     {
         drop(file);
         let _ = std::fs::remove_file(path);
-        return Err(format!("写入更新事务标记失败：{e}"));
+        return Err(crate::locale::owned(
+            format!("写入更新事务标记失败：{e}"),
+            format!("Failed to write the update transaction marker: {e}"),
+        ));
     }
     Ok(())
 }
@@ -74,14 +103,27 @@ fn recover_directory(
     if marker.exists() {
         if backup.exists() {
             if current.exists() {
-                std::fs::remove_dir_all(current)
-                    .map_err(|e| format!("清理未完成的 {name} 更新失败：{e}"))?;
+                std::fs::remove_dir_all(current).map_err(|e| {
+                    crate::locale::owned(
+                        format!("清理未完成的 {name} 更新失败：{e}"),
+                        format!("Failed to remove the incomplete {name} update: {e}"),
+                    )
+                })?;
             }
-            std::fs::rename(backup, current)
-                .map_err(|e| format!("恢复更新前的 {name} 失败：{e}"))?;
+            std::fs::rename(backup, current).map_err(|e| {
+                crate::locale::owned(
+                    format!("恢复更新前的 {name} 失败：{e}"),
+                    format!("Failed to restore {name} to its pre-update state: {e}"),
+                )
+            })?;
             crate::logging::log(&format!("update: 检测到中断的 {name} 更新，已恢复旧版本"));
         } else if !current.exists() {
-            return Err(format!("{name} 更新中断，且当前目录和备份均不存在"));
+            return Err(crate::locale::owned(
+                format!("{name} 更新中断，且当前目录和备份均不存在"),
+                format!(
+                    "The {name} update was interrupted, and neither the current directory nor its backup exists"
+                ),
+            ));
         }
         remove_marker(marker);
     } else if backup.exists() {
@@ -90,8 +132,12 @@ fn recover_directory(
                 crate::logging::log(&format!("update: 清理已提交的 {name} 备份失败：{e}"));
             }
         } else {
-            std::fs::rename(backup, current)
-                .map_err(|e| format!("恢复遗留的 {name} 备份失败：{e}"))?;
+            std::fs::rename(backup, current).map_err(|e| {
+                crate::locale::owned(
+                    format!("恢复遗留的 {name} 备份失败：{e}"),
+                    format!("Failed to restore the remaining {name} backup: {e}"),
+                )
+            })?;
             crate::logging::log(&format!("update: 当前 {name} 目录缺失，已恢复遗留备份"));
         }
     }
@@ -154,6 +200,25 @@ mod tests {
             "new"
         );
         assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_keeps_marker_and_backup() {
+        let root = temp_dir("rollback-failure");
+        let current = root.join("current");
+        let backup = root.join("backup");
+        let marker = root.join("marker");
+        std::fs::write(&current, "not-a-directory").unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("version"), "old").unwrap();
+        std::fs::write(&marker, "in-progress").unwrap();
+
+        assert!(rollback_directory(&current, &backup, &marker).is_err());
+        assert!(marker.exists());
+        assert!(backup.exists());
+
+        std::fs::remove_file(current).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

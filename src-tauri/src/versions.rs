@@ -19,51 +19,17 @@ pub fn node_satisfies(major: u32, minor: u32) -> bool {
     major >= NODE_MIN_MAJOR || (major == 22 && minor >= NODE_22_MIN_MINOR)
 }
 
-/// 比较 semver 风格版本号（容忍 `v` 前缀与 `-rc.N`/`-beta.N` 后缀）。
-/// 返回 a 与 b 的 Ordering：数字段逐段比较；主版本相同且一方带预发布后缀时，带后缀的更旧。
+/// 按 SemVer 2.0 比较版本号，容忍 Node.js 常见的 `v` 前缀。
+/// 无法解析的上游版本使用稳定的字符串比较，避免更新检查直接失败。
 pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-
-    fn norm(s: &str) -> (Vec<u64>, Vec<u64>) {
-        let s = s.trim().trim_start_matches('v');
-        let (core, pre) = match s.split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (s, None),
-        };
-        let nums = core
-            .split('.')
-            .filter_map(|p| p.parse::<u64>().ok())
-            .collect();
-        let prenums = pre
-            .map(|p| p.split('.').filter_map(|x| x.parse::<u64>().ok()).collect())
-            .unwrap_or_default();
-        (nums, prenums)
+    fn normalize(value: &str) -> &str {
+        value.trim().trim_start_matches('v')
     }
-
-    let (an, ap) = norm(a);
-    let (bn, bp) = norm(b);
-    for i in 0..an.len().max(bn.len()) {
-        let x = an.get(i).copied().unwrap_or(0);
-        let y = bn.get(i).copied().unwrap_or(0);
-        if x != y {
-            return x.cmp(&y);
-        }
-    }
-    // 数值段相同 → 有预发布后缀的版本更旧。
-    match (ap.is_empty(), bp.is_empty()) {
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => {
-            for i in 0..ap.len().max(bp.len()) {
-                let x = ap.get(i).copied().unwrap_or(0);
-                let y = bp.get(i).copied().unwrap_or(0);
-                if x != y {
-                    return x.cmp(&y);
-                }
-            }
-            Ordering::Equal
-        }
-        (true, true) => Ordering::Equal,
+    let a = normalize(a);
+    let b = normalize(b);
+    match (semver::Version::parse(a), semver::Version::parse(b)) {
+        (Ok(a), Ok(b)) => a.cmp_precedence(&b),
+        _ => a.cmp(b),
     }
 }
 
@@ -95,6 +61,14 @@ mod tests {
         );
         assert_eq!(compare_versions("0.1.0", "0.1.0-rc.6"), Ordering::Greater);
         assert_eq!(compare_versions("0.1.0-rc.6", "0.1.0"), Ordering::Less);
+        assert_eq!(
+            compare_versions("0.1.0-alpha.9", "0.1.0-beta.1"),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("0.1.0+build.1", "0.1.0+build.2"),
+            Ordering::Equal
+        );
     }
 
     #[test]

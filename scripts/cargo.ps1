@@ -1,6 +1,7 @@
 ﻿# 构建 DSHDesktop（自动加载 MSVC 环境，工具链从 PATH/环境变量解析）。
-# 用法: powershell -File scripts/cargo.ps1 [check|test|build]
+# 用法: pwsh -File scripts/cargo.ps1 [check|test|dev|build]
 param(
+  [ValidateSet("check", "test", "dev", "build")]
   [string]$Mode = "build"
 )
 $ErrorActionPreference = "Stop"
@@ -49,21 +50,29 @@ if ($vcvars) {
   Write-Warning "未找到 MSVC 环境（vcvars64.bat）；若链接失败请安装 VS C++ 工具链或先手动加载环境"
 }
 
-# 3) 执行构建
+# 3) 配置前置校验：withGlobalTauri 必须为 true——它控制 window.__TAURI__
+#    注入（tauri v2 AppConfig 字段，默认 false）。缺失/为 false 时所有页面
+#    IPC 断链（标题栏/托盘菜单整页失效且无任何报错），曾误删引发回归。
+#    以 tauri-utils 源码字段语义为准，在此构建期兜底拦截。
+$confPath = Join-Path $PSScriptRoot "..\src-tauri\tauri.conf.json"
+$conf = Get-Content -LiteralPath $confPath -Raw | ConvertFrom-Json
+if (-not $conf.app.withGlobalTauri) {
+  throw "tauri.conf.json 的 app.withGlobalTauri 必须为 true（window.__TAURI__ 注入开关），请勿删除或置 false。"
+}
+
+# 4) 执行构建
 $manifest = Join-Path $PSScriptRoot "..\src-tauri\Cargo.toml"
 if ($Mode -eq "check") {
-  & $cargo check --manifest-path $manifest
+  & $cargo check --locked --manifest-path $manifest
 } elseif ($Mode -eq "test") {
-  & $cargo test --manifest-path $manifest --lib
+  & $cargo test --locked --manifest-path $manifest --lib
 } elseif ($Mode -eq "dev") {
   # 开发模式：注入 devUrl 使 tauri 不嵌入 UI 资源（运行时从 ui/ 目录直接读取），
   # 不递增版本号。之后只改 ui/ 文件，重启开发版 exe 即生效。
   $env:TAURI_CONFIG = '{"build":{"devUrl":"http://localhost:4321"}}'
-  & $cargo build --release --manifest-path $manifest
+  & $cargo build --locked --release --manifest-path $manifest
 } else {
-  # release 构建前自动递增版本号（patch +1），同步 Cargo.toml/tauri.conf.json/package.json
-  & (Join-Path $PSScriptRoot "bump-version.ps1")
-  if ($LASTEXITCODE -ne 0) { throw "版本号递增失败" }
-  & $cargo build --release --manifest-path $manifest
+  # 构建本身不修改版本号；发布前如需升版，请显式运行 bump-version.ps1。
+  & $cargo build --locked --release --manifest-path $manifest
 }
 exit $LASTEXITCODE

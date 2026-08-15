@@ -1,11 +1,12 @@
 [package]
 name = "dsh-desktop"
-version = "0.1.18"
+version = "0.1.19"
 description = "DeepSeek Harness (dsh) desktop shell"
 license-file = "../LICENSE"
 authors = ["JeffioZ <13286072+JeffioZ@users.noreply.github.com>"]
 edition = "2021"
-rust-version = "1.77"
+# 受 ureq 3 / sha2 0.11 / getrandom 0.4 约束（三者均要求 1.85）
+rust-version = "1.85"
 
 [[bin]]
 name = "DSHDesktop"
@@ -13,7 +14,8 @@ path = "src/main.rs"
 
 [lib]
 name = "dsh_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 纯桌面应用，无需移动端的静态库/动态库产物
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,8 +31,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
+  "Win32_Globalization",
   "Win32_Graphics_Gdi",
   # 供 windows-sys 内部门控：CreateJobObjectW 需要该 feature 才会编译
   "Win32_Security",
@@ -43,13 +46,29 @@ windows-sys = { version = "0.59", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # 供 DwmSetWindowAttribute 使用（Win11 系统圆角）
+  "Win32_Graphics_Dwm",
 ] }
-ureq = { version = "=2.8.0", default-features = false, features = ["tls", "json"] }
+# 复用 Tauri 已使用的轻量库：平台数据目录、进程级协议令牌、下载校验与 SemVer。
+dirs = "6"
+getrandom = "0.4.3"
+sha2 = "0.11.0"
+semver = "1"
 url = "2"
 # 自定义协议 dshd:// 的请求/响应类型（与 tauri 内部同版本，类型必须一致）
 http = "1"
 # 图标 PNG 编码用（deflate）；miniz_oxide 纯 Rust 后端，不引入系统 zlib
 flate2 = "1"
+
+# TLS 后端按平台选择：Windows/macOS 走系统原生实现（schannel / Security.framework），
+# 体积更小且证书使用系统信任库（企业代理/自定义 CA 场景更友好）；
+# Linux 保持 rustls 静态链接——native-tls 在 Linux 动态链接 OpenSSL，
+# 构建机与运行机的 major 版本不一致会导致启动失败，风险大于体积收益。
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+ureq = { version = "3.4.0", default-features = false, features = ["native-tls", "json"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ureq = { version = "3.4.0", default-features = false, features = ["rustls", "json"] }
 
 [profile.release]
 strip = true

@@ -2,10 +2,21 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <link rel="stylesheet" href="common.css" />
   <style>
 /* 自绘标题栏：36px 顶条；整条可拖动（按钮/余额区除外）。
    body 透明（子 webview transparent）：浮层展开加高时透出下层的 dsh 界面。 */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  /* 浮层定位规则（余额浮层与主菜单统一）：
+     - 垂直：标题栏底边（分层线）下方，间距 0——紧贴分层线，不重叠；
+     - 水平：右缘与各自入口（余额 chip / 主菜单按钮）右缘对齐，向左展开；
+     - 卡片：圆角 12、上缘不画边框（分隔交给分层线）。
+     阴影统一用轻量双层：近距细影 + 远距柔影（blur 12px），
+     与标题栏展开高度预留的 24px 阴影余量匹配 */
+  --tb-overlay-top: 36px;
+  --tb-overlay-shadow: 0 1px 3px rgba(0, 0, 0, .24), 0 4px 12px rgba(0, 0, 0, .32);
+}
 html, body { height: 100%; overflow: hidden; }
 body {
   background: transparent;
@@ -13,10 +24,15 @@ body {
   font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   user-select: none;
 }
+/* 窗口失焦：品牌文字与窗口按钮变暗，与系统窗口失焦标题栏一致；
+   class 由 Rust 侧 WindowEvent::Focused 广播驱动 */
+body.window-inactive .brand { color: #5f6068; }
+body.window-inactive .tb-btn { color: #5b5c66; }
+body.window-inactive .balance-chip { opacity: .55; }
 .titlebar {
   position: relative;
   height: 36px; display: flex; align-items: center; gap: 8px;
-  /* 方案 A：中间色均摊两侧色差 */
+  /* 标题栏底色取深色 dsh 界面与浮层卡片之间的中间色，两侧过渡自然 */
   padding: 0 0 0 10px; background: #181819;
 }
 /* 与 dsh 内容的分层线：画在 36px 条内（box-shadow 落在条外会被子 webview 裁剪，
@@ -33,39 +49,65 @@ body {
 /* 负 margin 抵消 padding：视觉高度=chip（垂直居中），hover 命中区向下扩展覆盖浮层过渡区 */
 .balance-wrap {
   position: relative; display: inline-flex; align-items: center;
-  padding-bottom: 18px; margin-bottom: -18px;
+  padding-bottom: 18px; margin: 0 4px -18px 0;
 }
 .balance-chip {
   display: inline-flex; align-items: center; gap: 6px;
+  color: inherit; font: inherit;
   background: #101014; border: 1px solid #26262e; border-radius: 999px;
-  padding: 3px 10px; font-size: 11.5px; line-height: 1; cursor: default;
+  padding: 3px 10px; font-size: 11.5px; line-height: 1; cursor: pointer;
   transition: background-color .16s ease, border-color .16s ease;
 }
-.balance-wrap:hover .balance-chip { border-color: #3a3a46; }
+.balance-wrap:hover .balance-chip,
+.balance-chip:focus-visible { border-color: #3a3a46; }
+.balance-chip:focus-visible,
+.tb-btn:focus-visible {
+  /* 焦点环与全局强调色一致（dshd-accent） */
+  outline: 2px solid var(--dshd-accent); outline-offset: -2px;
+}
 .balance-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; }
 .balance-chip .dot.warn { background: #d29922; }
 .balance-chip .dot.err { background: #f85149; }
 
 .balance-pop {
-  position: absolute; top: 28px; right: 0;
+  /* 定位规则见 :root 注释：入口下方 0 间距、右缘对齐 */
+  position: absolute; top: var(--tb-overlay-top); right: 0;
   /* 宽度自适应内容：常规余额紧凑（min 180px），大额撑开但封顶 320px（超长值省略号+悬停看全） */
   width: max-content; min-width: 180px; max-width: 320px;
-  /* 卡片色与 dsh 菜单面一致（bluish-800） */
-  background: #353638; border: 1px solid rgba(255, 255, 255, .06); border-radius: 12px;
+  /* 卡片色与 dsh 菜单面一致（bluish-800）；上缘不画边框，
+     分隔交给标题栏的分层线，避免两条亮线叠出“发亮接缝” */
+  background: #353638; border: 1px solid rgba(255, 255, 255, .06); border-top: none; border-radius: 12px;
   /* 双层阴影：近距细影+远距柔影；blur/offset 控制在展开高度内，避免底缘被视口裁切 */
-  box-shadow: 0 2px 6px rgba(0, 0, 0, .28), 0 10px 26px rgba(0, 0, 0, .4);
+  box-shadow: var(--tb-overlay-shadow);
   padding: 12px 14px;
   opacity: 0; transform: translateY(-4px);
   transition: opacity .16s ease, transform .16s ease;
   pointer-events: none;
 }
-/* hover 进入：延迟 ~120ms 等标题栏 webview 高度展开完成，浮层完整淡入（不被视口裁剪）；
-   移开：无延迟立即淡出 */
-.balance-wrap:hover .balance-pop {
+/* JS 统一控制 hover/focus 状态，避免主菜单打开时两个浮层重叠。 */
+.balance-wrap.open .balance-pop {
   opacity: 1; transform: translateY(0); pointer-events: auto;
-  transition-delay: .12s;
 }
-.pop-head { font-size: 11px; color: #adb2b8; margin-bottom: 6px; letter-spacing: .3px; }
+.pop-head { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #adb2b8; margin-bottom: 6px; letter-spacing: .3px; }
+.pop-head-label { flex: 1; min-width: 0; }
+.pop-refresh {
+  flex: none; width: 24px; height: 24px; border: none; border-radius: 7px;
+  background: transparent; color: #adb2b8; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; outline: none;
+}
+.pop-refresh:hover { background: rgba(255, 255, 255, .08); color: #f9fafb; }
+.pop-refresh { transition: background-color .12s ease, color .12s ease; }
+.pop-refresh:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+.pop-refresh:disabled { cursor: default; opacity: .5; }
+.refresh-glyph { display: block; width: 14px; height: 14px; }
+.refresh-glyph svg {
+  display: block; width: 100%; height: 100%; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.pop-refresh.refreshing .refresh-glyph { animation: refresh-spin .8s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
+.pop-error-title { margin-bottom: 4px; color: #f9fafb; font-size: 12px; font-weight: 500; }
 .pop-total { font-size: 20px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
 .pop-total .cur { font-size: 11px; color: #adb2b8; font-weight: 400; }
 .pop-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
@@ -84,8 +126,26 @@ body {
 .pop-upd { margin-left: auto; font-size: 11px; white-space: nowrap; }
 .pop-error { font-size: 12px; line-height: 1.6; color: #b9b9c2; white-space: pre-wrap; word-break: break-all; }
 
-/* ---------- 窗口控制按钮（Segoe Fluent Icons 系统字体，与 Win11 原生按钮同源） ---------- */
-.win-buttons { display: flex; height: 100%; margin-left: 4px; }
+/* ---------- 标题栏主菜单（与托盘菜单共用 menu.js / common.css） ---------- */
+.main-menu-wrap { position: relative; height: 100%; display: inline-flex; align-items: center; }
+.main-menu-panel {
+  /* 定位规则与余额浮层统一：入口下方 0 间距、右缘对齐 */
+  position: absolute; top: var(--tb-overlay-top); right: 0; width: 264px; padding: 4px;
+  box-sizing: border-box; z-index: 10;
+  /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px）：标题栏页面无基础字号，
+     不显式设置会落到浏览器默认 16px，与托盘菜单产生字号差 */
+  font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  background: #353638; border: 1px solid rgba(255, 255, 255, .06); border-top: none; border-radius: 12px;
+  box-shadow: var(--tb-overlay-shadow);
+  opacity: 0; transform: translateY(-4px); pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+.main-menu-wrap.open .main-menu-panel { opacity: 1; transform: translateY(0); pointer-events: auto; }
+#main-menu-list { display: flex; flex-direction: column; }
+
+/* ---------- 窗口控制按钮（Windows 用 Fluent 系统字体，Linux 用 CSS 图形回退） ---------- */
+/* 抵消标题栏父级 8px gap，使主菜单与三个窗口按钮形成连续按钮组。 */
+.win-buttons { display: flex; height: 100%; margin-left: -8px; }
 .tb-btn {
   width: 46px; height: 100%; border: none; background: transparent;
   color: #9a9aa5; cursor: pointer;
@@ -93,14 +153,52 @@ body {
   transition: background-color .14s ease, color .14s ease;
 }
 .tb-btn:hover { background: #2c2c36; color: #f9fafb; }
+.tb-btn:active,
+.main-menu-wrap.open .tb-btn.menu { background: #3a3a46; color: #fff; }
 .tb-btn.close:hover { background: #e81123; color: #fff; }
+.tb-btn.close:active { background: #c50f1f; color: #fff; }
 .tb-glyph {
   font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
   font-size: 10px; line-height: 1; -webkit-font-smoothing: antialiased;
 }
-.tb-btn .ic-restore { display: none; }
-.tb-btn.maximized .ic-max { display: none; }
-.tb-btn.maximized .ic-restore { display: inline; }
+.menu-glyph {
+  position: relative; width: 14px; height: 1px; border-radius: 1px;
+  background: currentColor;
+}
+.menu-glyph::before, .menu-glyph::after {
+  content: ""; position: absolute; left: 0; width: 14px; height: 1px;
+  border-radius: 1px; background: currentColor;
+}
+.menu-glyph::before { top: -4px; }
+.menu-glyph::after { top: 4px; }
+.css-glyph { display: none; position: relative; width: 11px; height: 11px; }
+body.linux .win-buttons .tb-glyph { display: none; }
+.css-min::after {
+  content: ""; position: absolute; left: 1px; right: 1px; top: 5px;
+  height: 1px; background: currentColor;
+}
+.css-max { border: 1px solid currentColor; }
+.css-restore::before, .css-restore::after {
+  content: ""; position: absolute; width: 8px; height: 8px;
+  border: 1px solid currentColor; box-sizing: border-box;
+}
+.css-restore::before { left: 0; top: 3px; }
+.css-restore::after { left: 3px; top: 0; background: inherit; }
+.css-close::before, .css-close::after {
+  content: ""; position: absolute; left: 5px; top: 0; width: 1px; height: 12px;
+  background: currentColor;
+}
+.css-close::before { transform: rotate(45deg); }
+.css-close::after { transform: rotate(-45deg); }
+.tb-btn .tb-glyph.ic-restore { display: none; }
+.tb-btn.maximized .tb-glyph.ic-max { display: none; }
+.tb-btn.maximized .tb-glyph.ic-restore { display: inline; }
+body.linux .win-buttons .css-min,
+body.linux .win-buttons .css-close,
+body.linux .win-buttons .css-max { display: block; }
+body.linux .win-buttons .css-restore { display: none; }
+body.linux .win-buttons .tb-btn.maximized .css-max { display: none; }
+body.linux .win-buttons .tb-btn.maximized .css-restore { display: block; }
 
 .hidden { display: none !important; }
 
@@ -110,23 +208,35 @@ body.macos .titlebar { padding-left: 82px; }
 /* 浅色系统主题适配 */
 @media (prefers-color-scheme: light) {
   body { color: #1b1b22; }
-  /* 方案 A：中间色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
+  /* 阴影令牌统一切换：两个浮层同一处生效 */
+  :root { --tb-overlay-shadow: 0 4px 12px rgba(0, 0, 0, .10); }
+  /* 浅色标题栏底色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
   .titlebar { background: #fcfcfd; }
   .titlebar::after { background: rgba(0, 0, 0, .04); }
   .brand { color: #6a6a76; }
   .balance-chip { background: #f4f5f8; border-color: #e2e4ea; }
-  .balance-pop { background: #ffffff; border-color: #e2e4ea; box-shadow: 0 12px 32px rgba(0, 0, 0, .18); }
+  .balance-pop { background: #ffffff; border-color: #e2e4ea; }
+  .pop-refresh { color: #6a6a76; }
+  .pop-refresh:hover { background: rgba(38, 49, 72, .06); color: #1b1b22; }
+  .pop-error-title { color: #1b1b22; }
+  .main-menu-panel { background: #ffffff; border-color: #e2e4ea; }
   .pop-row b { color: #1b1b22; }
   .pop-status { border-top-color: #e2e4ea; }
   .pop-error { color: #4a4a55; }
   .tb-btn { color: #6a6a76; }
   .tb-btn:hover { background: #e6e8ef; color: #1b1b22; }
+  .tb-btn:active,
+  .main-menu-wrap.open .tb-btn.menu { background: #d8dbe4; color: #1b1b22; }
   .tb-btn.close:hover { background: #e81123; color: #fff; }
+  .tb-btn.close:active { background: #c50f1f; color: #fff; }
+  body.window-inactive .brand { color: #a6a6b2; }
+  body.window-inactive .tb-btn { color: #9c9ca8; }
 }
 
 /* 系统“减弱动态效果”：关闭动画 */
 @media (prefers-reduced-motion: reduce) {
-  .balance-pop, .balance-chip, .tb-btn { transition: none; }
+  .balance-pop, .balance-chip, .tb-btn, .main-menu-panel, .pop-refresh { transition: none; }
+  .pop-refresh.refreshing .refresh-glyph { animation: none; }
 }
 </style>
 </head>
@@ -138,26 +248,39 @@ body.macos .titlebar { padding-left: 82px; }
     </div>
     <div class="drag-space" data-tauri-drag-region></div>
     <div id="balance-wrap" class="balance-wrap">
-      <div id="balance-chip" class="balance-chip hidden">
-        <span class="dot"></span><span id="balance-text">…</span>
+      <button type="button" id="balance-chip" class="balance-chip hidden" data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint" aria-expanded="false" aria-controls="balance-pop">
+        <span class="dot" aria-hidden="true"></span><span id="balance-text">…</span>
+      </button>
+      <div id="balance-pop" class="balance-pop" role="region" data-i18n-aria-label="balanceDetailsAria" aria-hidden="true" inert></div>
+    </div>
+    <div id="main-menu-wrap" class="main-menu-wrap">
+      <button type="button" id="btn-menu" class="tb-btn menu" data-i18n-title="mainMenu" data-i18n-aria-label="mainMenu" aria-expanded="false" aria-controls="main-menu-panel">
+        <span class="menu-glyph" aria-hidden="true"></span>
+      </button>
+      <div id="main-menu-panel" class="main-menu-panel" aria-hidden="true" inert>
+        <div id="main-menu-list" role="menu" data-i18n-aria-label="mainMenu"></div>
       </div>
-      <div id="balance-pop" class="balance-pop"></div>
     </div>
     <div id="win-buttons" class="win-buttons hidden">
-      <!-- 使用 Segoe Fluent Icons 系统字体字符：与 Win11 窗口按钮完全同源（圆角、ClearType、无光晕） -->
-      <button id="btn-min" class="tb-btn" title="最小化">
-        <span class="tb-glyph">&#xE921;</span>
+      <!-- Windows 使用 Segoe Fluent Icons；Linux 缺少该字体时切到 CSS 图形。 -->
+      <button type="button" id="btn-min" class="tb-btn" data-i18n-title="minimize" data-i18n-aria-label="minimize">
+        <span class="tb-glyph" aria-hidden="true">&#xE921;</span>
+        <span class="css-glyph css-min" aria-hidden="true"></span>
       </button>
-      <button id="btn-max" class="tb-btn" title="最大化">
-        <span class="tb-glyph ic-max">&#xE922;</span>
-        <span class="tb-glyph ic-restore">&#xE923;</span>
+      <button type="button" id="btn-max" class="tb-btn" data-i18n-title="maximize" data-i18n-aria-label="maximize">
+        <span class="tb-glyph ic-max" aria-hidden="true">&#xE922;</span>
+        <span class="tb-glyph ic-restore" aria-hidden="true">&#xE923;</span>
+        <span class="css-glyph css-max ic-max" aria-hidden="true"></span>
+        <span class="css-glyph css-restore ic-restore" aria-hidden="true"></span>
       </button>
-      <button id="btn-close" class="tb-btn close" title="关闭到托盘">
-        <span class="tb-glyph">&#xE8BB;</span>
+      <button type="button" id="btn-close" class="tb-btn close" data-i18n-title="closeToTray" data-i18n-aria-label="closeToTray">
+        <span class="tb-glyph" aria-hidden="true">&#xE8BB;</span>
+        <span class="css-glyph css-close" aria-hidden="true"></span>
       </button>
     </div>
   </div>
   <script src="common.js"></script>
+  <script src="menu.js"></script>
   <script src="titlebar.js"></script>
 </body>
 </html>

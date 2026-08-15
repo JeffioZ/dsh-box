@@ -6,13 +6,50 @@
   <script src="common.js"></script>
   <style>
     html, body { height: 100%; overflow: hidden; }
-    body { display: flex; flex-direction: column; }
-    .body { flex: 1; padding: 14px 16px; overflow-y: auto; }
+    /* 不透明窗口（底色=卡片色），圆角由 Win11 系统裁剪，Win10 为直角 */
+    * { box-sizing: border-box; }
+    body { display: flex; flex-direction: column; padding: 0; background: transparent; }
+    /* 内层卡片：padding 覆盖为 0——头部/正文/页脚自带内边距，
+       额外 4px 会在卡片边缘多一圈空档 */
+    #card { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; }
+
+    /* 展示/关闭微动效：窗口透明，内容淡入淡出在卡片上播放，
+       不会露出 WebView 未绘制区域的白色；重放由 applyOpen 控制 */
+    @keyframes dlg-pop-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .dshd-pop-in { animation: dlg-pop-in .11s ease-out; }
+    /* 关闭：内容先淡出并微微下沉（视觉上“直接消失”），随后由 Rust 清空并隐藏 */
+    body.fade-out { opacity: 0; transform: translateY(3px); transition: opacity .12s ease, transform .12s ease; }
+
+    /* 余额刷新按钮（与标题栏浮层同款字形与节奏） */
+    .dshd-refresh {
+      flex: none; width: 28px; height: 28px; border: none; border-radius: 10px;
+      background: transparent; color: var(--dshd-text-dim); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0; outline: none;
+      transition: background-color .12s ease, color .12s ease;
+    }
+    .dshd-refresh:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+    .dshd-refresh:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+    .dshd-refresh:active { background: var(--dshd-pressed); }
+    .dshd-refresh svg {
+      width: 14px; height: 14px; display: block;
+      fill: none; stroke: currentColor; stroke-width: 1.8;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    .dshd-refresh.refreshing svg { animation: dlg-refresh-spin .8s linear infinite; }
+    @keyframes dlg-refresh-spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+
+    .body { flex: 1; min-height: 0; padding: 12px 16px; overflow-y: auto; }
     .big { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
     .big .cur { font-size: 11px; color: var(--dshd-text-dim); font-weight: 400; }
-    .rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-    .rrow { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; color: var(--dshd-text-dim); }
-    .rrow b { font-weight: 500; color: var(--dshd-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+    .balance-parts { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .balance-part { min-width: 0; padding: 7px 9px; border: 1px solid var(--dshd-border); border-radius: 9px; background: var(--dshd-hover); }
+    .balance-part span { display: block; font-size: 11px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .balance-part b { display: block; margin-top: 1px; color: var(--dshd-text); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .status { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dshd-border); display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim); }
     .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; }
     .status .dot.warn { background: #d29922; }
@@ -25,127 +62,175 @@
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .uprow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--dshd-border); }
+    .uprow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--dshd-border); }
     .uprow:last-child { border-bottom: none; }
     .uprow .info { flex: 1; min-width: 0; }
     .uprow .name { font-weight: 500; }
     .uprow .ver { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; word-break: break-all; }
+    .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    .msg.success { color: #56d364; }
+    .msg.error { color: #ff7b72; }
     .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
     .about .nm { font-size: 15px; font-weight: 600; }
     .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
     .about .cp { font-size: 11px; color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
+    @media (prefers-reduced-motion: reduce) {
+      .spin { animation: none; }
+      .dshd-pop-in { animation: none; }
+      body.fade-out { transition: none; }
+      .dshd-refresh.refreshing svg { animation: none; }
+    }
+    @media (prefers-color-scheme: light) {
+      .msg.success { color: #1a7f37; }
+      .msg.error { color: #b42318; }
+    }
   </style>
 </head>
-<body class="dshd-body dshd-card">
-  <div class="dshd-head"><span class="title" id="title">…</span><button class="dshd-x" id="btn-x" title="关闭">&#xE8BB;</button></div>
-  <div class="body" id="body"></div>
+<body class="dshd-body" role="dialog" aria-modal="true" aria-labelledby="title">
+  <div id="card" class="dshd-card">
+  <div class="dshd-head" data-tauri-drag-region="deep"><span class="title" id="title">…</span><button type="button" class="dshd-refresh hidden" id="btn-refresh" data-i18n-title="refreshBalance" data-i18n-aria-label="refreshBalance"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg></button><button type="button" class="dshd-x" id="btn-x" data-i18n-title="close" data-i18n-aria-label="close">&#xE8BB;</button></div>
+  <div class="body dshd-scroll" id="body" aria-live="polite"></div>
   <div class="dshd-foot" id="foot"></div>
+  </div>
   <script>
-    const { invoke } = window.__TAURI__.core;
-    const { listen } = window.__TAURI__.event;
+    const tauri = window.__TAURI__;
+    const invoke = tauri ? tauri.core.invoke : async () => null;
+    const listen = tauri ? tauri.event.listen : async () => () => {};
+
+    dshdApplyI18n();
 
     let openKind = '';
+    let currentOpen = null;
+    let lastBalanceData = null;
+    let lastCheckResult = null;
     const esc = dshdEsc;
     const $ = (id) => document.getElementById(id);
     const cur = (c) => esc(dshdCurrency(c)) + ' ';
 
     function foot(primaryLabel) {
-      $('foot').innerHTML = '<button class="dshd-btn primary" id="b-close">' + esc(primaryLabel) + '</button>';
+      $('foot').innerHTML = '<button type="button" class="dshd-btn primary" id="b-close">' + esc(primaryLabel) + '</button>';
       document.getElementById('b-close').addEventListener('click', close);
     }
 
     // —— 余额 ——
     function renderBalance(data) {
+      // 轮询响应晚到时（期间已切换/关闭弹窗）不写已重置的 DOM
+      if (openKind !== 'balance') return;
+      lastBalanceData = data;
       const body = $('body');
       if (!data) {
-        body.innerHTML = '<div class="msg"><span class="spin"></span>正在查询余额…</div>';
+        body.innerHTML = '<div class="msg"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</div>';
         $('foot').innerHTML = '';
         return;
       }
       if (!data.ok || !data.balances || !data.balances.length) {
-        body.innerHTML = '<div class="msg">' + esc((data && data.error) || '查询失败，请稍后重试') + '</div>';
-        foot('关闭');
+        body.innerHTML = '<div class="msg error">' + esc((data && data.error) || dshdT('balanceQueryFailed')) + '</div>';
+        foot(dshdT('close'));
         return;
       }
       const b = data.balances[0];
       const fmt = (v) => esc(dshdBalanceValue(v));
-      const granted = parseFloat(b.granted_balance || '0') || 0;
-      let rows = '';
-      if (granted > 0) {
-        rows = '<div class="rows">' +
-          '<div class="rrow"><span>已充值</span><b>' + cur(b.currency) + fmt(b.topped_up_balance) + '</b></div>' +
-          '<div class="rrow"><span>赠送</span><b>' + cur(b.currency) + fmt(b.granted_balance) + '</b></div>' +
-          '</div>';
-      }
+      const parts = '<div class="balance-parts">' +
+        '<div class="balance-part"><span>' + dshdT('toppedUpBalance') + '</span><b title="' + cur(b.currency) + fmt(b.topped_up_balance) + '">' + cur(b.currency) + fmt(b.topped_up_balance) + '</b></div>' +
+        '<div class="balance-part"><span>' + dshdT('grantedBalance') + '</span><b title="' + cur(b.currency) + fmt(b.granted_balance) + '">' + cur(b.currency) + fmt(b.granted_balance) + '</b></div>' +
+        '</div>';
       const upd = data.updated_at
-        ? '<span class="upd">更新于 ' + new Date(data.updated_at * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + '</span>'
+        ? '<span class="upd">' + dshdT('updatedAt', { time: new Date(data.updated_at * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }) }) + '</span>'
         : '';
       const dot = data.is_available ? '' : ' warn';
-      const st = data.is_available ? '账户可用' : '账户不可用';
+      const st = data.is_available ? dshdT('accountAvailable') : dshdT('accountUnavailable');
       body.innerHTML =
         '<div class="big">' + cur(b.currency) + fmt(b.total_balance) +
-        '<span class="cur">' + esc(b.currency) + '</span></div>' + rows +
+        '<span class="cur">' + esc(b.currency) + '</span></div>' + parts +
         '<div class="status"><span class="dot' + dot + '"></span>' + st + upd + '</div>';
-      foot('关闭');
+      foot(dshdT('close'));
     }
 
     // —— 检查更新 ——
-    function renderCheckLoading() {
-      $('body').innerHTML = '<div class="msg"><span class="spin"></span>正在检查更新…</div>';
-      $('foot').innerHTML = '<button class="dshd-btn" id="b-close">取消</button>';
+    function renderCheckLoading(message) {
+      $('body').innerHTML = '<div class="msg"><span class="spin" aria-hidden="true"></span>' + (message || dshdT('checkingUpdates')) + '</div>';
+      $('foot').innerHTML = '<button type="button" class="dshd-btn" id="b-close">' + dshdT('close') + '</button>';
       document.getElementById('b-close').addEventListener('click', close);
     }
     function updBtn(id, label, which, primary) {
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'dshd-btn' + (primary ? ' primary' : '');
       btn.textContent = label;
+      btn.dataset.label = label;
+      // 更新执行中重建结果行时，按钮保持禁用（UAC 确认期间同理）
+      btn.disabled = updateRunning;
       btn.addEventListener('click', () => {
-        btn.disabled = true;
-        btn.textContent = '处理中…';
-        invoke('app_dialog_update', { which }).catch(() => {});
+        updateRunning = true;
+        document.querySelectorAll('.uprow .dshd-btn').forEach((button) => {
+          button.disabled = true;
+        });
+        btn.textContent = dshdT('processing');
+        invoke('app_dialog_update', { which }).catch((e) => {
+          updateRunning = false;
+          btn.disabled = false;
+          btn.textContent = label;
+          renderUpdateDone({ ok: false, message: dshdT('operationNotStarted', { message: e }) });
+        });
       });
       document.getElementById(id).append(btn);
     }
     function renderCheckResult(r) {
       if (openKind !== 'check') return;
+      lastCheckResult = r;
       const body = $('body');
       let html = '';
       if (r.dsh) {
         html += '<div class="uprow"><div class="info"><div class="name">dsh</div>' +
-          '<div class="ver">' + esc(r.dsh.installed) + (r.dsh.update_available ? ' → ' + esc(r.dsh.latest) : '（已是最新）') + '</div></div>' +
+          '<div class="ver">' + esc(r.dsh.installed) + (r.dsh.update_available ? ' → ' + esc(r.dsh.latest) : ' (' + dshdT('upToDate') + ')') + '</div></div>' +
           '<span id="u-dsh"></span></div>';
       }
       if (r.node) {
-        const v = r.node.installed || '未检测到';
-        const label = r.node.installed ? '已是最新' : '未安装';
+        const v = r.node.installed || dshdT('notInstalled');
+        const label = !r.node.managed
+          ? (r.node.latest_lts
+            ? dshdT('systemManagedLatest', { version: esc(r.node.latest_lts) })
+            : dshdT('systemManagedUnavailable'))
+          : !r.node.latest_lts ? dshdT('versionServiceUnavailable')
+          : dshdT('upToDateLts');
+        const hint = r.node.latest_error ? ' title="' + esc(r.node.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">Node.js</div>' +
-          '<div class="ver">' + esc(v) + (r.node.update_available
-            ? ' → ' + esc(r.node.latest_lts || '最新版')
-            : '（' + label + '）') + '</div></div>' +
+          '<div class="ver"' + hint + '>' + esc(v) + (r.node.update_available
+            ? ' → ' + esc(r.node.latest_lts || dshdT('latestVersion'))
+            : (r.node.installed ? ' (' + label + ')' : '')) + '</div></div>' +
           '<span id="u-node"></span></div>';
       }
       if (r.pwsh) {
-        const v = r.pwsh.installed || '未安装';
+        const v = r.pwsh.installed || dshdT('notInstalled');
+        const label = !r.pwsh.installed ? dshdT('notInstalled')
+          : !r.pwsh.latest ? dshdT('versionServiceUnavailable')
+          : dshdT('upToDate');
+        const hint = r.pwsh.latest_error ? ' title="' + esc(r.pwsh.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">PowerShell 7</div>' +
-          '<div class="ver">' + esc(v) + (r.pwsh.update_available
-            ? ' → ' + esc(r.pwsh.latest || '最新版')
-            : (r.pwsh.installed ? '（已是最新）' : '（未安装）')) + '</div></div>' +
+          '<div class="ver"' + hint + '>' + esc(v) + (r.pwsh.update_available
+            ? ' → ' + esc(r.pwsh.latest || dshdT('latestVersion'))
+            : (r.pwsh.installed ? ' (' + label + ')' : '')) + '</div></div>' +
           '<span id="u-pwsh"></span></div>';
       }
       if (r.error) html += '<div class="msg">' + esc(r.error) + '</div>';
-      if (!r.dsh && !r.node && !r.pwsh) html += '<div class="msg">检查失败，请稍后重试</div>';
+      if (!r.dsh && !r.node && !r.pwsh) html += '<div class="msg error">' + dshdT('checkFailedRetry') + '</div>';
       body.innerHTML = html;
-      if (r.dsh && r.dsh.update_available) updBtn('u-dsh', '更新', 'dsh', true);
-      if (r.node && r.node.update_available) updBtn('u-node', r.node.installed ? '更新' : '安装', 'node', false);
-      if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', r.pwsh.installed ? '更新' : '安装', 'pwsh', false);
+      if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
+      if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
+      if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
       const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available);
-      foot(any ? '关闭' : '全部已是最新');
+      if (!any && !r.error && (r.dsh || r.node || r.pwsh)) {
+        const message = document.createElement('div');
+        message.className = 'msg';
+        message.textContent = dshdT('noUpdates');
+        body.append(message);
+      }
+      foot(dshdT('close'));
     }
     let lastProgress = '';
     function renderProgress(message) {
       if (openKind !== 'check') return;
-      if (!message || message === '正在检查更新…' || message === lastProgress) return;
+      if (!message || message === dshdT('checkingUpdates') || message === lastProgress) return;
       lastProgress = message;
       const body = $('body');
       const line = body.querySelector('.msg');
@@ -157,13 +242,29 @@
     }
     function renderUpdateDone(p) {
       if (openKind !== 'check') return;
+      // 更新流程结束：此后按钮按结果复位
+      updateRunning = false;
+      // UAC“继续”期间页脚被替换为确认按钮：完成后恢复“关闭”
+      foot(dshdT('close'));
       const body = $('body');
       const line = body.querySelector('.msg');
-      const text = (p.ok ? '✔ ' : '✖ ') + p.message;
-      if (line) line.textContent = text;
+      const text = p.ok ? p.message : dshdT('notCompleted', { message: p.message });
+      document.querySelectorAll('.uprow .dshd-btn').forEach((button) => {
+        if (p.ok) {
+          button.disabled = true;
+          if (button.textContent === dshdT('processing')) button.textContent = dshdT('completed');
+        } else {
+          button.disabled = false;
+          button.textContent = button.dataset.label || dshdT('retry');
+        }
+      });
+      if (line) {
+        line.className = 'msg ' + (p.ok ? 'success' : 'error');
+        line.textContent = text;
+      }
       else {
         const div = document.createElement('div');
-        div.className = 'msg';
+        div.className = 'msg ' + (p.ok ? 'success' : 'error');
         div.textContent = text;
         body.append(div);
       }
@@ -183,31 +284,80 @@
         ABOUT_LOGO +
         '<div class="nm">DeepSeek Harness Desktop</div>' +
         '<div class="ver-row">' +
-        '<span>应用版本 ' + esc(initial.app_version) + '</span>' +
+        '<span>' + dshdT('appVersion', { version: esc(initial.app_version) }) + '</span>' +
         '<span>dsh ' + esc(initial.dsh_version) + '</span>' +
         '</div>' +
-        '<div class="cp">© 2026 JeffioZ</div>' +
+        '<div class="cp">© ' + new Date().getFullYear() + ' JeffioZ</div>' +
         '</div>';
-      foot('关闭');
+      foot(dshdT('close'));
     }
 
+    let closeTimer = null;
     function close() {
-      invoke('app_dialog_close').catch(() => {});
+      // 内容先淡出（视觉上直接消失，不露出“…”标题），130ms 后请 Rust 清空并隐藏；
+      // 淡出后的表面近似空卡片，天然充当下次打开前的中性帧
+      if (document.body.classList.contains('fade-out')) return;
+      document.body.classList.add('fade-out');
+      closeTimer = setTimeout(() => {
+        closeTimer = null;
+        invoke('app_dialog_close').catch(() => {});
+      }, 130);
     }
 
     let lastOpenKey = '';
+    // 余额刷新按钮：转圈至少一圈；新数据经轮询到达后停止
+    let balanceRefreshStart = 0;
+    let pwshPromptShown = false;
+    // 更新执行中：期间“更新/安装”按钮保持禁用（结果行重建会重置禁用态）
+    let updateRunning = false;
+    $('btn-refresh').addEventListener('click', () => {
+      const button = $('btn-refresh');
+      if (button.classList.contains('refreshing')) return;
+      button.classList.add('refreshing');
+      balanceRefreshStart = Date.now();
+      invoke('app_dialog_refresh_balance').catch(() => {
+        button.classList.remove('refreshing');
+      });
+    });
     function applyOpen(p) {
       if (!p) return;
+      // 快速重开：先取消挂起的关闭 invoke 并撤掉淡出——即使载荷与上次
+      // 完全相同（余额/关于等恒定载荷）也必须先执行，否则旧关闭定时器
+      // 会把刚重开的弹窗误关、页面保持淡出空白
+      clearTimeout(closeTimer);
+      closeTimer = null;
+      document.body.classList.remove('fade-out');
       // 载荷印章去重：一次打开会被多条通道触发（eval / emit / 可见性变化），
       // 只渲染一次，避免重复重建 DOM 与重复动效
       const key = JSON.stringify(p);
       if (key === lastOpenKey) return;
       lastOpenKey = key;
+      // 复位轮询/流程状态：关闭前的 __dshdReset 可能尚未执行（130ms 关闭
+      // 窗口内快速重开），残留的印章会让轮询误判“无变化”而不渲染——
+      // UAC“继续”不再出现、结果行永久转圈
+      balanceStamp = '';
+      checkStamp = '';
+      lastResultKey = '';
+      lastProgress = '';
+      pendingRefreshData = null;
+      pwshPromptShown = false;
+      // 刷新按钮仅余额弹窗显示
+      $('btn-refresh').classList.toggle('hidden', p.kind !== 'balance');
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+      currentOpen = p;
       openKind = p.kind;
-      $('title').textContent = p.title;
+      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about' }[p.kind];
+      $('title').textContent = titleKey ? dshdT(titleKey) : p.title;
       if (p.kind === 'balance') renderBalance(p.initial);
-      else if (p.kind === 'check') { lastProgress = ''; renderCheckLoading(); }
+      else if (p.kind === 'check') {
+        // 更新仍在后台执行时重开：显示“更新正在进行…”而非“正在检查更新…”
+        renderCheckLoading(p.initial && p.initial.updating ? dshdT('updateInProgress') : undefined);
+      }
       else if (p.kind === 'about') renderAbout(p.initial);
+      // 轻量入场动效（重放；印章去重保证每次打开只播一次）
+      document.body.classList.remove('dshd-pop-in');
+      void document.body.offsetWidth;
+      document.body.classList.add('dshd-pop-in');
     }
     // Rust 在隐藏状态下同步直呼（载荷内联）：show 前就渲染好本次内容，
     // 第一帧即正确内容，无上一弹窗残影
@@ -216,10 +366,23 @@
     // 隐藏（隐藏窗口不绘制），该帧成为下次打开前的第一帧——不再闪上一弹窗残影。
     // 印章复位也保证：再次打开时即使载荷与上次完全相同也会重新渲染
     window.__dshdReset = () => {
+      if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+      // 与 applyOpen 对称：撤掉挂起的关闭定时器与进度去重（关闭 invoke 已
+      // 发出时定时器早已触发，此处只是防御性清理，无副作用）
+      clearTimeout(closeTimer);
+      closeTimer = null;
       lastOpenKey = '';
+      currentOpen = null;
+      lastBalanceData = null;
+      lastCheckResult = null;
+      lastResultKey = '';
+      lastProgress = '';
       openKind = '';
       balanceStamp = '';
       checkStamp = '';
+      pendingRefreshData = null;
+      pwshPromptShown = false;
+      updateRunning = false;
       $('title').textContent = '…';
       $('body').innerHTML = '';
       $('foot').innerHTML = '';
@@ -227,11 +390,11 @@
     listen('app-dialog-open', (e) => applyOpen(e.payload));
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible') {
+        // 不做动效重放：该 WebView 对“隐藏→显示”的可见性事件不可靠，
+        // 迟到重放会中途重启动画造成抖动（托盘菜单的教训）；入场动效
+        // 由 applyOpen 在预渲染时播放，show 后可见部分自然呈现
         try { applyOpen(await invoke('app_dialog_get')); } catch (e) {}
       }
-    });
-    listen('app-dialog-balance', (e) => {
-      if (openKind === 'balance') renderBalance(e.payload);
     });
     listen('update-result', (e) => {
       if (openKind === 'check') renderCheckResult(e.payload);
@@ -239,26 +402,96 @@
     listen('update-progress', (e) => {
       if (e.payload && e.payload.message) renderProgress(e.payload.message);
     });
+    window.addEventListener('dshd-language-changed', () => {
+      if (!currentOpen) return;
+      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about' }[openKind];
+      $('title').textContent = titleKey ? dshdT(titleKey) : currentOpen.title;
+      if (openKind === 'balance') renderBalance(lastBalanceData);
+      else if (openKind === 'check') {
+        if (lastCheckResult) renderCheckResult(lastCheckResult);
+        else renderCheckLoading();
+      } else if (openKind === 'about') renderAbout(currentOpen.initial);
+    });
     // —— 轮询拉取（事件通道对该窗口不可靠，此为主通道）——
     let balanceStamp = '';
     let checkStamp = '';
+    let lastResultKey = '';
+    let pendingRefreshData = null;
     setInterval(async () => {
       try {
         if (openKind === 'balance') {
           const data = await invoke('app_dialog_balance_get');
+          // await 期间可能已重置/切换：晚到响应不写已重置的 DOM 与状态
+          if (openKind !== 'balance') return;
           const key = JSON.stringify(data || null);
+          const button = $('btn-refresh');
+          const refreshing = button.classList.contains('refreshing');
+          // 本轮是否已按新鲜数据渲染：满圈同拍时防止随后用更早缓冲的旧数据
+          // 二次渲染/回写旧值
+          let renderedFresh = false;
           if (key !== balanceStamp) {
-            balanceStamp = key;
-            renderBalance(data);
+            if (!refreshing || Date.now() - balanceRefreshStart >= 900) {
+              balanceStamp = key;
+              renderBalance(data);
+              renderedFresh = true;
+            } else {
+              // 转圈未满一圈：暂存新数据，待满圈后与停止动画一起应用——
+              // 内容先更新、动画后停会显得“突然停下”（与浮层刷新节奏统一）
+              pendingRefreshData = data;
+            }
+          }
+          if (refreshing && Date.now() - balanceRefreshStart >= 900) {
+            button.classList.remove('refreshing');
+            if (pendingRefreshData) {
+              if (!renderedFresh) {
+                balanceStamp = JSON.stringify(pendingRefreshData);
+                renderBalance(pendingRefreshData);
+              }
+              pendingRefreshData = null;
+            }
           }
         } else if (openKind === 'check') {
           const s = await invoke('app_dialog_check_get');
+          if (openKind !== 'check') return;
           const key = JSON.stringify(s);
           if (key !== checkStamp) {
             checkStamp = key;
-            if (s && s.result) renderCheckResult(s.result);
-            else if (s && s.progress) renderProgress(s.progress);
+            // 后端更新执行中：按钮全程保持禁用（结果行重建不再复活）
+            if (s && s.updating) updateRunning = true;
+            // UAC 确认等待期间不重建结果行（保持按钮禁用态）；
+            // 结果未变化时不重复重建——进度每次更新只刷新文案行，
+            // 被点按钮的“处理中…”文案得以保留
+            if (s && s.result && !s.pwsh_pending) {
+              const rk = JSON.stringify(s.result);
+              if (rk !== lastResultKey) {
+                lastResultKey = rk;
+                renderCheckResult(s.result);
+              }
+            }
+            // 进度独立于结果渲染：关闭重开后，进行中的更新进度经状态拉取
+            if (s && s.progress) renderProgress(s.progress);
             if (s && s.done) renderUpdateDone(s.done);
+          }
+          // PowerShell UAC 预告：弹窗内展示并等待“继续”确认（kind 守卫：
+          // 晚到响应不得把预告写到已重置的空白弹窗上）
+          if (openKind === 'check' && s && s.pwsh_pending && !pwshPromptShown) {
+            pwshPromptShown = true;
+            const body = $('body');
+            const div = document.createElement('div');
+            div.className = 'msg';
+            div.textContent = dshdT('pwshUacNotice');
+            body.append(div);
+            const footEl = $('foot');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dshd-btn primary';
+            btn.textContent = dshdT('continue');
+            btn.addEventListener('click', () => {
+              btn.disabled = true;
+              invoke('app_dialog_pwsh_confirm').catch(() => { btn.disabled = false; });
+            });
+            footEl.innerHTML = '';
+            footEl.append(btn);
           }
         }
       } catch (e) {}

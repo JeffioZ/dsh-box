@@ -10,7 +10,7 @@ const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 /// 初始化日志文件路径（首次调用时设置）。
 pub fn init(path: PathBuf) {
-    let mut guard = LOG_FILE.lock().unwrap();
+    let mut guard = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -47,7 +47,8 @@ fn rotate_if_needed(path: &PathBuf) {
     let _ = std::fs::rename(path, &old);
 }
 
-/// 本地时间戳（无第三方依赖：从 Unix 时间换算公历）。
+/// UTC 时间戳（无第三方依赖：从 Unix 时间换算公历）。
+/// 统一使用 UTC 并以「 UTC」显式标注，避免与本地时间混淆。
 fn now_str() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -67,7 +68,7 @@ fn now_str() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
         y,
         m,
         d,

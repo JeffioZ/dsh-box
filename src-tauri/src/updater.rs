@@ -41,6 +41,7 @@ pub struct NodeInfo {
     pub managed: bool,
     pub installed: Option<String>,
     pub latest_lts: Option<String>,
+    pub latest_error: Option<String>,
     pub update_available: bool,
 }
 
@@ -48,11 +49,16 @@ pub struct NodeInfo {
 pub struct PwshInfo {
     pub installed: Option<String>,
     pub latest: Option<String>,
+    pub latest_error: Option<String>,
     /// true 表示需要操作（未安装或存在新版）。
     pub update_available: bool,
 }
 
 fn emit_progress(app: &AppHandle, message: &str) {
+    // 事件之外同步写入状态：检查更新弹窗关闭再打开后，进行中的更新进度
+    // 仍能经轮询（app_dialog_check_get）拉取——事件通道对隐藏窗口不可靠。
+    app.state::<AppState>()
+        .set_check_progress(Some(message.to_string()));
     let _ = app.emit("update-progress", serde_json::json!({ "message": message }));
 }
 
@@ -60,7 +66,10 @@ fn emit_progress(app: &AppHandle, message: &str) {
 
 /// 检查并汇报（托盘/启动页共用）。
 pub fn check_and_report(app: &AppHandle) -> Result<(), String> {
-    emit_progress(app, "正在检查更新…");
+    emit_progress(
+        app,
+        crate::locale::text("正在检查更新…", "Checking for updates…"),
+    );
     let result = check(app);
     let _ = app.emit("update-result", &result);
     Ok(())
@@ -87,7 +96,7 @@ pub fn silent_check(app: &AppHandle) {
                     if d.update_available {
                         "可更新"
                     } else {
-                        "已最新"
+                        "已是最新"
                     }
                 ));
                 // 启动页若仍可见则展示结果
@@ -108,23 +117,30 @@ pub fn silent_check(app: &AppHandle) {
 /// 有新版时的启动提示（不自动安装，用户确认才更新）。
 fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
     use tauri_plugin_dialog::MessageDialogKind;
-    let msg = format!(
-        "dsh 有新版本可用：\n{}（当前 {}）\n\n是否立即更新？",
-        d.latest, d.installed
-    );
+    let msg = if crate::locale::is_chinese() {
+        format!(
+            "dsh 有新版本可用：\n{}（当前 {}）\n\n是否立即更新？",
+            d.latest, d.installed
+        )
+    } else {
+        format!(
+            "A new dsh version is available:\n{} (current: {})\n\nUpdate now?",
+            d.latest, d.installed
+        )
+    };
     if crate::dialog::ask(
         app,
         msg,
-        "发现新版本",
+        crate::locale::text("发现新版本", "Update available"),
         MessageDialogKind::Info,
-        "立即更新",
-        "稍后",
+        crate::locale::text("立即更新", "Update now"),
+        crate::locale::text("稍后", "Later"),
     ) {
         if let Err(e) = apply(app, "dsh") {
             crate::dialog::show_message(
                 app,
-                format!("更新失败：{e}"),
-                "更新",
+                format!("{}: {e}", crate::locale::text("更新失败", "Update failed")),
+                crate::locale::text("更新", "Update"),
                 MessageDialogKind::Warning,
             );
         }
@@ -150,9 +166,21 @@ pub fn check(app: &AppHandle) -> CheckResult {
                 }),
                 None,
             ),
-            Err(e) => (None, Some(format!("查询 dsh 最新版本失败：{e}"))),
+            Err(e) => (
+                None,
+                Some(format!(
+                    "{}: {e}",
+                    crate::locale::text(
+                        "查询 dsh 最新版本失败",
+                        "Failed to query the latest dsh version"
+                    )
+                )),
+            ),
         },
-        None => (None, Some("未找到已安装的 dsh".into())),
+        None => (
+            None,
+            Some(crate::locale::text("未检测到 dsh 安装", "Installed dsh was not found").into()),
+        ),
     });
 
     // node：检测“当前实际使用的 Node”（DSHDesktop 便携优先，其次系统安装的 Node）。
@@ -160,7 +188,13 @@ pub fn check(app: &AppHandle) -> CheckResult {
     let node_handle = std::thread::spawn(move || {
         let managed = node_cfg.node_exe().exists();
         let installed = runtime::current_node_version(&node_cfg);
-        let latest_lts = runtime::latest_lts().ok();
+        let (latest_lts, latest_error) = match runtime::latest_lts() {
+            Ok(version) => (Some(version), None),
+            Err(error) => {
+                crate::logging::log(&format!("updater: Node.js 最新版本查询失败：{error}"));
+                (None, Some(error))
+            }
+        };
         let update_available = managed
             && latest_lts.is_some()
             && installed
@@ -170,7 +204,13 @@ pub fn check(app: &AppHandle) -> CheckResult {
                         == std::cmp::Ordering::Greater
                 })
                 .unwrap_or(false);
-        (managed, installed, latest_lts, update_available)
+        (
+            managed,
+            installed,
+            latest_lts,
+            latest_error,
+            update_available,
+        )
     });
 
     // PowerShell 7（可选增强，仅 Windows——macOS/Linux 有各自的系统终端）。
@@ -181,6 +221,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
             Ok(latest) => (
                 installed.clone(),
                 Some(latest.clone()),
+                None,
                 match &installed {
                     Some(cur) => {
                         versions::compare_versions(&latest, cur) == std::cmp::Ordering::Greater
@@ -188,7 +229,10 @@ pub fn check(app: &AppHandle) -> CheckResult {
                     None => true,
                 },
             ),
-            Err(_) => (installed, None, false),
+            Err(error) => {
+                crate::logging::log(&format!("updater: PowerShell 最新版本查询失败：{error}"));
+                (installed, None, Some(error), false)
+            }
         }
     });
 
@@ -198,19 +242,22 @@ pub fn check(app: &AppHandle) -> CheckResult {
             result.error = d_err;
         }
     }
-    if let Ok((managed, installed, latest_lts, update_available)) = node_handle.join() {
+    if let Ok((managed, installed, latest_lts, latest_error, update_available)) = node_handle.join()
+    {
         result.node = Some(NodeInfo {
             managed,
             installed,
             latest_lts,
+            latest_error,
             update_available,
         });
     }
     #[cfg(windows)]
-    if let Ok((installed, latest, update_available)) = pwsh_handle.join() {
+    if let Ok((installed, latest, latest_error, update_available)) = pwsh_handle.join() {
         result.pwsh = Some(PwshInfo {
             installed,
             latest,
+            latest_error,
             update_available,
         });
     }
@@ -222,7 +269,8 @@ pub fn check(app: &AppHandle) -> CheckResult {
 /// 检测已安装的 PowerShell 7 版本（未安装返回 None）。
 #[cfg(windows)]
 fn pwsh_version() -> Option<String> {
-    let mut cmd = std::process::Command::new("pwsh");
+    // pwsh 用绝对路径优先：应用启动后才安装的 pwsh 不在 PATH 快照里
+    let mut cmd = processes::pwsh_command();
     cmd.args([
         "-NoProfile",
         "-Command",
@@ -241,22 +289,101 @@ fn pwsh_version() -> Option<String> {
     }
 }
 
-/// 查询 PowerShell 官方最新稳定版（GitHub Releases）。
+fn parse_pwsh_metadata(json: &serde_json::Value) -> Result<String, String> {
+    json.get("StableReleaseTag")
+        .or_else(|| json.get("ReleaseTag"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim_start_matches('v').to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "metadata has no stable release tag".into())
+}
+
+/// 查询 PowerShell 官方最新稳定版。
+///
+/// 主用 GitHub Releases 列表（取最高的非预览 tag）：官方 metadata.json 的
+/// StableReleaseTag 更新滞后于发布（实测 7.6.5 发布后仍停留在 7.6.4），
+/// 只在其上兜底会在补丁发布后漏报。GitHub API 失败时回退 metadata。
 #[cfg(windows)]
 fn latest_pwsh_version() -> Result<String, String> {
-    let resp = runtime::client()
-        .get("https://api.github.com/repos/PowerShell/PowerShell/releases/latest")
-        .set("User-Agent", "DSHDesktop")
-        .set("Accept", "application/vnd.github+json")
+    match github_latest_stable() {
+        Ok(version) => return Ok(version),
+        Err(github_error) => {
+            crate::logging::log(&format!(
+                "updater: PowerShell GitHub Releases 查询失败，回退官方 metadata：{github_error}"
+            ));
+        }
+    }
+
+    let metadata_result = runtime::client()
+        .get("https://raw.githubusercontent.com/PowerShell/PowerShell/master/tools/metadata.json")
+        .header("User-Agent", "DSHDesktop")
         .call()
-        .map_err(|e| format!("获取 PowerShell 版本信息失败：{e}"))?;
-    let json: serde_json::Value = resp
-        .into_json()
-        .map_err(|e| format!("解析 PowerShell 版本信息失败：{e}"))?;
-    json.get("tag_name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim_start_matches('v').to_string())
-        .ok_or_else(|| "响应中没有版本号".into())
+        .map_err(|e| e.to_string())
+        .and_then(|response| {
+            response
+                .into_body()
+                .read_json::<serde_json::Value>()
+                .map_err(|e| e.to_string())
+        })
+        .and_then(|json| parse_pwsh_metadata(&json));
+    match metadata_result {
+        Ok(version) => Ok(version),
+        Err(metadata_error) => Err(format!(
+            "{}: {metadata_error}",
+            crate::locale::text(
+                "获取 PowerShell 版本信息失败",
+                "Failed to retrieve PowerShell version information"
+            )
+        )),
+    }
+}
+
+/// 从 GitHub Releases 列表取最高的非预览 tag。
+#[cfg(windows)]
+fn github_latest_stable() -> Result<String, String> {
+    let response = runtime::client()
+        .get("https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30")
+        .header("User-Agent", "DSHDesktop")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| format!("GitHub API: {e}"))?;
+    let json: serde_json::Value = response
+        .into_body()
+        .read_json()
+        .map_err(|e| format!("GitHub API: {e}"))?;
+    let entries = json
+        .as_array()
+        .ok_or_else(|| "GitHub API: releases 格式错误".to_string())?;
+    let mut best: Option<semver::Version> = None;
+    let mut best_tag = String::new();
+    for entry in entries {
+        if entry
+            .get("prerelease")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+            || entry
+                .get("draft")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(tag) = entry.get("tag_name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Ok(version) = semver::Version::parse(tag.trim_start_matches('v')) else {
+            continue;
+        };
+        let newer = best
+            .as_ref()
+            .is_none_or(|current| version.cmp_precedence(current) == std::cmp::Ordering::Greater);
+        if newer {
+            best = Some(version);
+            best_tag = tag.trim_start_matches('v').to_string();
+        }
+    }
+    best.map(|_| best_tag)
+        .ok_or_else(|| "GitHub API: 未找到稳定版本".to_string())
 }
 
 /// 安装或更新 PowerShell 7（仅 Windows 有意义，其他平台给出明确提示）。
@@ -267,21 +394,36 @@ fn update_pwsh(app: &AppHandle) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        Err("PowerShell 仅支持在 Windows 上安装更新；macOS/Linux 请使用系统自带终端。".into())
+        Err(crate::locale::text(
+            "PowerShell 仅支持在 Windows 上安装更新；macOS/Linux 请使用系统自带终端。",
+            "PowerShell updates are supported only on Windows. Use the system terminal on macOS/Linux.",
+        )
+        .into())
     }
 }
 
 /// 安装或更新 PowerShell 7（通过 winget；机器级安装会弹出 UAC 授权）。
 #[cfg(windows)]
 fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
-    use tauri_plugin_dialog::MessageDialogKind;
-    crate::dialog::show_message(
-        app,
-        "安装/更新 PowerShell 需要管理员权限，\n接下来会弹出系统授权提示（UAC），请选择“是”。"
-            .into(),
-        "PowerShell",
-        MessageDialogKind::Info,
-    );
+    // UAC 预告在检查更新弹窗内展示并等待确认（不再用原生消息框——
+    // 原生框无法可靠锚定到自绘弹窗上，位置/层级不可控）。
+    // 弹窗关闭视为取消。
+    let state = app.state::<AppState>();
+    state.set_pwsh_confirmed(false);
+    state.set_pwsh_pending(true);
+    loop {
+        if app.state::<AppState>().is_quitting() {
+            state.set_pwsh_pending(false);
+            return Err(crate::locale::text("应用已退出", "The app has quit").into());
+        }
+        if state.pwsh_confirmed() {
+            break;
+        }
+        if !state.pwsh_pending() {
+            return Err(crate::locale::text("已取消", "Cancelled").into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 
     // 前置：确认 winget（微软应用安装程序）可用
     let (code, _out, err) = processes::run_capture(
@@ -290,18 +432,37 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
         &[],
         None,
     )
-    .map_err(|e| format!("运行 winget 失败：{e}"))?;
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("运行 winget 失败：{e}"),
+            format!("Failed to run winget: {e}"),
+        )
+    })?;
     if code != 0 {
-        return Err(format!(
-            "未找到 winget（微软应用安装程序）。\n请到微软官网下载 PowerShell 7 安装包手动安装。\n{}",
-            crate::util::truncate(&err, 300)
+        let detail = crate::util::truncate(&err, 300);
+        return Err(crate::locale::owned(
+            format!(
+                "未找到 winget（微软应用安装程序）。\n请到微软官网下载 PowerShell 7 安装包手动安装。\n{detail}"
+            ),
+            format!(
+                "winget (App Installer) was not found.\nDownload and install PowerShell 7 manually from Microsoft.\n{detail}"
+            ),
         ));
     }
 
     let installed = pwsh_version().is_some();
-    let action = if installed { "更新" } else { "安装" };
+    let action = if installed {
+        crate::locale::text("更新", "Update")
+    } else {
+        crate::locale::text("安装", "Install")
+    };
     let verb = if installed { "upgrade" } else { "install" };
-    emit_progress(app, &format!("正在{action} PowerShell…"));
+    let progress = if installed {
+        crate::locale::text("正在更新 PowerShell…", "Updating PowerShell…")
+    } else {
+        crate::locale::text("正在安装 PowerShell…", "Installing PowerShell…")
+    };
+    emit_progress(app, progress);
     let args = vec![
         verb.into(),
         "--id".into(),
@@ -312,20 +473,30 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
         "--accept-source-agreements".into(),
     ];
     let (code, _out, err) =
-        processes::run_capture(std::path::Path::new("winget"), &args, &[], None)
-            .map_err(|e| format!("运行 winget 失败：{e}"))?;
+        processes::run_capture(std::path::Path::new("winget"), &args, &[], None).map_err(|e| {
+            crate::locale::owned(
+                format!("运行 winget 失败：{e}"),
+                format!("Failed to run winget: {e}"),
+            )
+        })?;
     if code != 0 {
-        return Err(format!(
-            "{action} PowerShell 失败（winget 退出码 {code}）：\n{}",
-            crate::util::truncate(&err, 400)
-        ));
+        let detail = crate::util::truncate(&err, 400);
+        return Err(if crate::locale::is_chinese() {
+            format!("{action} PowerShell 失败（winget 退出码 {code}）：\n{detail}")
+        } else {
+            format!("PowerShell {action} failed (winget exit code {code}):\n{detail}")
+        });
     }
     match pwsh_version() {
         Some(v) => {
             crate::logging::log(&format!("updater: PowerShell 就绪 v{v}"));
             Ok(())
         }
-        None => Err("winget 报告成功，但未检测到 pwsh，请打开新的终端确认。".into()),
+        None => Err(crate::locale::text(
+            "winget 报告成功，但未检测到 pwsh，请打开新的终端确认。",
+            "winget reported success, but pwsh was not detected. Open a new terminal and check again.",
+        )
+        .into()),
     }
 }
 
@@ -335,8 +506,18 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
 pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     if !state.try_begin_update() {
-        let msg = "启动或更新流程正在进行，请稍后再试。".to_string();
-        emit_progress(app, &format!("更新失败：{msg}"));
+        let msg = crate::locale::text(
+            "启动或更新流程正在进行，请稍后再试。",
+            "Startup or another update is in progress. Please try again later.",
+        )
+        .to_string();
+        emit_progress(
+            app,
+            &format!(
+                "{}: {msg}",
+                crate::locale::text("更新失败", "Update failed")
+            ),
+        );
         return Err(msg);
     }
     let _updating = UpdatingReset(state.inner());
@@ -349,11 +530,20 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
     } else if which == "pwsh" {
         update_pwsh(app)
     } else {
-        Err(format!("未知更新目标：{which}"))
+        Err(format!(
+            "{}: {which}",
+            crate::locale::text("未知更新目标", "Unknown update target")
+        ))
     };
     if let Err(msg) = &result {
         // 让启动页/托盘能看到失败原因
-        emit_progress(app, &format!("更新失败：{msg}"));
+        emit_progress(
+            app,
+            &format!(
+                "{}: {msg}",
+                crate::locale::text("更新失败", "Update failed")
+            ),
+        );
     }
     result
 }
@@ -365,12 +555,20 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
 pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.is_updating() {
-        return Err("更新流程正在进行，请稍后再重启。".into());
+        return Err(crate::locale::text(
+            "更新流程正在进行，请稍后再重启。",
+            "An update is in progress. Please restart the service later.",
+        )
+        .into());
     }
     let _guard = state.lifecycle_guard();
     // 覆盖“检查后、拿锁前”更新刚好开始的竞争窗口。
     if state.is_updating() {
-        return Err("更新流程正在进行，请稍后再重启。".into());
+        return Err(crate::locale::text(
+            "更新流程正在进行，请稍后再重启。",
+            "An update is in progress. Please restart the service later.",
+        )
+        .into());
     }
     restart_service_locked(app)
 }
@@ -379,29 +577,31 @@ pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
 fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let config = state.config();
-    state.set_phase(BootPhase::Starting, "正在重启服务…", "");
-    emit_status(app, BootPhase::Starting, "正在重启服务…", "");
+    let restarting = crate::locale::text("正在重启服务…", "Restarting the service…");
+    state.set_phase(BootPhase::Starting, restarting, "");
+    emit_status(app, BootPhase::Starting, restarting, "");
     let result = (|| -> Result<(), String> {
         // 先停掉残留进程
         dsh::shutdown(app);
         std::thread::sleep(Duration::from_millis(800));
-        let node_exe = if config.node_exe().exists() {
-            config.node_exe()
-        } else {
-            runtime::find_system_node().ok_or("未找到 Node.js")?
-        };
+        let node_exe = runtime::ensure_node(app, &config)?;
         let (pid, job) = runtime::start_server(app, &config, &node_exe)?;
         state.set_running(pid, job);
         if !dsh::wait_ready(config.port, Duration::from_secs(60)) {
             processes::kill_tree(pid);
-            return Err("服务重启后未就绪".into());
+            return Err(crate::locale::text(
+                "重启后服务未就绪",
+                "The service did not become ready after restarting",
+            )
+            .into());
         }
         Ok(())
     })();
     match &result {
         Ok(()) => {
-            state.set_phase(BootPhase::Ready, "已就绪", "");
-            emit_status(app, BootPhase::Ready, "已就绪", "");
+            let ready = crate::locale::text("已就绪", "Ready");
+            state.set_phase(BootPhase::Ready, ready, "");
+            emit_status(app, BootPhase::Ready, ready, "");
             // 唤醒可能阻塞在错误页等待的 boot_loop，让其重入引导（复用本服务）进入看门狗
             state.signal_retry();
             // 给启动页淡出动画留余量，再跳转（与 boot_once 一致，无白闪）
@@ -426,30 +626,49 @@ fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), 
     let node_exe = if config.node_exe().exists() {
         config.node_exe()
     } else {
-        runtime::find_system_node().ok_or("未找到 Node.js")?
+        runtime::find_system_node()
+            .ok_or_else(|| crate::locale::text("未找到 Node.js", "Node.js was not found"))?
     };
     let npm_cli = node_exe
         .parent()
-        .unwrap()
+        .ok_or_else(|| {
+            crate::locale::text(
+                "Node.js 可执行文件路径无父目录",
+                "The Node.js executable path has no parent directory",
+            )
+        })?
         .join("node_modules/npm/bin/npm-cli.js");
     if !npm_cli.exists() {
-        return Err("未找到 npm".into());
+        return Err(crate::locale::text("未找到 npm", "npm was not found").into());
     }
 
     let current = config.dsh_dir();
     let backup = config.root.join(update_txn::DSH_BACKUP_DIR);
     let marker = config.root.join(update_txn::DSH_UPDATE_MARKER);
     if backup.exists() || marker.exists() {
-        return Err(format!(
-            "发现尚未处理的 dsh 更新状态，请重启应用后再试：{}",
-            backup.display()
+        return Err(crate::locale::owned(
+            format!(
+                "检测到未完成的 dsh 更新，请重启应用后重试：{}",
+                backup.display()
+            ),
+            format!(
+                "An unfinished dsh update was found. Restart the app before trying again: {}",
+                backup.display()
+            ),
         ));
     }
     if !current.exists() {
-        return Err("未找到当前 dsh 安装目录".into());
+        return Err(crate::locale::text(
+            "未找到当前 dsh 安装目录",
+            "The current dsh installation directory was not found",
+        )
+        .into());
     }
 
-    emit_progress(app, "正在停止 dsh 服务…");
+    emit_progress(
+        app,
+        crate::locale::text("正在停止 dsh 服务…", "Stopping the dsh service…"),
+    );
     update_txn::create_marker(&marker)?;
     dsh::shutdown(app);
     navigate(app, SPLASH_ORIGIN);
@@ -457,10 +676,16 @@ fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), 
     if let Err(e) = std::fs::rename(&current, &backup) {
         update_txn::remove_marker(&marker);
         let _ = restart_service_locked(app);
-        return Err(format!("备份当前 dsh 失败：{e}"));
+        return Err(crate::locale::owned(
+            format!("备份当前 dsh 失败：{e}"),
+            format!("Failed to back up the current dsh installation: {e}"),
+        ));
     }
 
-    emit_progress(app, "正在更新 dsh 包…");
+    emit_progress(
+        app,
+        crate::locale::text("正在更新 dsh 包…", "Updating the dsh package…"),
+    );
     let args = vec![
         npm_cli.to_string_lossy().into_owned(),
         "install".into(),
@@ -474,50 +699,90 @@ fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), 
     let envs = base_envs(&node_exe, config);
     let install_result = (|| -> Result<(), String> {
         let (code, _out, err) = processes::run_capture(&node_exe, &args, &envs, Some(&config.root))
-            .map_err(|e| format!("运行 npm 失败：{e}"))?;
+            .map_err(|e| {
+                crate::locale::owned(
+                    format!("运行 npm 失败：{e}"),
+                    format!("Failed to run npm: {e}"),
+                )
+            })?;
         if code != 0 {
-            return Err(format!(
-                "更新 dsh 失败（npm 退出码 {code}）：\n{}",
-                crate::util::truncate(&err, 600)
+            let detail = crate::util::truncate(&err, 600);
+            return Err(crate::locale::owned(
+                format!("更新 dsh 失败（npm 退出码 {code}）：\n{detail}"),
+                format!("Failed to update dsh (npm exit code {code}):\n{detail}"),
             ));
         }
         if !config.dsh_entry().exists() {
-            return Err("更新完成但未找到 dsh 入口文件".into());
+            return Err(crate::locale::text(
+                "更新完成但未找到 dsh 入口文件",
+                "The update completed, but the dsh entry file was not found",
+            )
+            .into());
         }
         Ok(())
     })();
     if let Err(e) = install_result {
-        if let Err(re) = update_txn::restore_directory(&current, &backup) {
-            update_txn::remove_marker(&marker);
-            return Err(format!(
-                "{e}；旧版本自动恢复失败：{re}。\n下次启动将自动还原旧版本。"
+        if let Err(re) = update_txn::rollback_directory(&current, &backup, &marker) {
+            return Err(crate::locale::owned(
+                format!("{e}；旧版本自动恢复失败：{re}。\n下次启动将自动还原旧版本。"),
+                format!(
+                    "{e}; automatic rollback failed: {re}.\nThe previous version will be restored on the next launch."
+                ),
             ));
         }
-        update_txn::remove_marker(&marker);
         return match restart_service_locked(app) {
-            Ok(()) => Err(format!("{e}；已恢复旧版本")),
-            Err(re) => Err(format!("{e}；旧版本恢复后未能启动：{re}")),
+            Ok(()) => Err(crate::locale::owned(
+                format!("{e}；已恢复旧版本"),
+                format!("{e}; the previous version was restored"),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("{e}；旧版本恢复后未能启动：{re}"),
+                format!("{e}; the restored version did not start: {re}"),
+            )),
         };
     }
 
-    emit_progress(app, "更新完成，正在重启服务…");
+    emit_progress(
+        app,
+        crate::locale::text(
+            "更新完成，正在重启服务…",
+            "Update complete. Restarting the service…",
+        ),
+    );
     if let Err(e) = restart_service_locked(app) {
         dsh::shutdown(app);
-        if let Err(re) = update_txn::restore_directory(&current, &backup) {
-            update_txn::remove_marker(&marker);
-            return Err(format!(
-                "新版本启动失败：{e}；旧版本自动恢复也失败：{re}。\n\
-                 服务已停止，下次启动将自动还原旧版本。"
+        if let Err(re) = update_txn::rollback_directory(&current, &backup, &marker) {
+            return Err(crate::locale::owned(
+                format!(
+                    "新版本启动失败：{e}；旧版本自动恢复也失败：{re}。\n\
+                     服务已停止，下次启动将自动还原旧版本。"
+                ),
+                format!(
+                    "The new version did not start: {e}; automatic rollback also failed: {re}.\n\
+                     The service is stopped; the previous version will be restored on the next launch."
+                ),
             ));
         }
-        update_txn::remove_marker(&marker);
         let restore_result = restart_service_locked(app);
         return match restore_result {
-            Ok(()) => Err(format!("新版本启动失败，已恢复旧版本：{e}")),
-            Err(re) => Err(format!("新版本启动失败：{e}；旧版本恢复后也未能启动：{re}")),
+            Ok(()) => Err(crate::locale::owned(
+                format!("新版本启动失败，已恢复旧版本：{e}"),
+                format!("The new version did not start; the previous version was restored: {e}"),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("新版本启动失败：{e}；旧版本恢复后也未能启动：{re}"),
+                format!(
+                    "The new version did not start: {e}; the restored version also failed to start: {re}"
+                ),
+            )),
         };
     }
-    std::fs::remove_file(&marker).map_err(|e| format!("提交 dsh 更新状态失败：{e}"))?;
+    std::fs::remove_file(&marker).map_err(|e| {
+        crate::locale::owned(
+            format!("提交 dsh 更新状态失败：{e}"),
+            format!("Failed to commit the dsh update state: {e}"),
+        )
+    })?;
     if let Err(e) = std::fs::remove_dir_all(&backup) {
         crate::logging::log(&format!(
             "updater: 清理 dsh 备份失败（不影响当前版本）：{e}"
@@ -531,19 +796,32 @@ fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), 
 /// 更新 Node：停服务 → 下载新版便携 Node → 换目录 → 重启（失败回滚）。
 fn update_node(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), String> {
     if !config.node_exe().exists() {
-        return Err("当前使用系统 Node，不自动更新。".into());
+        return Err(crate::locale::text(
+            "当前使用的是系统 Node.js，应用不会自动更新它。",
+            "The app is using the system Node.js installation and will not update it automatically.",
+        )
+        .into());
     }
     let old = config.node_dir();
     let backup = config.root.join(update_txn::NODE_BACKUP_DIR);
     let marker = config.root.join(update_txn::NODE_UPDATE_MARKER);
     if backup.exists() || marker.exists() {
-        return Err(format!(
-            "发现尚未处理的 Node 更新状态，请重启应用后再试：{}",
-            backup.display()
+        return Err(crate::locale::owned(
+            format!(
+                "检测到未完成的 Node 更新，请重启应用后重试：{}",
+                backup.display()
+            ),
+            format!(
+                "An unfinished Node.js update was found. Restart the app before trying again: {}",
+                backup.display()
+            ),
         ));
     }
 
-    emit_progress(app, "正在停止 dsh 服务…");
+    emit_progress(
+        app,
+        crate::locale::text("正在停止 dsh 服务…", "Stopping the dsh service…"),
+    );
     update_txn::create_marker(&marker)?;
     dsh::shutdown(app);
     navigate(app, SPLASH_ORIGIN);
@@ -552,7 +830,10 @@ fn update_node(app: &AppHandle, config: &crate::app_state::Config) -> Result<(),
         if let Err(e) = std::fs::rename(&old, &backup) {
             update_txn::remove_marker(&marker);
             let _ = restart_service_locked(app);
-            return Err(format!("备份当前 Node 失败：{e}"));
+            return Err(crate::locale::owned(
+                format!("备份当前 Node 失败：{e}"),
+                format!("Failed to back up the current Node.js installation: {e}"),
+            ));
         }
     }
     let result = (|| -> Result<(), String> {
@@ -560,38 +841,74 @@ fn update_node(app: &AppHandle, config: &crate::app_state::Config) -> Result<(),
         let _ = exe;
         Ok(())
     })();
-    if result.is_err() {
-        // 回滚
-        if old.exists() {
-            std::fs::remove_dir_all(&old).map_err(|e| format!("清理新 Node 安装目录失败：{e}"))?;
-        }
-        if backup.exists() {
-            std::fs::rename(&backup, &old).map_err(|e| format!("恢复旧 Node 失败：{e}"))?;
-        }
-        update_txn::remove_marker(&marker);
-    }
-    result?;
-
-    emit_progress(app, "Node 更新完成，正在重启服务…");
-    if let Err(e) = restart_service_locked(app) {
-        dsh::shutdown(app);
-        if let Err(re) = update_txn::restore_directory(&old, &backup) {
-            update_txn::remove_marker(&marker);
-            return Err(format!(
-                "新 Node 启动失败：{e}；旧版本自动恢复失败：{re}。\n\
-                 服务已停止，下次启动将自动还原旧版本。"
+    if let Err(e) = result {
+        if let Err(re) = update_txn::rollback_directory(&old, &backup, &marker) {
+            return Err(crate::locale::owned(
+                format!(
+                    "{e}；旧 Node 自动恢复失败：{re}。\n\
+                     已保留备份和事务标记，下次启动将再次恢复。"
+                ),
+                format!(
+                    "{e}; automatic Node.js rollback failed: {re}.\n\
+                     The backup and transaction marker were kept for recovery on the next launch."
+                ),
             ));
         }
-        update_txn::remove_marker(&marker);
-        let restore_result = restart_service_locked(app);
-        return match restore_result {
-            Ok(()) => Err(format!("新 Node 启动失败，已恢复旧版本：{e}")),
-            Err(re) => Err(format!(
-                "新 Node 启动失败：{e}；旧版本恢复后也未能启动：{re}"
+        return match restart_service_locked(app) {
+            Ok(()) => Err(crate::locale::owned(
+                format!("{e}；已恢复旧 Node"),
+                format!("{e}; the previous Node.js version was restored"),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("{e}；旧 Node 恢复后未能启动：{re}"),
+                format!("{e}; the restored Node.js version did not start: {re}"),
             )),
         };
     }
-    std::fs::remove_file(&marker).map_err(|e| format!("提交 Node 更新状态失败：{e}"))?;
+
+    emit_progress(
+        app,
+        crate::locale::text(
+            "Node 更新完成，正在重启服务…",
+            "Node.js update complete. Restarting the service…",
+        ),
+    );
+    if let Err(e) = restart_service_locked(app) {
+        dsh::shutdown(app);
+        if let Err(re) = update_txn::rollback_directory(&old, &backup, &marker) {
+            return Err(crate::locale::owned(
+                format!(
+                    "新 Node 启动失败：{e}；旧版本自动恢复失败：{re}。\n\
+                     服务已停止，下次启动将自动还原旧版本。"
+                ),
+                format!(
+                    "The new Node.js version did not start: {e}; automatic rollback failed: {re}.\n\
+                     The service is stopped; the previous version will be restored on the next launch."
+                ),
+            ));
+        }
+        let restore_result = restart_service_locked(app);
+        return match restore_result {
+            Ok(()) => Err(crate::locale::owned(
+                format!("新 Node 启动失败，已恢复旧版本：{e}"),
+                format!(
+                    "The new Node.js version did not start; the previous version was restored: {e}"
+                ),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("新 Node 启动失败：{e}；旧版本恢复后也未能启动：{re}"),
+                format!(
+                    "The new Node.js version did not start: {e}; the restored version also failed to start: {re}"
+                ),
+            )),
+        };
+    }
+    std::fs::remove_file(&marker).map_err(|e| {
+        crate::locale::owned(
+            format!("提交 Node 更新状态失败：{e}"),
+            format!("Failed to commit the Node.js update state: {e}"),
+        )
+    })?;
     if backup.exists() {
         if let Err(e) = std::fs::remove_dir_all(&backup) {
             crate::logging::log(&format!(
@@ -600,4 +917,15 @@ fn update_node(app: &AppHandle, config: &crate::app_state::Config) -> Result<(),
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_pwsh_metadata;
+
+    #[test]
+    fn parses_official_powershell_stable_tag() {
+        let metadata = serde_json::json!({ "StableReleaseTag": "v7.6.4" });
+        assert_eq!(parse_pwsh_metadata(&metadata).unwrap(), "7.6.4");
+    }
 }

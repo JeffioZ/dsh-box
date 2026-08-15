@@ -4,6 +4,8 @@
 
 use std::io;
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 #[cfg(unix)]
@@ -21,6 +23,56 @@ pub fn hide_console(cmd: &mut Command) {
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(not(windows))]
     let _ = cmd;
+}
+
+/// 构造 pwsh 启动命令（Windows）：优先绝对安装路径——应用进程的 PATH
+/// 是启动时的快照，之后才安装的 pwsh 不在其中，按名查找会漏检；
+/// 找不到再退回 PATH 查找。
+#[cfg(windows)]
+pub fn pwsh_command() -> Command {
+    let exe = find_pwsh().unwrap_or_else(|| PathBuf::from("pwsh"));
+    Command::new(exe)
+}
+
+/// 定位 pwsh.exe：机器级/用户级标准安装路径优先，PATH 兜底。
+#[cfg(windows)]
+pub fn find_pwsh() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(p) = std::env::var("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(p)
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+        );
+    }
+    if let Ok(p) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(p)
+                .join("Microsoft")
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+        );
+    }
+    if let Some(exe) = candidates.into_iter().find(|p| p.exists()) {
+        return Some(exe);
+    }
+    // PATH 兜底（应用启动时已在 PATH 中的场景）
+    let mut cmd = Command::new("where");
+    cmd.arg("pwsh");
+    hide_console(&mut cmd);
+    if let Ok(out) = cmd.output() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let first = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+        if let Some(line) = first {
+            let path = PathBuf::from(line);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 /// 进程树守卫：

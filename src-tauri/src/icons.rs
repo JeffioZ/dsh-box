@@ -69,7 +69,13 @@ fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Op
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
     unsafe {
         let mut ii: ICONINFO = std::mem::zeroed();
-        if GetIconInfo(hicon, &mut ii) == 0 || ii.hbmColor.is_null() {
+        if GetIconInfo(hicon, &mut ii) == 0 {
+            return None;
+        }
+        if ii.hbmColor.is_null() {
+            if !ii.hbmMask.is_null() {
+                DeleteObject(ii.hbmMask);
+            }
             return None;
         }
         let mut bm: BITMAP = std::mem::zeroed();
@@ -80,11 +86,17 @@ fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Op
         ) == 0
         {
             DeleteObject(ii.hbmColor);
+            if !ii.hbmMask.is_null() {
+                DeleteObject(ii.hbmMask);
+            }
             return None;
         }
         let (w, h) = (bm.bmWidth as i32, bm.bmHeight as i32);
         if w <= 0 || h <= 0 || w > 128 || h > 128 {
             DeleteObject(ii.hbmColor);
+            if !ii.hbmMask.is_null() {
+                DeleteObject(ii.hbmMask);
+            }
             return None;
         }
         let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -98,6 +110,14 @@ fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Op
         let mut bi: BITMAPINFO = std::mem::zeroed();
         bi.bmiHeader = bih;
         let dc = CreateCompatibleDC(std::ptr::null_mut());
+        if dc.is_null() {
+            DeleteObject(ii.hbmColor);
+            if !ii.hbmMask.is_null() {
+                DeleteObject(ii.hbmMask);
+            }
+            return None;
+        }
+        // 位图需选入 DC 后 GetDIBits 才能可靠取像素（DDB 转 DIB）
         let old = SelectObject(dc, ii.hbmColor);
         let lines = GetDIBits(
             dc,

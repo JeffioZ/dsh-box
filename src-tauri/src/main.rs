@@ -1,5 +1,9 @@
 // 发布版不弹出附加的控制台窗口。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// MSVC link.exe 会向 stdout 输出“正在创建库 …”（/NOLOGO 无法抑制），
+// 被 rustc 报告为 linker_messages 警告——按预期允许，保持构建输出干净。
+// 该 lint 只能在被链接的 crate 根（bin）控制，不能放在 lib 根。
+#![allow(linker_messages)]
 
 //! DSHDesktop 入口。
 //!
@@ -7,6 +11,27 @@
 //! macOS/Linux：使用系统内置渲染（WKWebView/WebKitGTK），无需预检。
 
 fn main() {
+    // panic = "abort"：panic 信息默认输出到 GUI 应用不可见的 stderr。
+    // 挂接 hook 把 panic 信息尽力写入应用日志（desktop.log），
+    // 写入失败时静默忽略；随后交还默认 hook，保留 stderr 输出与
+    // RUST_BACKTRACE（dev 构建 panic=unwind 下依赖它），默认 abort 行为不变。
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::from("（非字符串 panic 载荷）")
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        dsh_desktop_lib::log_panic(&format!("{payload}（{location}）"));
+        previous_hook(info);
+    }));
+
     #[cfg(windows)]
     if !webview2_check::ensure_webview2() {
         return;
@@ -17,7 +42,8 @@ fn main() {
 /// WebView2 前置检查（仅 Windows：注册表检测 + 下载官方引导安装器自动安装）。
 #[cfg(windows)]
 mod webview2_check {
-    use dsh_desktop_lib::APP_TITLE;
+    use dsh_desktop_lib::{locale, APP_TITLE};
+    use std::io::{Read, Seek};
     use std::os::windows::process::CommandExt;
     use std::time::Duration;
 
@@ -85,19 +111,84 @@ mod webview2_check {
         unsafe { MessageBoxW(std::ptr::null_mut(), t.as_ptr(), cap.as_ptr(), style) }
     }
 
-    /// 下载 Evergreen 引导安装器（微软官方直链，约 1.6 MB）。
+    const MAX_BOOTSTRAPPER_BYTES: u64 = 32 * 1024 * 1024;
+
+    /// 下载 Evergreen 引导安装器（微软官方链接）。
     /// 不内嵌在 exe 中：仅在 WebView2 缺失时按需下载，保持安装包精简。
     fn download_bootstrapper(path: &std::path::Path) -> Result<(), String> {
-        let resp = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(15))
-            .timeout_read(Duration::from_secs(120))
+        let resp = ureq::Agent::config_builder()
+            .tls_config(dsh_desktop_lib::default_tls_config())
+            .timeout_connect(Some(Duration::from_secs(15)))
+            .timeout_recv_response(Some(Duration::from_secs(90)))
+            // body 整体时限放宽：慢网下载 32MB 引导安装器可能超过常规读时限
+            .timeout_recv_body(Some(Duration::from_secs(3600)))
             .build()
+            .new_agent()
             .get("https://go.microsoft.com/fwlink/p/?LinkId=2124703")
             .call()
-            .map_err(|e| format!("网络请求失败：{e}"))?;
-        let mut reader = resp.into_reader();
-        let mut file = std::fs::File::create(path).map_err(|e| format!("创建临时文件失败：{e}"))?;
-        std::io::copy(&mut reader, &mut file).map_err(|e| format!("写入安装器失败：{e}"))?;
+            .map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    locale::text("网络请求失败", "Network request failed")
+                )
+            })?;
+        let mut reader = resp
+            .into_body()
+            .into_reader()
+            .take(MAX_BOOTSTRAPPER_BYTES + 1);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    locale::text("创建临时文件失败", "Failed to create the temporary file")
+                )
+            })?;
+        let written = std::io::copy(&mut reader, &mut file).map_err(|e| {
+            format!(
+                "{}: {e}",
+                locale::text("写入安装器失败", "Failed to write the installer")
+            )
+        })?;
+        if written > MAX_BOOTSTRAPPER_BYTES {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(locale::text(
+                "安装文件超过 32 MB 上限",
+                "The installer exceeds the 32 MB safety limit",
+            )
+            .into());
+        }
+        file.sync_all().map_err(|e| {
+            format!(
+                "{}: {e}",
+                locale::text("保存安装器失败", "Failed to save the installer")
+            )
+        })?;
+        file.rewind().map_err(|e| {
+            format!(
+                "{}: {e}",
+                locale::text("校验安装器失败", "Failed to validate the installer")
+            )
+        })?;
+        let mut magic = [0u8; 2];
+        file.read_exact(&mut magic).map_err(|e| {
+            format!(
+                "{}: {e}",
+                locale::text("校验安装器失败", "Failed to validate the installer")
+            )
+        })?;
+        if magic != *b"MZ" {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(locale::text(
+                "下载的文件不是有效的 Windows 程序",
+                "The downloaded file is not a valid Windows executable",
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -110,16 +201,22 @@ mod webview2_check {
         // 自启动（--minimized）场景无人可问，直接静默安装（仍会弹 UAC）。
         let silent = std::env::args().any(|a| a == "--minimized");
         if !silent {
-            let ask = msgbox(
-                &format!(
-                    "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机未检测到该组件，是否立即自动安装？\n（需联网下载约 1.6 MB 安装组件，并弹出管理员授权提示，请选择“是”）"
-                ),
-                APP_TITLE,
-                MB_YESNO | MB_ICONQUESTION,
-            );
+            let prompt = if locale::is_chinese() {
+                format!(
+                    "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机未检测到该组件，是否立即自动安装？\n（需联网下载安装组件，并弹出管理员授权提示，请选择“是”）"
+                )
+            } else {
+                format!(
+                    "{APP_TITLE} requires the Microsoft Edge WebView2 Runtime to display its interface.\n\nIt was not found on this computer. Install it now?\n(Internet access and an administrator approval prompt are required.)"
+                )
+            };
+            let ask = msgbox(&prompt, APP_TITLE, MB_YESNO | MB_ICONQUESTION);
             if ask != IDYES {
                 msgbox(
-                    "缺少 WebView2 运行时，程序无法启动。\n可到微软官网搜索“WebView2 Runtime”手动安装后重试。",
+                    locale::text(
+                        "缺少 WebView2 运行时，程序无法启动。\n可到微软官网搜索“WebView2 Runtime”手动安装后重试。",
+                        "The app cannot start without the WebView2 Runtime.\nSearch Microsoft's website for “WebView2 Runtime”, install it, and try again.",
+                    ),
                     APP_TITLE,
                     MB_OK | MB_ICONERROR,
                 );
@@ -128,12 +225,37 @@ mod webview2_check {
         }
 
         // 下载官方引导安装器到临时目录（WebView2 缺失时本就需要联网安装）
-        let installer = std::env::temp_dir().join("MicrosoftEdgeWebview2Setup.exe");
-        if let Err(e) = download_bootstrapper(&installer) {
+        let mut nonce = [0u8; 8];
+        if let Err(e) = getrandom::fill(&mut nonce) {
             msgbox(
                 &format!(
-                    "下载 WebView2 安装组件失败：{e}\n请检查网络后重试，或到微软官网搜索“WebView2 Runtime”手动安装。"
+                    "{}: {e}",
+                    locale::text(
+                        "无法生成安装器临时文件名",
+                        "Could not create a secure temporary installer name"
+                    )
                 ),
+                APP_TITLE,
+                MB_OK | MB_ICONERROR,
+            );
+            return false;
+        }
+        let installer = std::env::temp_dir().join(format!(
+            "MicrosoftEdgeWebview2Setup-{:016x}.exe",
+            u64::from_le_bytes(nonce)
+        ));
+        if let Err(e) = download_bootstrapper(&installer) {
+            let _ = std::fs::remove_file(&installer);
+            msgbox(
+                &if locale::is_chinese() {
+                    format!(
+                        "下载 WebView2 安装组件失败：{e}\n请检查网络后重试，或到微软官网搜索“WebView2 Runtime”手动安装。"
+                    )
+                } else {
+                    format!(
+                        "Failed to download the WebView2 installer: {e}\nCheck the network and try again, or install “WebView2 Runtime” from Microsoft's website."
+                    )
+                },
                 APP_TITLE,
                 MB_OK | MB_ICONERROR,
             );
@@ -148,8 +270,15 @@ mod webview2_check {
         match launched {
             Ok(_) => {}
             Err(e) => {
+                let _ = std::fs::remove_file(&installer);
                 msgbox(
-                    &format!("启动 WebView2 安装失败：{e}"),
+                    &format!(
+                        "{}: {e}",
+                        locale::text(
+                            "启动 WebView2 安装失败",
+                            "Failed to start the WebView2 installer"
+                        )
+                    ),
                     APP_TITLE,
                     MB_OK | MB_ICONERROR,
                 );
@@ -161,11 +290,16 @@ mod webview2_check {
         for _ in 0..120 {
             std::thread::sleep(Duration::from_secs(1));
             if webview2_installed() {
+                let _ = std::fs::remove_file(&installer);
                 return true;
             }
         }
+        let _ = std::fs::remove_file(&installer);
         msgbox(
-            "WebView2 安装未能确认完成，请重试。\n或到微软官网搜索“WebView2 Runtime”手动安装。",
+            locale::text(
+                "未能确认 WebView2 安装完成，请重试。\n或到微软官网搜索“WebView2 Runtime”手动安装。",
+                "The WebView2 installation could not be confirmed. Try again, or install “WebView2 Runtime” from Microsoft's website.",
+            ),
             APP_TITLE,
             MB_OK | MB_ICONERROR,
         );

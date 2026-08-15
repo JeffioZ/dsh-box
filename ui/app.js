@@ -1,17 +1,28 @@
 // dsh 桌面端 —— 启动画面逻辑
 // 通过 Tauri IPC 与 Rust 后端通信：事件 dsh-status / update-progress / update-result，
-// 命令 get_status / retry_boot / quit / open_logs / api_balance / check_updates / apply_updates
+// 命令 get_status / retry_boot / quit / open_logs / check_updates / apply_updates
 
 const $ = (id) => document.getElementById(id);
 
-const PHASE_TEXT = {
-  'starting': '正在启动…',
-  'installing-node': '正在准备 Node.js 运行时…',
-  'installing-dsh': '正在安装 dsh（首次运行，需要联网）…',
-  'starting-server': '正在启动 dsh 服务…',
-  'ready': '已就绪，正在进入界面…',
-  'error': '启动失败',
+const PHASE_KEYS = {
+  'starting': 'starting',
+  'installing-node': 'installingNode',
+  'installing-dsh': 'installingDsh',
+  'starting-server': 'startingServer',
+  'ready': 'ready',
+  'error': 'startupFailed',
 };
+
+let lastStatusPayload = null;
+let lastUpdateResult = null;
+// 更新结果区只在两种情况下显示：用户手动点了“检查更新”，
+// 或静默检查发现 dsh 有新版可更——静默检查的“已是最新/检查失败”
+// 在安装进行中弹出来纯属噪音
+let updateCheckRequested = false;
+
+function phaseText(phase) {
+  return PHASE_KEYS[phase] ? dshdT(PHASE_KEYS[phase]) : phase;
+}
 
 function setStatus(phase, message, detail) {
   const text = $('status-text');
@@ -20,12 +31,12 @@ function setStatus(phase, message, detail) {
   // 终态（就绪/失败）用固定文案；其余阶段优先显示后端动态消息（如安装计时、端口回退）
   let display;
   if (phase === 'ready' || phase === 'error') {
-    display = PHASE_TEXT[phase] || phase;
+    display = phaseText(phase);
   } else {
-    display = (message && message.length) ? message : (PHASE_TEXT[phase] || phase);
+    display = (message && message.length) ? message : phaseText(phase);
   }
   text.textContent = display;
-  if (detail) $('status-detail').textContent = detail;
+  $('status-detail').textContent = detail || '';
   if (phase === 'ready') {
     spinner.classList.add('hidden');
     fill.classList.add('done');
@@ -33,12 +44,16 @@ function setStatus(phase, message, detail) {
     document.body.classList.add('fade-out');
   }
   else if (phase === 'error') { spinner.classList.add('hidden'); fill.classList.add('err'); }
-  else { spinner.classList.remove('hidden'); fill.classList.remove('done', 'err'); }
+  else {
+    document.body.classList.remove('fade-out');
+    spinner.classList.remove('hidden');
+    fill.classList.remove('done', 'err');
+  }
 }
 
 function showError(message) {
   setStatus('error');
-  $('error-msg').textContent = message || '未知错误';
+  $('error-msg').textContent = message || dshdT('unknownError');
   $('error-box').classList.remove('hidden');
 }
 
@@ -52,89 +67,125 @@ function renderVersions(payload) {
   const parts = [];
   if (payload.dsh_version) parts.push('dsh v' + payload.dsh_version);
   if (payload.node_version) parts.push('Node ' + payload.node_version);
-  if (payload.port) parts.push('端口 ' + payload.port);
+  if (payload.port) parts.push(dshdT('port', { port: payload.port }));
+  // 字段缺失时保留已显示内容（防御：事件载荷异常时不清空 footer）
+  if (parts.length === 0) return;
   el.textContent = parts.join(' · ');
 }
 
 function renderStatus(payload) {
+  lastStatusPayload = payload;
   setStatus(payload.phase, payload.message, payload.detail);
   renderVersions(payload);
+  const progressBar = $('progress-bar');
   const fill = $('bar-fill');
   // 终态清除 inline width，避免覆盖 .done/.err 的 100%
   if (payload.phase === 'ready' || payload.phase === 'error') {
+    fill.classList.remove('determinate');
     fill.style.width = '';
-  }
-  if (typeof payload.progress === 'number') {
+    if (payload.phase === 'ready') progressBar.setAttribute('aria-valuenow', '100');
+    else progressBar.removeAttribute('aria-valuenow');
+  } else if (typeof payload.progress === 'number') {
     // 确定进度（如 Node 下载百分比）
     fill.classList.add('determinate');
     fill.style.width = Math.max(2, Math.min(100, payload.progress)) + '%';
+    progressBar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, payload.progress))));
   } else {
     fill.classList.remove('determinate');
     fill.style.width = '';
+    progressBar.removeAttribute('aria-valuenow');
   }
   if (payload.phase === 'error') showError(payload.message);
   else hideError();
 }
 
 function renderUpdate(result) {
+  lastUpdateResult = result;
   const box = $('update-box');
-  box.classList.remove('hidden');
   const line = $('update-text');
   const applyBtn = $('btn-update-apply');
+  const hasUpdate = !!(result && result.dsh && result.dsh.update_available);
+  if (!updateCheckRequested && !hasUpdate) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  $('btn-update-check').disabled = false;
+  applyBtn.disabled = false;
   if (!result || result.error) {
-    line.textContent = result && result.error ? '检查更新失败：' + result.error : '检查更新失败';
+    line.textContent = result && result.error
+      ? dshdT('checkFailed') + ': ' + result.error
+      : dshdT('checkFailed');
     applyBtn.classList.add('hidden');
     return;
   }
   const d = result.dsh;
   if (d && d.update_available) {
-    line.textContent = 'dsh 有新版本：' + d.latest + '（当前 ' + d.installed + '）';
+    line.textContent = dshdT('dshUpdateAvailable', { latest: d.latest, current: d.installed });
     applyBtn.classList.remove('hidden');
   } else if (d) {
-    line.textContent = 'dsh 已是最新（' + d.installed + '）' +
-      (result.node && result.node.latest_lts ? ' · Node.js LTS ' + result.node.latest_lts : '');
+    line.textContent = dshdT('dshUpToDate', { version: d.installed }) +
+      (result.node && result.node.latest_lts ? ' · Node.js ' + dshdT('latestLts', { version: result.node.latest_lts }) : '');
   }
 }
 
 function bind() {
   $('btn-retry').addEventListener('click', async () => {
+    const button = $('btn-retry');
+    button.disabled = true;
     hideError();
     setStatus('starting');
     try {
       await window.__TAURI__.core.invoke('retry_boot');
     } catch (e) {
-      showError('重试失败：' + e);
+      showError(dshdT('retry') + ': ' + e);
+    } finally {
+      button.disabled = false;
     }
   });
   $('btn-logs').addEventListener('click', async () => {
     try {
       await window.__TAURI__.core.invoke('open_logs');
     } catch (e) {
-      showError('打开日志失败：' + e);
+      showError(dshdT('openLogs') + ': ' + e);
     }
   });
   $('btn-quit').addEventListener('click', () => window.__TAURI__.core.invoke('quit'));
   $('btn-update-check').addEventListener('click', async () => {
-    $('update-text').textContent = '检查更新中…';
+    const button = $('btn-update-check');
+    button.disabled = true;
+    updateCheckRequested = true;
+    // 立即显示“检查更新中…”，结果到达后 renderUpdate 填充
+    $('update-box').classList.remove('hidden');
+    $('update-text').textContent = dshdT('checkingUpdates');
     try {
       await window.__TAURI__.core.invoke('check_updates');
     } catch (e) {
-      $('update-text').textContent = '检查更新失败：' + e;
+      $('update-text').textContent = dshdT('checkFailed') + ': ' + e;
+      button.disabled = false;
     }
   });
   $('btn-update-apply').addEventListener('click', async () => {
-    $('update-text').textContent = '正在更新 dsh，请稍候…';
+    const button = $('btn-update-apply');
+    button.disabled = true;
+    $('update-text').textContent = dshdT('updateDshWait');
     try {
       await window.__TAURI__.core.invoke('apply_updates', { which: 'dsh' });
     } catch (e) {
-      $('update-text').textContent = '更新失败：' + e;
+      $('update-text').textContent = dshdT('updateFailed', { message: e });
+      button.disabled = false;
     }
   });
 }
 
 async function init() {
+  dshdApplyI18n();
   bind();
-  // 禁用 WebView2 默认右键菜单（启动页是我们自己的 UI）
+  window.addEventListener('dshd-language-changed', () => {
+    if (lastStatusPayload) renderStatus(lastStatusPayload);
+    if (lastUpdateResult) renderUpdate(lastUpdateResult);
+  });
+  // 启动页为内置界面，禁用 WebView2 默认右键菜单
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   const { listen } = window.__TAURI__.event;
   await listen('dsh-status', (e) => renderStatus(e.payload));

@@ -11,8 +11,21 @@ if (-not (Test-Path -LiteralPath $exe)) {
     throw "未找到开发版 exe：$exe（请先运行 dev-build.ps1 构建一次）"
 }
 
+function Test-DshdUiServer {
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:4321/" -TimeoutSec 2 -UseBasicParsing
+        return $response.StatusCode -eq 200 -and
+            $response.Content.Contains("<title>DeepSeek Harness Desktop</title>")
+    } catch {
+        return $false
+    }
+}
+
 # 确保静态服务器在跑（探测 4321 端口；未监听则后台启动，最多重试 10 次）
-$listening = Get-NetTCPConnection -LocalPort 4321 -State Listen -ErrorAction SilentlyContinue
+$listening = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 4321 -State Listen -ErrorAction SilentlyContinue
+if ($listening -and -not (Test-DshdUiServer)) {
+    throw "端口 4321 已被其他服务占用，请关闭该服务后重试"
+}
 if (-not $listening) {
     Write-Host "启动 UI 静态服务器（node scripts\serve-ui.mjs）..." -ForegroundColor Cyan
     # ArgumentList 对含空格的路径需手动加引号，否则参数被拆断
@@ -21,7 +34,7 @@ if (-not $listening) {
     $ok = $false
     for ($i = 0; $i -lt 10; $i++) {
         Start-Sleep -Milliseconds 500
-        if (Get-NetTCPConnection -LocalPort 4321 -State Listen -ErrorAction SilentlyContinue) {
+        if (Test-DshdUiServer) {
             $ok = $true
             break
         }

@@ -21,24 +21,39 @@ const MIME = {
 
 http
   .createServer((req, res) => {
-    const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-    const file = path.normalize(path.join(root, urlPath === '/' ? 'index.html' : urlPath));
-    if (!file.startsWith(root)) {
-      res.writeHead(403);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD' });
+      res.end('method not allowed');
+      return;
+    }
+    let urlPath;
+    try {
+      urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    } catch {
+      res.writeHead(400);
+      res.end('bad request');
+      return;
+    }
+    const relativePath = urlPath === '/' ? 'index.html' : urlPath.replace(/^[/\\]+/, '');
+    const file = path.resolve(root, relativePath);
+    const relativeToRoot = path.relative(root, file);
+    if (relativeToRoot === '..' || relativeToRoot.startsWith('..' + path.sep) || path.isAbsolute(relativeToRoot)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('forbidden');
       return;
     }
     fs.readFile(file, (err, data) => {
       if (err) {
-        res.writeHead(404);
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('not found');
         return;
       }
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
         'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
       });
-      res.end(data);
+      res.end(req.method === 'HEAD' ? undefined : data);
     });
   })
   .listen(port, '127.0.0.1', () => {

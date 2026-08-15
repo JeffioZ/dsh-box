@@ -14,7 +14,8 @@
 *.yaml  text eol=lf
 *.sh    text eol=lf
 
-# PowerShell 脚本：Windows 习惯 CRLF（保留 UTF-8 BOM）
+# PowerShell 脚本：Windows 习惯 CRLF；请保留 UTF-8 BOM（PS 5.1 依赖 BOM 识别 UTF-8，
+# 用编辑器保存时不要去掉）
 *.ps1   text eol=crlf
 
 # 二进制文件

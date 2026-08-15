@@ -1,7 +1,8 @@
 //! 应用共享状态：运行时配置、引导阶段、子进程句柄。
 
 use serde::Serialize;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -9,8 +10,11 @@ use crate::processes::TreeGuard;
 
 /// 默认端口（与 dsh web 默认一致）。
 pub const DEFAULT_PORT: u16 = 3080;
-/// 应用数据根目录名（位于 %LOCALAPPDATA% 下）。
+/// 应用数据根目录名；与 README 公布的各平台路径保持一致。
+#[cfg(windows)]
 pub const APP_DIR_NAME: &str = "DSHDesktop";
+#[cfg(not(windows))]
+pub const APP_DIR_NAME: &str = "com.deepseek.dsh-desktop";
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootPhase {
     Starting,
@@ -66,25 +70,24 @@ pub struct Config {
     pub api_key: Option<String>,
     /// DeepSeek API 基地址。
     pub api_base: String,
+    /// Desktop shell UI language (zh-CN / en); None follows the OS.
+    pub ui_language: Option<String>,
 }
 
 impl Config {
     pub fn load() -> Config {
         let root = std::env::var("DSH_DESKTOP_ROOT")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
-                PathBuf::from(base).join(APP_DIR_NAME)
-            });
+            .unwrap_or_else(|_| default_app_root());
         let port = std::env::var("DSH_DESKTOP_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
+            .filter(|p| *p > 0)
             .unwrap_or(DEFAULT_PORT);
         let dsh_home = std::env::var("DSH_DESKTOP_DSH_HOME")
             .ok()
             .map(PathBuf::from);
-        let api_base = std::env::var("DSH_DESKTOP_API_BASE")
-            .unwrap_or_else(|_| "https://api.deepseek.com".into());
+        let api_base = "https://api.deepseek.com".into();
 
         // 可选的 config.json 覆盖（环境变量优先）。
         let mut cfg = Config {
@@ -93,12 +96,18 @@ impl Config {
             dsh_home,
             api_key: None,
             api_base,
+            ui_language: None,
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(p) = json.get("port").and_then(|v| v.as_u64()) {
-                    cfg.port = p as u16;
+                if let Some(p) = json
+                    .get("port")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|p| u16::try_from(p).ok())
+                    .filter(|p| *p > 0)
+                {
+                    cfg.port = p;
                 }
                 if let Some(k) = json.get("api_key").and_then(|v| v.as_str()) {
                     if !k.is_empty() {
@@ -110,6 +119,11 @@ impl Config {
                         cfg.api_base = b.to_string();
                     }
                 }
+                if let Some(language) = json.get("language").and_then(|v| v.as_str()) {
+                    if matches!(language, "zh-CN" | "en") {
+                        cfg.ui_language = Some(language.to_string());
+                    }
+                }
             }
         }
         // 环境变量永远覆盖 config.json。
@@ -119,8 +133,13 @@ impl Config {
             }
         }
         if let Ok(p) = std::env::var("DSH_DESKTOP_PORT") {
-            if let Ok(p) = p.parse::<u16>() {
+            if let Ok(p @ 1..=u16::MAX) = p.parse::<u16>() {
                 cfg.port = p;
+            }
+        }
+        if let Ok(base) = std::env::var("DSH_DESKTOP_API_BASE") {
+            if !base.is_empty() {
+                cfg.api_base = base;
             }
         }
         cfg
@@ -175,6 +194,138 @@ impl Config {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    /// dsh 主目录（DSH_HOME）：显式配置 > 环境变量 DSH_HOME > ~/.dsh。
+    pub fn dsh_home(&self) -> PathBuf {
+        self.dsh_home
+            .clone()
+            .or_else(|| std::env::var("DSH_HOME").ok().map(PathBuf::from))
+            .or_else(|| dirs::home_dir().map(|home| home.join(".dsh")))
+            .unwrap_or_else(std::env::temp_dir)
+    }
+
+    /// 读取 dsh settings.yaml 中指定段落的字段值（顶层 `section:` 块内的
+    /// `field:` 行）。行级解析，供语言/主题跟随使用。
+    fn dsh_settings_value(&self, section: &str, field: &str) -> Option<String> {
+        let text = std::fs::read_to_string(self.dsh_home().join("settings.yaml")).ok()?;
+        let mut in_section = false;
+        for line in text.lines() {
+            if !line.starts_with(' ') && line.trim_end() == format!("{section}:") {
+                in_section = true;
+                continue;
+            }
+            if in_section {
+                // 只认“field:”开头的行：strip_prefix 后必须以冒号开始，
+                // 避免误命中 `preferences:` 等同前缀字段
+                if let Some(rest) = line.trim_start().strip_prefix(field) {
+                    if rest.trim_start().starts_with(':') {
+                        let value = line
+                            .split_once(':')
+                            .map(|(_, v)| v.trim().trim_matches(['"', '\'']))?;
+                        return Some(value.to_string());
+                    }
+                }
+                if !line.starts_with(' ') && !line.is_empty() {
+                    break; // 段落结束
+                }
+            }
+        }
+        None
+    }
+
+    /// 读取 dsh 的语言偏好（`locale.preference`：zh|en）→ 应用语言 id。
+    pub fn load_dsh_locale(&self) -> Option<&'static str> {
+        match self.dsh_settings_value("locale", "preference")?.as_str() {
+            "zh" => Some("zh-CN"),
+            "en" => Some("en"),
+            _ => None,
+        }
+    }
+
+    /// 读取 dsh 的主题偏好（`ui-theme.preference`：light|dark|system）。
+    pub fn load_dsh_theme(&self) -> Option<&'static str> {
+        match self.dsh_settings_value("ui-theme", "preference")?.as_str() {
+            "light" => Some("light"),
+            "dark" => Some("dark"),
+            "system" => Some("system"),
+            _ => None,
+        }
+    }
+
+    /// dsh 主题偏好 → 窗口主题：light/dark 固定主题（WebView 的
+    /// prefers-color-scheme 随之固定），system 或缺失 → None 跟随系统。
+    /// 所有窗口（主窗口/弹窗/托盘菜单）首次创建与主题切换共用同一解析。
+    pub fn resolve_dsh_theme(&self) -> Option<tauri::Theme> {
+        match self.load_dsh_theme() {
+            Some("light") => Some(tauri::Theme::Light),
+            Some("dark") => Some(tauri::Theme::Dark),
+            _ => None,
+        }
+    }
+
+    /// 把语言偏好写入 dsh 的 settings.yaml（`locale.preference: zh|en`）。
+    /// dsh 的 settings-file 提供者有文件监视器，外部编辑会被热发布，
+    /// 界面语言无需重载即切换。仅做行级合并，不触碰其他段落。
+    pub fn save_dsh_locale(&self, language: &str) -> Result<(), String> {
+        let path = self.dsh_home().join("settings.yaml");
+        let new_line = format!("  preference: {language}");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut out = String::new();
+        let mut in_locale = false;
+        let mut wrote = false;
+        for line in text.lines() {
+            if line.starts_with("locale:") && !line.starts_with(' ') {
+                in_locale = true;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if in_locale {
+                if let Some(rest) = line.trim_start().strip_prefix("preference") {
+                    // 替换 locale 段内的 preference 行（只认 `preference:`，
+                    // 不误伤 `preferences:` 等同前缀字段）
+                    if rest.trim_start().starts_with(':') {
+                        if !wrote {
+                            out.push_str(&new_line);
+                            out.push('\n');
+                            wrote = true;
+                        }
+                        continue;
+                    }
+                }
+                if !line.starts_with(' ') && !line.is_empty() {
+                    // locale 段结束：在其末尾补 preference 行
+                    if !wrote {
+                        out.push_str(&new_line);
+                        out.push('\n');
+                        wrote = true;
+                    }
+                    in_locale = false;
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !wrote {
+            if in_locale {
+                // locale 是最后一个段落且没有 preference 行
+                out.push_str(&new_line);
+                out.push('\n');
+            } else {
+                // 追加新的 locale 段落
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("locale:\n");
+                out.push_str(&new_line);
+                out.push('\n');
+            }
+        }
+        // 复用 config.json 的原子写助手（临时文件 + fsync + Windows
+        // ReplaceFileW 原子替换）：崩溃/断电不会把用户 settings.yaml 截断
+        // 成不完整文件，dsh 的监视器与跟随线程也不会读到中间态
+        atomic_write(&path, &out)
+    }
+
     /// 读取 config.json 中持久化的窗口矩形（逻辑坐标 lx/ly/lw/lh：与 DPI 无关，
     /// 跨不同缩放显示器切换时观感尺寸一致）。旧格式（物理 x/y/w/h）读不到即返回 None。
     pub fn load_window_rect(&self) -> Option<(f64, f64, f64, f64)> {
@@ -191,22 +342,102 @@ impl Config {
 
     /// 把窗口矩形（逻辑坐标）写入 config.json（保留其他字段）。
     pub fn save_window_rect(&self, x: f64, y: f64, w: f64, h: f64) {
-        let path = self.root.join("config.json");
-        let mut json = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(obj) = json.as_object_mut() {
-            obj.insert(
-                "window".into(),
-                serde_json::json!({ "lx": x, "ly": y, "lw": w, "lh": h }),
-            );
+        if let Err(e) = save_config_value(
+            &self.root,
+            "window",
+            serde_json::json!({ "lx": x, "ly": y, "lw": w, "lh": h }),
+        ) {
+            crate::logging::log(&format!("config: 保存窗口状态失败：{e}"));
         }
-        let _ = std::fs::write(
-            path,
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        );
     }
+
+    fn save_language(&self, language: &str) -> Result<(), String> {
+        save_config_value(
+            &self.root,
+            "language",
+            serde_json::Value::String(language.to_string()),
+        )
+    }
+}
+
+pub(crate) fn default_app_root() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(APP_DIR_NAME)
+}
+
+static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn save_config_value(root: &Path, key: &str, value: serde_json::Value) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = root.join("config.json");
+    let mut json = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|e| format!("config.json 解析失败，已保留原文件：{e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(format!("读取 config.json 失败：{e}")),
+    };
+    let object = json
+        .as_object_mut()
+        .ok_or_else(|| "config.json 顶层不是对象，已保留原文件".to_string())?;
+    object.insert(key.to_string(), value);
+    let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    atomic_write(&path, &text)
+}
+
+fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // 临时文件统一用 .json.tmp 后缀：即使目标是 settings.yaml，也刻意不
+    // 使用 .yaml 后缀，避免 dsh 的文件监视器在原子替换前读到半成品
+    let temp = path.with_extension("json.tmp");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    if let Err(e) = replace_file(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
+    if !target.exists() {
+        return std::fs::rename(temp, target);
+    }
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let temp: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let ok = unsafe {
+        ReplaceFileW(
+            target.as_ptr(),
+            temp.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::rename(temp, target)
 }
 
 pub(crate) struct Inner {
@@ -236,6 +467,9 @@ pub(crate) struct Inner {
     main_disabled: bool,
     /// 弹窗生命周期代次：打开/关闭时 +1，挂起的延迟动作据此判断是否过期。
     dialog_gen: u64,
+    /// PowerShell 更新的 UAC 预告在弹窗内等待确认；点击“继续”后置位。
+    pwsh_pending: bool,
+    pwsh_confirmed: bool,
 }
 
 /// 全局状态（跨线程共享）。
@@ -243,6 +477,8 @@ pub struct AppState {
     inner: Arc<Mutex<Inner>>,
     /// 生命周期锁：引导/重启/更新互斥，杜绝双服务并发。
     lifecycle: Mutex<()>,
+    /// 仅注入 dsh 主页面的自定义协议随机令牌。
+    protocol_token: String,
 }
 
 /// boot_loop 的“重试”信号接收端（启动时存入，仅取一次）。
@@ -250,9 +486,31 @@ pub static RETRY_RX: std::sync::Mutex<Option<Receiver<()>>> = std::sync::Mutex::
 
 impl AppState {
     pub fn new() -> AppState {
+        let mut token_bytes = [0u8; 16];
+        getrandom::fill(&mut token_bytes).expect("无法读取系统随机数");
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let protocol_token: String = token_bytes
+            .iter()
+            .flat_map(|b| {
+                [
+                    HEX[(b >> 4) as usize] as char,
+                    HEX[(b & 0x0f) as usize] as char,
+                ]
+            })
+            .collect();
+
         let (retry_tx, retry_rx) = std::sync::mpsc::channel::<()>();
         *RETRY_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(retry_rx);
         let config = Config::load();
+        let language_override = std::env::var("DSHD_LANG").ok();
+        // 语言解析优先级：DSHD_LANG 环境变量 > dsh settings.yaml（locale.preference）
+        // > config.json 的 language > 系统界面语言。dsh 偏好放在 config 之前，
+        // 保证加载页第一帧就与 dsh 的界面语言一致。
+        let preference = language_override
+            .as_deref()
+            .or(config.load_dsh_locale())
+            .or(config.ui_language.as_deref());
+        crate::locale::set_preference(preference);
         let inner = Inner {
             config,
             phase: BootPhase::Starting,
@@ -272,10 +530,13 @@ impl AppState {
             update_done: None,
             main_disabled: false,
             dialog_gen: 0,
+            pwsh_pending: false,
+            pwsh_confirmed: false,
         };
         AppState {
             inner: Arc::new(Mutex::new(inner)),
             lifecycle: Mutex::new(()),
+            protocol_token,
         }
     }
 
@@ -288,8 +549,23 @@ impl AppState {
         self.lifecycle.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    pub(crate) fn protocol_token(&self) -> &str {
+        &self.protocol_token
+    }
+
     pub fn config(&self) -> Config {
         self.lock_inner().config.clone()
+    }
+
+    pub fn set_ui_language(&self, language: &str) -> Result<(), String> {
+        if !matches!(language, "zh-CN" | "en") {
+            return Err("Unsupported UI language".into());
+        }
+        let config = self.config();
+        config.save_language(language)?;
+        self.lock_inner().config.ui_language = Some(language.to_string());
+        crate::locale::set_preference(Some(language));
+        Ok(())
     }
 
     pub fn snapshot(&self) -> StatusPayload {
@@ -303,6 +579,18 @@ impl AppState {
                 g.config.clone(),
                 g.node_version.clone(),
             )
+        };
+        // 缓存缺失时即时检测一次：启动页首帧就显示完整的版本信息
+        // （Node 版本由 boot 线程稍后检测，直接等会导致信息出现太晚、
+        // 启动快时刚显示就随页面导航消失）
+        let node_version = if node_version.is_some() {
+            node_version
+        } else {
+            let version = crate::runtime::current_node_version(&config);
+            if version.is_some() {
+                self.set_node_version(version.clone());
+            }
+            version
         };
         StatusPayload {
             phase: phase.as_str().to_string(),
@@ -358,6 +646,11 @@ impl AppState {
         let mut g = self.lock_inner();
         g.dsh_pid = Some(pid);
         g.job = job;
+    }
+
+    /// 是否持有由本应用启动的 dsh 进程。
+    pub fn has_running_process(&self) -> bool {
+        self.lock_inner().dsh_pid.is_some()
     }
 
     /// 缓存当前 Node 版本（boot 时检测一次，snapshot 直接读取，避免高频 spawn）。
@@ -422,6 +715,20 @@ impl AppState {
     }
     pub fn dialog_gen(&self) -> u64 {
         self.lock_inner().dialog_gen
+    }
+
+    /// PowerShell 更新的弹窗内确认状态（UAC 预告）。
+    pub fn set_pwsh_pending(&self, v: bool) {
+        self.lock_inner().pwsh_pending = v;
+    }
+    pub fn pwsh_pending(&self) -> bool {
+        self.lock_inner().pwsh_pending
+    }
+    pub fn set_pwsh_confirmed(&self, v: bool) {
+        self.lock_inner().pwsh_confirmed = v;
+    }
+    pub fn pwsh_confirmed(&self) -> bool {
+        self.lock_inner().pwsh_confirmed
     }
 
     pub fn take_running(&self) -> (Option<u32>, Option<TreeGuard>) {

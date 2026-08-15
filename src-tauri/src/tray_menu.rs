@@ -8,6 +8,7 @@
 use tauri::WebviewUrl;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::app_state::AppState;
 use crate::autostart;
 
 /// 托盘菜单窗口 label。
@@ -20,6 +21,10 @@ pub struct TrayMenuItem {
     pub label: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sep: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TrayMenuItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked: Option<bool>,
 }
 
 impl TrayMenuItem {
@@ -28,6 +33,20 @@ impl TrayMenuItem {
             id: id.to_string(),
             label: label.to_string(),
             sep: false,
+            children: Vec::new(),
+            checked: None,
+        }
+    }
+    fn choice(id: &str, label: &str, checked: bool) -> Self {
+        Self {
+            checked: Some(checked),
+            ..Self::row(id, label)
+        }
+    }
+    fn parent(id: &str, label: &str, children: Vec<TrayMenuItem>) -> Self {
+        Self {
+            children,
+            ..Self::row(id, label)
         }
     }
     fn sep() -> Self {
@@ -35,67 +54,160 @@ impl TrayMenuItem {
             id: String::new(),
             label: String::new(),
             sep: true,
+            children: Vec::new(),
+            checked: None,
         }
     }
 }
 
-/// 当前菜单条目（开机自启动文案动态生成）。
-pub fn items() -> Vec<TrayMenuItem> {
-    vec![
-        TrayMenuItem::row("open", &format!("打开 {}", crate::APP_TITLE)),
-        TrayMenuItem::row("balance", "查询 API 余额…"),
-        TrayMenuItem::row("open_browser", "在浏览器中打开"),
+/// 托盘与标题栏共用的菜单模型。标题栏版本不含窗口内已有的动作
+/// （打开应用与余额入口）。
+pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
+    let mut rows = vec![
+        TrayMenuItem::row(
+            "open",
+            &format!(
+                "{} {}",
+                crate::locale::text("打开", "Open"),
+                crate::APP_TITLE
+            ),
+        ),
+        TrayMenuItem::row(
+            "open_browser",
+            crate::locale::text("在浏览器中打开", "Open in browser"),
+        ),
         TrayMenuItem::sep(),
-        TrayMenuItem::row("restart", "重启服务"),
-        TrayMenuItem::row("check_update", "检查更新…"),
+        TrayMenuItem::row(
+            "restart",
+            crate::locale::text("重启服务", "Restart service"),
+        ),
+        TrayMenuItem::row(
+            "check_update",
+            crate::locale::text("检查更新…", "Check for updates…"),
+        ),
         TrayMenuItem::sep(),
         TrayMenuItem::row(
             "autostart",
             &format!(
-                "开机自启动：{}",
+                "{}: {}",
+                crate::locale::text("开机自启动", "Launch at startup"),
                 if autostart::is_enabled() {
-                    "已开启"
+                    crate::locale::text("已开启", "On")
                 } else {
-                    "已关闭"
+                    crate::locale::text("已关闭", "Off")
                 }
             ),
         ),
         TrayMenuItem::sep(),
-        TrayMenuItem::row("about", "关于"),
-        TrayMenuItem::row("quit", "退出"),
-    ]
+        TrayMenuItem::parent(
+            "language",
+            crate::locale::text("语言", "Language"),
+            vec![
+                TrayMenuItem::choice("language_zh", "中文", crate::locale::is_chinese()),
+                TrayMenuItem::choice("language_en", "English", !crate::locale::is_chinese()),
+            ],
+        ),
+        TrayMenuItem::sep(),
+        TrayMenuItem::row("about", crate::locale::text("关于", "About")),
+        TrayMenuItem::row("quit", crate::locale::text("退出", "Quit")),
+    ];
+    if tray_surface {
+        rows.insert(
+            1,
+            TrayMenuItem::row(
+                "balance",
+                crate::locale::text("查询 API 余额…", "Check API balance…"),
+            ),
+        );
+    } else {
+        rows.remove(0);
+    }
+    rows
 }
 
-/// 菜单窗口尺寸：卡片内边距 4×2 + 行高 40 + 分隔线 9（与 dsh 菜单条目同规格），
-/// 宽 264 容纳最长条目。
-fn menu_size() -> (f64, f64) {
-    let rows = items();
+/// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口
+/// （圆角外的四个角透明）；如后续恢复阴影方案再调大。
+const SHADOW_PAD: f64 = 0.0;
+
+/// 菜单窗口尺寸（含四周阴影边距）：卡片内边距 4×2 + 行高 40
+/// + 分隔线 9（与 dsh 菜单条目同规格），宽 264 容纳最长条目。
+///
+/// 卡片无描边（透明窗口模型，边界由圆角/底色/阴影承担），高度不含边框；
+/// body 为 border-box，高度必须包含内边距，否则末行 hover 会被裁掉。
+fn menu_size(language_expanded: bool) -> (f64, f64) {
+    let rows = items(true);
     let height = 8.0
         + rows
             .iter()
             .map(|r| if r.sep { 9.0 } else { 40.0 })
-            .sum::<f64>();
-    (264.0, height)
+            .sum::<f64>()
+        + if language_expanded { 80.0 } else { 0.0 };
+    (264.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
 }
+
+/// 托盘菜单窗口几何基线（物理像素）：(base_w, base_h, current_h)。
+/// 展开/收起围绕基线加减高度，宽度恒为基线宽，收起精确还原基线高——
+/// 不读系统回报尺寸（inner/outer 语义与设置值有 1-2px 差，逐次累加
+/// 会造成位置上移、宽度漂移、末行残余裁切）。
+#[derive(Clone, Copy)]
+struct Geometry {
+    base_w: i32,
+    base_h: i32,
+    current_h: i32,
+}
+static GEOMETRY: std::sync::Mutex<Option<Geometry>> = std::sync::Mutex::new(None);
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
 pub fn precreate(app: &AppHandle) {
-    let (w, h) = menu_size();
+    let (w, h) = menu_size(false);
+    // 导航白名单与主窗口一致：菜单内容只允许加载内置页面
+    let navigation_app = app.clone();
     match tauri::WebviewWindowBuilder::new(
         app,
         TRAY_MENU_WINDOW,
         WebviewUrl::App("tray-menu.html".into()),
     )
-    .title("托盘菜单")
+    .title(crate::locale::text("托盘菜单", "Tray menu"))
+    .initialization_script(crate::locale::init_script())
     .inner_size(w, h)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
+    .on_navigation(move |url| {
+        let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
+        if !allowed {
+            crate::logging::log(&format!("tray-menu: 已拦截非白名单导航 {url}"));
+        }
+        allowed
+    })
     .build()
     {
-        Ok(_) => {}
+        Ok(win) => {
+            // 不透明窗口 + 卡片色背景：透明窗口的逐像素合成对圆角抗锯齿
+            // 像素有缺陷（透明间隙/黑边/方块角），此路线已弃用；
+            // 圆角交给 Win11 系统裁剪（Win10 直角），主题按 dsh 偏好固定
+            let theme = app.state::<AppState>().config().resolve_dsh_theme();
+            let light = if theme == Some(tauri::Theme::Light) {
+                true
+            } else if theme == Some(tauri::Theme::Dark) {
+                false
+            } else {
+                win.theme().ok() == Some(tauri::Theme::Light)
+            };
+            if let Some(theme) = theme {
+                let _ = win.set_theme(Some(theme));
+            }
+            let color = if light {
+                crate::CARD_BG_LIGHT
+            } else {
+                crate::CARD_BG_DARK
+            };
+            let _ = win.set_background_color(Some(color));
+            #[cfg(windows)]
+            crate::window::enable_system_rounded_corners(&win);
+        }
         Err(e) => {
             crate::logging::log(&format!("tray-menu: 窗口预创建失败：{e}"));
         }
@@ -104,11 +216,24 @@ pub fn precreate(app: &AppHandle) {
 
 /// 在光标处弹出菜单（调用方已在主线程）。`at` 为屏幕物理坐标。
 pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
+    // 打开菜单时即时比对 dsh 设置（语言/主题）：用户在 dsh 里刚切换过，
+    // 这次打开立即生效，不等 3s 轮询
+    crate::tray::check_dsh_settings_now(app);
     let Some(win) = app.get_webview_window(TRAY_MENU_WINDOW) else {
         crate::logging::log("tray-menu: 窗口不存在（预创建失败？）");
         return;
     };
-    let (width, height) = menu_size();
+    let (width, height) = menu_size(false);
+    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+    // 记录本次设置后的实际外尺寸基线，供展开/收起锚定（见 GEOMETRY 说明）
+    if let Ok(size) = win.outer_size() {
+        *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Geometry {
+            base_w: size.width as i32,
+            base_h: size.height as i32,
+            current_h: size.height as i32,
+        });
+    }
+    let _ = win.eval("window.__dshdCollapseMenu && window.__dshdCollapseMenu()");
     // 定位：仿 Windows 托盘菜单——菜单右下角贴点击点（向上/向左展开），放不下再翻转。
     // 关键：事件坐标是物理像素，窗口尺寸是逻辑像素——统一用目标显示器的缩放
     // 换算成逻辑坐标再计算（200% DPI 下混用会导致菜单位置偏移、鼠标落在菜单内）
@@ -162,11 +287,104 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     // 先显示再发事件：隐藏窗口收不到 emit 的内容，事件仅作即时更新，
     // 页面另有 __dshdRefresh（Rust eval 直呼）作为确定性兜底
     let _ = win.show();
-    if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", items()) {
+    if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", items(true)) {
         crate::logging::log(&format!("tray-menu: 事件下发失败：{e}"));
     }
     let _ = win.eval("window.__dshdRefresh && window.__dshdRefresh()");
     let _ = win.set_focus();
+}
+
+/// 语言子菜单展开/收起时调整托盘窗口高度，底缘始终锚定托盘点击点。
+pub fn set_language_expanded(app: &AppHandle, expanded: bool) {
+    let Some(win) = app.get_webview_window(TRAY_MENU_WINDOW) else {
+        return;
+    };
+    let Ok(position) = win.outer_position() else {
+        return;
+    };
+    let scale = win.scale_factor().unwrap_or(1.0);
+    // 以基线几何为准：宽度恒定、高度只加减语言子菜单的物理增量，
+    // 收起时精确还原基线高（消除残余裁切与宽度漂移）
+    let geo = *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner());
+    let (base_w, base_h, current_h) = match geo {
+        Some(g) => (g.base_w, g.base_h, g.current_h),
+        None => {
+            let Ok(size) = win.outer_size() else {
+                return;
+            };
+            (size.width as i32, size.height as i32, size.height as i32)
+        }
+    };
+    let new_width = base_w;
+    let new_height = if expanded {
+        base_h + (80.0 * scale).round() as i32
+    } else {
+        base_h
+    };
+    // 底缘锚定：只动上缘，底边始终贴住托盘点击点
+    let bottom = position.y + current_h;
+    let new_y = bottom - new_height;
+    *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Geometry {
+        base_w,
+        base_h,
+        current_h: new_height,
+    });
+
+    #[cfg(windows)]
+    {
+        // 单次 SetWindowPos 原子完成移动+缩放：分两步会出现
+        // “先长高/缩短、再上移/下移”的中间帧，底缘跳动即闪烁来源
+        if let Ok(hwnd) = win.hwnd() {
+            use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos;
+            let ok = unsafe {
+                SetWindowPos(
+                    hwnd.0,
+                    std::ptr::null_mut(),
+                    position.x,
+                    new_y,
+                    new_width,
+                    new_height,
+                    0x0004u32 | 0x0010u32, // SWP_NOZORDER | SWP_NOACTIVATE
+                )
+            };
+            if ok != 0 {
+                bump_popup_gen();
+                watch_outside_click(
+                    app.clone(),
+                    TRAY_MENU_WINDOW,
+                    (
+                        position.x,
+                        new_y,
+                        position.x + new_width,
+                        new_y + new_height,
+                    ),
+                );
+                return;
+            }
+        }
+    }
+
+    // 兜底路径（非 Windows 或 hwnd 不可用）：先移上缘再改高度
+    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        position.x, new_y,
+    )));
+    let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        new_width as u32,
+        new_height as u32,
+    )));
+
+    bump_popup_gen();
+    #[cfg(windows)]
+    watch_outside_click(
+        app.clone(),
+        TRAY_MENU_WINDOW,
+        (
+            position.x,
+            new_y,
+            position.x + new_width,
+            new_y + new_height,
+        ),
+    );
 }
 
 /// 隐藏菜单窗口（失焦/选中后）。
@@ -228,7 +446,7 @@ pub(crate) fn watch_outside_click(app: AppHandle, label: &'static str, rect: (i3
                     || GetAsyncKeyState(0x04) < 0
             };
             if down {
-                crate::logging::log("tray-menu: 外部点击收起（watcher）");
+                crate::logging::log("tray-menu: 检测到外部点击，收起菜单");
                 let _ = w.hide();
                 return;
             }

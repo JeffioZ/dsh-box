@@ -1,21 +1,25 @@
 //! Tauri 命令层：启动页/托盘通过 IPC 调用的全部命令（无业务实现，仅转发）。
-//! 安全：所有命令校验调用来源，拒绝从 dsh 远程页面（http://127.0.0.1:*）发起的调用，
-//! 防止官方页面被注入后越权控制桌面端（withGlobalTauri 会向远程页面注入 __TAURI__）。
+//! 安全：所有命令仅允许内置 App 页面调用；dsh 页面及其他任意来源一律拒绝，
+//! 避免 withGlobalTauri 暴露的 IPC 被远程内容用于控制桌面端。
 
 use tauri::{AppHandle, Manager};
 
 use crate::app_state::{self, AppState};
 use crate::{dsh, logging, processes, updater};
 
-/// 校验命令调用来源：titlebar/启动页（tauri://localhost）允许；dsh 页面拒绝。
-fn ensure_local_origin(webview: &tauri::Webview) -> Result<(), String> {
+/// 校验命令调用来源：只允许 Tauri 内置页面，不依赖可绕过的来源黑名单。
+pub(crate) fn ensure_local_origin(webview: &tauri::Webview) -> Result<(), String> {
     let url = webview.url().map_err(|e| e.to_string())?;
-    if url.as_str().starts_with("http://127.0.0.1:") {
-        logging::log(&format!("ipc: 拒绝远程来源命令调用：{url}"));
-        Err("此操作不允许从页面发起。".into())
-    } else {
-        Ok(())
+    let dev = crate::app_dev_origin(webview.app_handle());
+    if crate::is_local_app_url(&url, dev.as_ref()) {
+        return Ok(());
     }
+    logging::log(&format!("ipc: 拒绝非本地来源命令调用：{url}"));
+    Err(crate::locale::text(
+        "仅允许应用内置页面调用此操作。",
+        "This action can only be invoked from the app's built-in pages.",
+    )
+    .into())
 }
 
 #[tauri::command]
@@ -69,6 +73,15 @@ pub async fn apply_updates(
     which: String,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    // 启动页只提供 dsh 一键更新：pwsh 的 UAC 确认流程只在检查更新弹窗内
+    // 可用（此通道直达 updater::apply 会挂起等待确认，启动页没有确认按钮）
+    if which != "dsh" {
+        return Err(crate::locale::text(
+            "此页面仅支持更新 dsh。",
+            "Only dsh updates are supported from this page.",
+        )
+        .into());
+    }
     let handle = app.clone();
     std::thread::spawn(move || {
         let _ = updater::apply(&handle, &which);
@@ -117,46 +130,81 @@ pub fn titlebar_is_maximized(
     window.is_maximized().map_err(|e| e.to_string())
 }
 
-/// 余额浮层展开/收起（hover 时扩展标题栏 webview 以承载浮层）。
+/// 标题栏页面初始化完成回报：启动自愈看门狗据此判断页面是否加载成功。
+#[tauri::command]
+pub fn titlebar_ready(webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::titlebar::mark_ready();
+    Ok(())
+}
+
+/// 标题栏浮层（余额浮层/主菜单）展开/收起：hover 时扩展标题栏 webview 以承载浮层。
 #[tauri::command]
 pub fn titlebar_expand(
     app: AppHandle,
     webview: tauri::Webview,
     expand: bool,
+    height: Option<f64>,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
-    crate::titlebar::set_expanded(&app, expand);
+    crate::titlebar::set_expanded(&app, expand, height);
     Ok(())
 }
 
-// ---------- 自绘托盘菜单（tray-menu 窗口调用，内容经 tray-menu-open 事件下发） ----------
+// ---------- 共享菜单（托盘菜单 + 标题栏主菜单） ----------
 
-/// 托盘菜单页面主动拉取条目（事件可能在页面监听就绪前被漏掉）。
+/// 两处菜单读取同一模型；模型按托盘/标题栏场景处理少量专属项。
 #[tauri::command]
-pub fn tray_menu_get(
+pub fn menu_get(
     _app: AppHandle,
     webview: tauri::Webview,
+    tray_surface: bool,
 ) -> Result<Vec<crate::tray_menu::TrayMenuItem>, String> {
     ensure_local_origin(&webview)?;
-    Ok(crate::tray_menu::items())
+    Ok(crate::tray_menu::items(tray_surface))
 }
 
-/// 托盘菜单项点击：分发动作并隐藏菜单窗口。
+/// 两处菜单共用动作分发。
 #[tauri::command]
-pub fn tray_menu_choose(app: AppHandle, webview: tauri::Webview, id: String) -> Result<(), String> {
+pub fn menu_choose(app: AppHandle, webview: tauri::Webview, id: String) -> Result<(), String> {
     ensure_local_origin(&webview)?;
-    crate::logging::log(&format!("tray-menu: 选择 {id}"));
+    crate::logging::log(&format!("menu: 选择 {id}"));
     crate::tray_menu::run_action(&app, &id);
     Ok(())
 }
 
-// ---------- 统一自绘弹窗（dialog 窗口调用，内容经事件下发） ----------
+/// 托盘窗口的语言子菜单展开后需要同步调整原生窗口高度。
+#[tauri::command]
+pub fn tray_menu_set_language_expanded(
+    app: AppHandle,
+    webview: tauri::Webview,
+    expanded: bool,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::tray_menu::set_language_expanded(&app, expanded);
+    Ok(())
+}
+
+// ---------- 统一自绘弹窗（dialog 窗口调用；内容预渲染+轮询为主，事件兜底） ----------
 
 /// 标题栏余额 chip 点击：打开余额弹窗。
 #[tauri::command]
 pub fn app_dialog_open_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     crate::app_dialog::open_balance(&app);
+    Ok(())
+}
+
+/// 余额弹窗内“刷新”按钮：后台重新查询，结果经轮询通道返回。
+/// 不清空旧结果：刷新期间弹窗继续显示上次数据。
+#[tauri::command]
+pub fn app_dialog_refresh_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    std::thread::spawn(move || {
+        let config = app.state::<AppState>().config();
+        let payload = crate::balance::query_balance(&config);
+        app.state::<AppState>().set_last_balance(Some(payload));
+    });
     Ok(())
 }
 
@@ -180,7 +228,7 @@ pub fn app_dialog_balance_get(
     Ok(app.state::<AppState>().last_balance())
 }
 
-/// 检查更新弹窗轮询拉取：进度文案 + 检查结果 + 更新完成文案。
+/// 检查更新弹窗轮询拉取：进度文案 + 检查结果 + 更新完成文案 + UAC 确认状态。
 #[tauri::command]
 pub fn app_dialog_check_get(
     app: AppHandle,
@@ -193,7 +241,19 @@ pub fn app_dialog_check_get(
         "progress": state.check_progress(),
         "result": state.last_check(),
         "done": done.map(|(ok, message)| serde_json::json!({ "ok": ok, "message": message })),
+        "pwsh_pending": state.pwsh_pending(),
+        "updating": state.is_updating(),
     }))
+}
+
+/// 弹窗内 UAC 预告的“继续”确认：置位后更新线程继续执行 winget。
+#[tauri::command]
+pub fn app_dialog_pwsh_confirm(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    let state = app.state::<AppState>();
+    state.set_pwsh_confirmed(true);
+    state.set_pwsh_pending(false);
+    Ok(())
 }
 
 /// 弹窗关闭（✕/Esc/关闭按钮）。
@@ -230,13 +290,17 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         titlebar_toggle_maximize,
         titlebar_close,
         titlebar_is_maximized,
+        titlebar_ready,
         titlebar_expand,
-        tray_menu_get,
-        tray_menu_choose,
+        menu_get,
+        menu_choose,
+        tray_menu_set_language_expanded,
         app_dialog_open_balance,
+        app_dialog_refresh_balance,
         app_dialog_get,
         app_dialog_balance_get,
         app_dialog_check_get,
+        app_dialog_pwsh_confirm,
         app_dialog_close,
         app_dialog_update,
     ]

@@ -1,10 +1,14 @@
 # 依赖与构建产物
 node_modules/
 dist/
+dist-dev/
 target/
 src-tauri/target/
 src-tauri/gen/
 .toolchain/
+
+# 本地 AI 辅助会话元数据（勿提交）
+.reasonix/
 
 # 日志
 *.log
@@ -15,5 +19,3 @@ Thumbs.db
 .vscode/
 .idea/
 *.pdb
-
-dist-dev/

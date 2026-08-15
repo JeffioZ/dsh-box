@@ -7,7 +7,7 @@ param()
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\cargo.ps1") dev
+& (Join-Path $root "scripts\cargo.ps1") dev
 if ($LASTEXITCODE -ne 0) {
     throw "开发模式构建失败（退出码 $LASTEXITCODE）"
 }

@@ -11,7 +11,7 @@ fn exe_path() -> String {
 }
 
 /// 自启动命令（带 --minimized 静默进托盘）。
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn app_command() -> String {
     format!("\"{}\" --minimized", exe_path())
 }
@@ -82,7 +82,13 @@ mod imp {
         let status =
             unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut hkey) };
         if status != ERROR_SUCCESS {
-            return Err(format!("打开注册表 Run 键失败：{status}"));
+            return Err(format!(
+                "{}: {status}",
+                crate::locale::text(
+                    "打开注册表 Run 键失败",
+                    "Failed to open the registry Run key"
+                )
+            ));
         }
         let name = to_wide(VALUE_NAME);
         let result = if enabled {
@@ -107,7 +113,10 @@ mod imp {
         if result == ERROR_SUCCESS || (result == ERROR_FILE_NOT_FOUND && !enabled) {
             Ok(())
         } else {
-            Err(format!("写入注册表失败：{result}"))
+            Err(format!(
+                "{}: {result}",
+                crate::locale::text("写入注册表失败", "Failed to update the registry")
+            ))
         }
     }
 }
@@ -122,22 +131,39 @@ mod imp {
     const LABEL: &str = "com.deepseek.dsh-desktop";
     const FILE_NAME: &str = "com.deepseek.dsh-desktop.plist";
 
-    fn plist_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_default();
-        PathBuf::from(home)
-            .join("Library/LaunchAgents")
-            .join(FILE_NAME)
+    fn plist_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|home| home.join("Library/LaunchAgents").join(FILE_NAME))
+    }
+
+    fn xml_escape(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
     }
 
     pub fn is_enabled() -> bool {
-        plist_path().exists()
+        plist_path().is_some_and(|path| path.exists())
     }
 
     pub fn set_enabled(enabled: bool) -> Result<(), String> {
-        let path = plist_path();
+        let path = plist_path().ok_or_else(|| {
+            crate::locale::text(
+                "无法确定当前用户主目录",
+                "Could not determine the current user's home directory",
+            )
+        })?;
         if !enabled {
-            let _ = std::fs::remove_file(&path);
-            return Ok(());
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!(
+                    "{}: {e}",
+                    crate::locale::text("删除 plist 失败", "Failed to remove the plist")
+                )),
+            };
         }
         let content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -157,12 +183,25 @@ mod imp {
 </plist>
 "#,
             label = LABEL,
-            exe = exe_path(),
+            exe = xml_escape(&exe_path()),
         );
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("创建 LaunchAgents 目录失败：{e}"))?;
+            std::fs::create_dir_all(dir).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    crate::locale::text(
+                        "创建 LaunchAgents 目录失败",
+                        "Failed to create the LaunchAgents directory"
+                    )
+                )
+            })?;
         }
-        std::fs::write(&path, content).map_err(|e| format!("写入 plist 失败：{e}"))
+        std::fs::write(&path, content).map_err(|e| {
+            format!(
+                "{}: {e}",
+                crate::locale::text("写入 plist 失败", "Failed to write the plist")
+            )
+        })
     }
 }
 
@@ -175,22 +214,43 @@ mod imp {
 
     const FILE_NAME: &str = "dsh-desktop.desktop";
 
-    fn desktop_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_default();
-        PathBuf::from(home)
-            .join(".config/autostart")
-            .join(FILE_NAME)
+    fn desktop_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|home| home.join(".config/autostart").join(FILE_NAME))
+    }
+
+    fn desktop_exec_arg(value: &str) -> String {
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+            .replace('%', "%%");
+        format!("\"{escaped}\"")
     }
 
     pub fn is_enabled() -> bool {
-        desktop_path().exists()
+        desktop_path().is_some_and(|path| path.exists())
     }
 
     pub fn set_enabled(enabled: bool) -> Result<(), String> {
-        let path = desktop_path();
+        let path = desktop_path().ok_or_else(|| {
+            crate::locale::text(
+                "无法确定当前用户主目录",
+                "Could not determine the current user's home directory",
+            )
+        })?;
         if !enabled {
-            let _ = std::fs::remove_file(&path);
-            return Ok(());
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!(
+                    "{}: {e}",
+                    crate::locale::text(
+                        "删除 .desktop 文件失败",
+                        "Failed to remove the .desktop file"
+                    )
+                )),
+            };
         }
         let content = format!(
             "[Desktop Entry]\n\
@@ -200,11 +260,24 @@ mod imp {
              Exec={}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",
-            app_command()
+            format!("{} --minimized", desktop_exec_arg(&exe_path()))
         );
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("创建 autostart 目录失败：{e}"))?;
+            std::fs::create_dir_all(dir).map_err(|e| {
+                format!(
+                    "{}: {e}",
+                    crate::locale::text(
+                        "创建 autostart 目录失败",
+                        "Failed to create the autostart directory"
+                    )
+                )
+            })?;
         }
-        std::fs::write(&path, content).map_err(|e| format!("写入 .desktop 失败：{e}"))
+        std::fs::write(&path, content).map_err(|e| {
+            format!(
+                "{}: {e}",
+                crate::locale::text("写入 .desktop 失败", "Failed to write the .desktop file")
+            )
+        })
     }
 }

@@ -3,7 +3,7 @@
 //! - macOS：保留系统装饰（titleBarStyle: Overlay 悬浮红绿灯），标题栏左侧留白；
 //! - 主 webview 让出顶部条，窗口缩放时同步两个 webview 的边界。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::webview::WebviewBuilder;
 use tauri::{AppHandle, Manager, WebviewUrl};
@@ -12,29 +12,110 @@ use crate::MAIN_WINDOW;
 
 /// 标题栏高度（逻辑像素）。
 pub const TITLEBAR_HEIGHT: f64 = 36.0;
-/// 余额浮层展开时标题栏 webview 的总高度（36px 标题栏 + 浮层 + 阴影余量）。
+/// 浮层高度默认值：页面未提供实测高度时使用（36px 标题栏 + 浮层 + 阴影余量）。
 pub const TITLEBAR_EXPANDED_HEIGHT: f64 = 260.0;
+/// 浮层高度上限：标题栏子 WebView 内的约束（页面实测高度按 36..512 收敛）。
+pub const TITLEBAR_MENU_HEIGHT: f64 = 512.0;
 /// 标题栏子 webview 的 label。
 pub const TITLEBAR_LABEL: &str = "titlebar";
 
-/// 余额浮层是否展开（决定标题栏 webview 高度，供 sync_bounds 读取）。
-static EXPANDED: AtomicBool = AtomicBool::new(false);
+/// 当前标题栏子 WebView 高度；用整数逻辑像素即可，避免跨线程浮点原子。
+static OVERLAY_HEIGHT: AtomicU64 = AtomicU64::new(TITLEBAR_HEIGHT as u64);
 
-/// 展开/收起余额浮层（由 titlebar 前端 hover 时调用），并立即同步边界。
-pub fn set_expanded(app: &AppHandle, expanded: bool) {
-    EXPANDED.store(expanded, Ordering::SeqCst);
+/// 标题栏页面初始化完成回报标记：启动自愈看门狗据此判断页面是否加载成功。
+static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 页面回报初始化完成（titlebar_ready 命令）。
+pub fn mark_ready() {
+    READY.store(true, Ordering::SeqCst);
+}
+
+/// 强制标题栏子 webview 重建合成层：间歇性「标题栏渲染空白」的自动修复。
+/// WebView2 的合成层失效时 DOM 正常、仅画面空白，应用层无法直接探测，
+/// 故在窗口焦点变化与周期看门狗中触发重绘脉冲（页面侧 __dshdRepaint
+/// 通过强制创建/销毁合成层恢复渲染）。
+pub fn repaint_pulse(app: &AppHandle) {
+    let Some(window) = app.get_window(MAIN_WINDOW) else {
+        return;
+    };
+    for wv in window.webviews() {
+        if wv.label() == TITLEBAR_LABEL {
+            let _ = wv.eval("window.__dshdRepaint && window.__dshdRepaint()");
+        }
+    }
+}
+
+pub fn is_ready() -> bool {
+    READY.load(Ordering::SeqCst)
+}
+
+/// 重新加载标题栏页面（自愈：首次加载失败时重试）。
+pub fn reload(app: &AppHandle) {
+    let Some(window) = app.get_window(MAIN_WINDOW) else {
+        return;
+    };
+    for wv in window.webviews() {
+        if wv.label() != TITLEBAR_LABEL {
+            continue;
+        }
+        // 优先重试当前 URL（加载失败时 URL 通常仍是目标地址）；
+        // 不合法时退回内置 App 路径
+        let current = wv
+            .url()
+            .ok()
+            .filter(|u| u.scheme() == "http" || u.scheme() == "https" || u.scheme() == "tauri");
+        match current {
+            Some(u) => {
+                let _ = wv.navigate(u);
+            }
+            None => {
+                #[cfg(windows)]
+                let fallback = "http://tauri.localhost/titlebar.html";
+                #[cfg(not(windows))]
+                let fallback = "tauri://localhost/titlebar.html";
+                if let Ok(u) = url::Url::parse(fallback) {
+                    let _ = wv.navigate(u);
+                }
+            }
+        }
+    }
+}
+
+/// 展开/收起标题栏浮层（余额或主菜单），并立即同步边界。
+pub fn set_expanded(app: &AppHandle, expanded: bool, requested_height: Option<f64>) {
+    let height = if expanded {
+        requested_height
+            .unwrap_or(TITLEBAR_EXPANDED_HEIGHT)
+            .clamp(TITLEBAR_HEIGHT, TITLEBAR_MENU_HEIGHT)
+    } else {
+        TITLEBAR_HEIGHT
+    };
+    OVERLAY_HEIGHT.store(height.round() as u64, Ordering::SeqCst);
     sync_bounds(app);
 }
 
 /// 初始化自绘标题栏：去掉系统标题栏（macOS 除外）、创建子 webview、同步边界。
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let window = app.get_window(MAIN_WINDOW).expect("主窗口不存在");
-    // macOS 保留系统装饰（Overlay 红绿灯）；其他平台去掉系统标题栏
+    // macOS 保留系统装饰（Overlay 红绿灯）；其他平台去掉系统标题栏。
+    // 主窗口不启用 set_shadow：见 lib.rs 的说明（阴影 insets 导致窗口
+    // 尺寸记忆逐次累积变大，并附加 1px 白边）。
     #[cfg(not(target_os = "macos"))]
     window.set_decorations(false)?;
 
-    // 子 webview 透明：浮层展开加高时透出下层的 dsh 界面（浮层“盖在”其上而非推挤）
+    // 子 webview 透明：浮层展开加高时透出下层的 dsh 界面（浮层“盖在”其上而非推挤）；
+    // 导航白名单与主窗口一致（IPC 另有来源校验兜底）
+    let navigation_app = app.clone();
     let child = WebviewBuilder::new(TITLEBAR_LABEL, WebviewUrl::App("titlebar.html".into()))
+        .initialization_script(crate::locale::init_script())
+        .on_navigation(move |url| {
+            let allowed =
+                crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
+            if !allowed {
+                crate::logging::log(&format!("titlebar: 已拦截非白名单导航 {url}"));
+            }
+            allowed
+        })
         .transparent(true);
     let size = window.inner_size()?;
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -60,11 +141,7 @@ pub fn sync_bounds(app: &AppHandle) {
     let scale = window.scale_factor().unwrap_or(1.0);
     let w = size.width as f64 / scale;
     let h = size.height as f64 / scale;
-    let top_h = if EXPANDED.load(Ordering::SeqCst) {
-        TITLEBAR_EXPANDED_HEIGHT
-    } else {
-        TITLEBAR_HEIGHT
-    };
+    let top_h = OVERLAY_HEIGHT.load(Ordering::SeqCst) as f64;
     let top = tauri::Rect {
         position: tauri::Position::Logical((0.0, 0.0).into()),
         size: tauri::Size::Logical((w, top_h).into()),
@@ -75,11 +152,41 @@ pub fn sync_bounds(app: &AppHandle) {
         size: tauri::Size::Logical((w, (h - TITLEBAR_HEIGHT).max(0.0)).into()),
     };
     for wv in window.webviews() {
-        let rect = if wv.label() == TITLEBAR_LABEL {
-            top
+        let is_titlebar = wv.label() == TITLEBAR_LABEL;
+        let rect = if is_titlebar { top } else { main };
+        // 矩形未变时跳过 set_bounds：重复设置会触发无谓的重布局/重绘，
+        // 是标题栏文案偶发闪烁的来源之一（tauri::Rect 无 PartialEq，
+        // 以逻辑分量记录上次设置值比较）
+        let key = rect_key(&rect);
+        let guard = if is_titlebar {
+            &LAST_TOP_KEY
         } else {
-            main
+            &LAST_MAIN_KEY
         };
+        let mut last = guard.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(key) {
+            continue;
+        }
+        *last = Some(key);
         let _ = wv.set_bounds(rect);
     }
 }
+
+fn rect_key(rect: &tauri::Rect) -> (f64, f64, f64) {
+    let (w, h) = match rect.size {
+        tauri::Size::Logical(l) => (l.width, l.height),
+        tauri::Size::Physical(p) => (p.width as f64, p.height as f64),
+    };
+    (w, h, rect_y(rect))
+}
+
+fn rect_y(rect: &tauri::Rect) -> f64 {
+    match rect.position {
+        tauri::Position::Logical(l) => l.y,
+        tauri::Position::Physical(p) => p.y as f64,
+    }
+}
+
+/// 上次设置的标题栏/主 webview 矩形（宽、高、y 的逻辑分量），供冗余 set_bounds 跳过。
+static LAST_TOP_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
+static LAST_MAIN_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);

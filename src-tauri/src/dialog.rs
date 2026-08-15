@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::main_window;
@@ -27,12 +27,18 @@ fn show(
     if let Some((yes, no)) = buttons {
         builder = builder.buttons(MessageDialogButtons::OkCancelCustom(yes, no));
     }
-    // 主窗口可见时设为模态父窗口（置顶、模态化）；
-    // 窗口隐藏（仅托盘）时不设父级，避免模态挂在隐藏窗口上。
-    if let Some(win) = main_window(app) {
-        if win.is_visible().unwrap_or(false) {
+    // 父窗口选择：自绘弹窗打开时以其为父（自绘弹窗常驻置顶，
+    // 挂主窗口会被它遮住——PowerShell 更新提示曾出现在弹窗下方）；
+    // 否则挂主窗口。两者都不可见（仅托盘）时不设父级。
+    let dialog_open = app
+        .get_webview_window(crate::app_dialog::APP_DIALOG_WINDOW)
+        .is_some_and(|win| win.is_visible().unwrap_or(false));
+    if dialog_open {
+        if let Some(win) = app.get_webview_window(crate::app_dialog::APP_DIALOG_WINDOW) {
             builder = builder.parent(&win);
         }
+    } else if let Some(win) = main_window(app).filter(|win| win.is_visible().unwrap_or(false)) {
+        builder = builder.parent(&win);
     }
     builder.blocking_show()
 }

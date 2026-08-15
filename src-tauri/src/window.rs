@@ -35,6 +35,24 @@ pub fn save_window_state_now(app: &AppHandle) {
     save_now(app);
 }
 
+/// 上次落盘的窗口几何（物理整数坐标）；仅值变化时记录日志，
+/// 避免拖动/缩放期间日志刷屏，同时留下可对比的保存轨迹。
+static LAST_SAVED: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+
+/// 系统几何协商增量（逻辑像素）：恢复时程序设置值 A 与系统终态 B 的差。
+/// Windows 对无边框窗口的 SetWindowPos 会做几何协商（本机实测宽 +15、
+/// 高 +37 逻辑像素），保存时扣除该增量，避免协商量逐次累积导致
+/// “每次启动窗口大一圈”。
+static NEGOTIATION_DELTA: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
+
+/// 记录一次系统协商增量（启动恢复/自适应设置后由 lib.rs 终态线程调用）。
+pub(crate) fn record_negotiation_delta(dw: f64, dh: f64) {
+    let mut delta = NEGOTIATION_DELTA.lock().unwrap_or_else(|e| e.into_inner());
+    // 仅接受合理范围的正增量；异常值（超过 200 逻辑像素）视为真实
+    // 用户调整或显示器切换，不参与补偿
+    *delta = (dw.clamp(0.0, 200.0), dh.clamp(0.0, 200.0));
+}
+
 fn save_now(app: &AppHandle) {
     let config = app.state::<AppState>().config();
     if let Some(win) = main_window(app) {
@@ -57,18 +75,54 @@ fn save_now(app: &AppHandle) {
                     return;
                 }
             }
-            // 存逻辑坐标：除以当前缩放，跨不同 DPI 显示器切换时观感尺寸一致
+            let key = (pos.x, pos.y, size.width, size.height);
+            let changed = {
+                let mut last = LAST_SAVED.lock().unwrap_or_else(|e| e.into_inner());
+                let changed = *last != Some(key);
+                *last = Some(key);
+                changed
+            };
+            if changed {
+                logging::log(&format!(
+                    "窗口: 保存 物理=({},{},{}x{})",
+                    pos.x, pos.y, size.width, size.height
+                ));
+            }
+            // 存逻辑坐标：除以当前缩放，跨不同 DPI 显示器切换时观感尺寸一致；
+            // 宽高扣除本次会话测得的系统协商增量（见 NEGOTIATION_DELTA 说明），
+            // 否则每次启动协商量叠加、窗口一圈圈变大
             let scale = win.scale_factor().unwrap_or(1.0);
+            let (dw, dh) = *NEGOTIATION_DELTA.lock().unwrap_or_else(|e| e.into_inner());
             config.save_window_rect(
                 pos.x as f64 / scale,
                 pos.y as f64 / scale,
-                size.width as f64 / scale,
-                size.height as f64 / scale,
+                (size.width as f64 / scale - dw).max(400.0),
+                (size.height as f64 / scale - dh).max(300.0),
             );
         }
     }
 }
 
+/// Win11 系统圆角：无边框窗口默认直角，与自绘卡片设计冲突。
+/// DWMWA_WINDOW_CORNER_PREFERENCE 仅 Win11 生效，系统按 DWM 圆角
+/// 裁剪窗口形状（无半透明合成的抗锯齿缺陷）；Win10 调用失败无害，
+/// 保持直角。
+#[cfg(windows)]
+pub(crate) fn enable_system_rounded_corners(win: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    let Ok(hwnd) = win.hwnd() else { return };
+    let preference = DWMWCP_ROUND;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
 /// 按显示器 DPI 设置窗口图标：标题栏/任务栏使用 1:1 物理像素的源图，
 /// 避免从小图放大或系统二次缩放导致的模糊。
 pub fn set_window_icon(app: &AppHandle) {

@@ -17,18 +17,20 @@
   --dshd-accent-pressed: #3957cf;
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
-  --dshd-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
+  --dshd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     --dshd-card: #ffffff;
     --dshd-text: #0f1115;
-    --dshd-text-dim: #81858c;
+    --dshd-text-dim: #656a73;
     --dshd-border: rgba(0, 0, 0, 0.06);
     --dshd-hover: rgba(38, 49, 72, 0.06);
     --dshd-pressed: rgba(38, 49, 72, 0.1);
-    --dshd-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
+    --dshd-scroll-thumb-hover: rgba(38, 49, 72, 0.4);
   }
 }
 
@@ -36,21 +38,43 @@
   margin: 0;
   font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   color: var(--dshd-text);
-  background: var(--dshd-card);
-  border: 1px solid var(--dshd-border);
   user-select: none;
 }
 
-/* 菜单卡片：与 dsh Menu 卡片同规格（r12 / 内边距 4） */
+/* 自绘卡片：窗口不透明、底色为卡片同色；圆角由 Win11 系统裁剪
+   （DWMWA_WINDOW_CORNER_PREFERENCE），Win10 为直角。
+   卡片本身不再自绘圆角/阴影——透明窗口的逐像素合成对半透明像素
+   有缺陷（圆角抗锯齿透明间隙、阴影黑边），已弃用该路线。 */
 .dshd-card {
   box-sizing: border-box;
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--dshd-card);
-  border: 1px solid var(--dshd-border);
-  box-shadow: var(--dshd-shadow);
+  padding: 4px;
 }
 
-/* 菜单条目：min-h40 / r10 / pad 8-10 / 图标 16 / 分隔间距 8 */
+/* WebView2/Chromium 与 Firefox 风格均覆盖；仅溢出时出现，不预留空槽。 */
+.dshd-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dshd-scroll-thumb) transparent;
+  /* 常驻预留滚动条槽位：内容溢出出现滚动条时正文不横向跳动 */
+  scrollbar-gutter: stable;
+}
+.dshd-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.dshd-scroll::-webkit-scrollbar-track { background: transparent; }
+.dshd-scroll::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid var(--dshd-card);
+  border-radius: 999px;
+  background: var(--dshd-scroll-thumb);
+  background-clip: padding-box;
+}
+.dshd-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--dshd-scroll-thumb-hover); }
+.dshd-scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.dshd-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+/* 菜单条目：min-h40 / pad 8-10 / 图标 16 / 分隔间距 8。
+   圆角取同心值：Win11 系统窗口圆角约 8px - 卡片内边距 4 = 4，
+   首末行 hover 弧度与窗口圆角视觉对齐（Win10 直角窗口下轻微圆角高亮同样自然） */
 .dshd-row {
   display: flex;
   align-items: center;
@@ -60,7 +84,7 @@
   padding: 8px 10px;
   box-sizing: border-box;
   border: none;
-  border-radius: 10px;
+  border-radius: 4px;
   background: transparent;
   color: var(--dshd-text);
   font: inherit;
@@ -70,14 +94,61 @@
   white-space: nowrap;
 }
 .dshd-row:hover { background: var(--dshd-hover); }
+/* hover 淡入淡出：与标题栏控件/余额 chip 的过渡一致（全局统一的微动效节奏） */
+.dshd-row { transition: background-color .12s ease, color .12s ease; }
+.dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
 .dshd-row.danger:hover { background: var(--dshd-danger); color: #fff; }
 .dshd-row.danger:active, .dshd-row.danger.pressed { background: var(--dshd-danger-pressed); color: #fff; }
+.dshd-row:disabled { cursor: default; opacity: .55; }
+.dshd-row:disabled:hover { background: transparent; }
 .dshd-row .ic { flex: none; width: 16px; height: 16px; }
 .dshd-row .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dshd-row .dim { flex: none; font-size: 12px; color: var(--dshd-text-dim); }
+.dshd-row .arrow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--dshd-text-dim);
+}
+.dshd-row .arrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-1px) rotate(-45deg);
+  transition: transform .14s ease;
+}
+.dshd-row .arrow.expanded::before { transform: translateY(-1px) rotate(45deg); }
+.dshd-row .check { flex: none; width: 16px; color: var(--dshd-accent); font-size: 13px; line-height: 1; text-align: center; }
+.dshd-row.child { width: calc(100% - 12px); margin-left: 12px; padding-left: 8px; }
+
+/* 系统“减弱动态效果”：关闭箭头旋转、hover 过渡与子行动效 */
+@media (prefers-reduced-motion: reduce) {
+  .dshd-row .arrow::before { transition: none; }
+  .dshd-row, .dshd-btn, .dshd-x { transition: none; }
+  .dshd-row.child, .dshd-row.child-collapsing { animation: none; }
+}
 
 .dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
+
+/* 菜单子行展开/收起微动效：托盘菜单与标题栏主菜单共用。
+   展开时子行淡入下滑；收起时先淡出上滑（由 menu.js 延迟移除） */
+@keyframes dshd-child-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.dshd-row.child { animation: dshd-child-in .12s ease-out; }
+@keyframes dshd-child-out {
+  to { opacity: 0; transform: translateY(-4px); }
+}
+.dshd-row.child-collapsing { animation: dshd-child-out .1s ease-in forwards; }
 
 /* 弹窗按钮 */
 .dshd-btn {
@@ -92,10 +163,15 @@
   outline: none;
 }
 .dshd-btn:hover { background: var(--dshd-hover); }
+.dshd-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
 .dshd-btn:active { background: var(--dshd-pressed); }
+.dshd-btn { transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
 .dshd-btn.primary { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; }
 .dshd-btn.primary:hover { background: var(--dshd-accent-hover); }
 .dshd-btn.primary:active { background: var(--dshd-accent-pressed); }
+.dshd-btn:disabled { cursor: default; opacity: .55; }
+.dshd-btn:disabled:hover { background: transparent; }
+.dshd-btn.primary:disabled:hover { background: var(--dshd-accent); }
 
 /* 弹窗头部/关闭按钮 */
 .dshd-head {
@@ -122,7 +198,9 @@
   outline: none;
 }
 .dshd-x:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+.dshd-x:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-x:active { background: var(--dshd-pressed); }
+.dshd-x { transition: background-color .12s ease, color .12s ease; }
 
 /* 弹窗页脚 */
 .dshd-foot {

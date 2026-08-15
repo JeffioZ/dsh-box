@@ -4,6 +4,7 @@
 //! 系统文件关联）；macOS 走 `open`；Linux 走 `xdg-open`。
 //! 供 dshd:// 自定义协议处理函数调用（dsh 页面右键文件路径时触发）。
 
+use std::io::Read;
 use std::path::Path;
 #[cfg(any(windows, target_os = "linux"))]
 use std::path::PathBuf;
@@ -109,20 +110,39 @@ pub fn open_with_picker(path: &Path, parent_hwnd: Option<isize>) -> Result<(), S
         if hr >= 0 {
             Ok(())
         } else if init < 0 {
-            Err(format!("COM 初始化失败（HRESULT 0x{init:08X}）"))
+            Err(crate::locale::owned(
+                format!("COM 初始化失败（HRESULT 0x{init:08X}）"),
+                format!("COM initialization failed (HRESULT 0x{init:08X})"),
+            ))
         } else {
-            Err(format!("SHOpenWithDialog 失败（HRESULT 0x{hr:08X}）"))
+            Err(crate::locale::owned(
+                format!("SHOpenWithDialog 失败（HRESULT 0x{hr:08X}）"),
+                format!("SHOpenWithDialog failed (HRESULT 0x{hr:08X})"),
+            ))
         }
     }
     #[cfg(not(windows))]
     {
         let _ = (path, parent_hwnd);
-        Err("“打开方式”仅支持 Windows".into())
+        Err(crate::locale::text(
+            "“打开方式”仅支持 Windows",
+            "\"Open with\" is only supported on Windows",
+        )
+        .into())
     }
 }
 
-/// 在默认浏览器中打开链接（调用方保证 http/https）。
+/// 在默认浏览器中打开链接（自身校验：仅接受有效的 http/https 链接）。
 pub fn open_browser(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| crate::locale::text("链接格式无效", "Invalid link format"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(crate::locale::text(
+            "仅支持打开 http/https 链接",
+            "Only valid http/https links can be opened",
+        )
+        .into());
+    }
     #[cfg(windows)]
     {
         shell_execute("open", Path::new(url), None)
@@ -160,7 +180,11 @@ pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        Err("指定应用打开仅支持 Windows".into())
+        Err(crate::locale::text(
+            "“指定应用打开”仅支持 Windows",
+            "\"Open with app\" is only supported on Windows",
+        )
+        .into())
     }
 }
 
@@ -203,16 +227,43 @@ fn system32(name: &str) -> PathBuf {
 }
 
 /// 读取文本文件内容（“复制文件内容”用）：限制大小，检测二进制
-/// （前 8KB 含 NUL 或非 UTF-8）直接拒绝，避免把二进制糊进剪贴板。
+/// （前 8KB 含 NUL 或非 UTF-8）直接拒绝，避免把二进制内容写入剪贴板。
 pub fn read_text_file(path: &Path, max_bytes: usize) -> Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| format!("读取失败：{e}"))?;
+    let file = std::fs::File::open(path).map_err(|e| {
+        crate::locale::owned(format!("读取失败：{e}"), format!("Failed to read: {e}"))
+    })?;
+    if file.metadata().map(|m| m.len()).unwrap_or(0) > max_bytes as u64 {
+        return Err(crate::locale::owned(
+            format!("文件超过 {} MB 上限", max_bytes / 1024 / 1024),
+            format!("The file exceeds the {} MB limit", max_bytes / 1024 / 1024),
+        ));
+    }
+    let mut data = Vec::with_capacity(max_bytes.min(64 * 1024));
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| {
+            crate::locale::owned(format!("读取失败：{e}"), format!("Failed to read: {e}"))
+        })?;
     if data.len() > max_bytes {
-        return Err(format!("文件超过 {} MB 上限", max_bytes / 1024 / 1024));
+        return Err(crate::locale::owned(
+            format!("文件超过 {} MB 上限", max_bytes / 1024 / 1024),
+            format!("The file exceeds the {} MB limit", max_bytes / 1024 / 1024),
+        ));
     }
     if data.iter().take(8192).any(|&b| b == 0) {
-        return Err("二进制文件，无法复制文本内容".into());
+        return Err(crate::locale::text(
+            "二进制文件，无法复制内容",
+            "Binary files cannot be copied as text",
+        )
+        .into());
     }
-    String::from_utf8(data).map_err(|_| "非 UTF-8 文本，无法复制内容".into())
+    String::from_utf8(data).map_err(|_| {
+        crate::locale::text(
+            "非 UTF-8 文本，无法复制内容",
+            "The file is not UTF-8 text and cannot be copied",
+        )
+        .to_string()
+    })
 }
 
 /// 等待命令退出并按状态码判断成功与否（macOS/Linux）。

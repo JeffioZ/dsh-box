@@ -1,9 +1,11 @@
 //! 运行时安装与维护：Node 检测/便携安装、dsh npm 包安装、服务启动。
 
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
 use crate::app_state::{BootPhase, Config};
@@ -14,33 +16,57 @@ use crate::{emit_status, emit_status_progress};
 const NODEJS_INDEX: &str = "https://nodejs.org/dist/index.json";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
 
-/// 全局共享 HTTP 客户端：rustls/TLS 配置只构建一次（高频查询路径省初始化开销）。
+/// 全局共享 HTTP 客户端：TLS 配置只构建一次（高频查询路径省初始化开销）。
 static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+const MAX_NODE_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// 带超时的 HTTP 客户端（rustls，不依赖系统证书存储）。
+/// 带超时的 HTTP 客户端（TLS 后端见 Cargo.toml 平台条件依赖：
+/// Windows/macOS 用系统原生实现，Linux 用 rustls）。
+/// ureq 3 将读超时拆分为接收响应与接收响应体两部分，两者均设 90s。
 pub(crate) fn client() -> ureq::Agent {
     AGENT
         .get_or_init(|| {
-            ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(15))
-                .timeout_read(Duration::from_secs(90))
-                .timeout_write(Duration::from_secs(90))
+            ureq::Agent::config_builder()
+                .tls_config(crate::default_tls_config())
+                .timeout_connect(Some(Duration::from_secs(15)))
+                .timeout_recv_response(Some(Duration::from_secs(90)))
+                .timeout_recv_body(Some(Duration::from_secs(90)))
                 .build()
+                .new_agent()
         })
         .clone()
 }
 
+/// 大文件下载专用客户端：ureq 3 的 timeout_recv_body 是「响应头收完起、
+/// body 全部收完的整体时限」（timings.rs 中 RecvBody 以上一阶段记录时刻
+/// 为基准），并非单次读取空闲超时。常规 90s 会掐断慢网下的大归档下载，
+/// 整体预算放宽到 1 小时；挂死连接最坏 1 小时后报错，安装进度可随时取消。
+pub(crate) fn download_client() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .tls_config(crate::default_tls_config())
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .timeout_recv_response(Some(Duration::from_secs(90)))
+        .timeout_recv_body(Some(Duration::from_secs(3600)))
+        .build()
+        .new_agent()
+}
+
 /// 读取一个小 URL 到字符串（供版本检查等使用）。
 fn get_text(url: &str) -> Result<String, String> {
-    let resp = client()
-        .get(url)
-        .call()
-        .map_err(|e| format!("网络请求失败：{e}"))?;
-    let mut reader = resp.into_reader();
+    let resp = client().get(url).call().map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("网络请求失败", "Network request failed")
+        )
+    })?;
+    let mut reader = resp.into_body().into_reader();
     let mut s = String::new();
-    reader
-        .read_to_string(&mut s)
-        .map_err(|e| format!("读取响应失败：{e}"))?;
+    reader.read_to_string(&mut s).map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("读取响应失败", "Failed to read the response")
+        )
+    })?;
     Ok(s)
 }
 
@@ -67,14 +93,30 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
             }
         }
     }
-    let resp = client()
-        .get(NODEJS_INDEX)
-        .call()
-        .map_err(|e| format!("获取 Node 版本信息失败：{e}"))?;
-    let json: serde_json::Value = resp
-        .into_json()
-        .map_err(|e| format!("解析 Node 版本信息失败：{e}"))?;
-    let arr = json.as_array().ok_or("Node 版本列表格式错误")?;
+    let resp = client().get(NODEJS_INDEX).call().map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text(
+                "获取 Node 版本信息失败",
+                "Failed to retrieve Node.js version information"
+            )
+        )
+    })?;
+    let json: serde_json::Value = resp.into_body().read_json().map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text(
+                "解析 Node 版本信息失败",
+                "Failed to parse Node.js version information"
+            )
+        )
+    })?;
+    let arr = json.as_array().ok_or_else(|| {
+        crate::locale::text(
+            "Node 版本列表格式错误",
+            "The Node.js version list is invalid",
+        )
+    })?;
     for entry in arr {
         if entry
             .get("lts")
@@ -88,18 +130,24 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
             }
         }
     }
-    Err("未找到 Node LTS 版本".into())
+    Err(crate::locale::text("未找到 Node LTS 版本", "No Node.js LTS release was found").into())
 }
 
 /// 查询 npm 官方 `@deepseek-ai/dsh` 的最新版本。
 pub(crate) fn npm_latest_dsh_version() -> Result<String, String> {
     let text = get_text(NPM_DIST_TAGS)?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("解析失败：{e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("解析失败", "Failed to parse the response")
+        )
+    })?;
     json.get("latest")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "响应中没有 latest 字段".into())
+        .ok_or_else(|| {
+            crate::locale::text("响应中没有 latest 字段", "The response has no latest field").into()
+        })
 }
 
 /// 已安装 dsh 版本（读 package.json）。
@@ -180,14 +228,21 @@ pub(crate) fn current_node_version(config: &Config) -> Option<String> {
     node_version(&exe).map(|(m, n, p)| format!("v{m}.{n}.{p}"))
 }
 
-/// 确保 Node 可用：优先便携 Node（我们自己安装的 LTS，跳过版本验证提速），
-/// 其次系统 Node（必须验证版本），都没有则下载安装便携版。
+/// 确保 Node 可用：便携 Node 与系统 Node 都先执行版本探测；
+/// 便携运行时损坏或版本不满足要求时自动清理，再选择合格的系统 Node 或重新安装。
 pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<PathBuf, String> {
     let managed = config.node_exe();
     if managed.exists() {
-        // 便携 Node 是本应用安装的 LTS，版本必然满足；跳过 node --version 检测省一次进程启动。
-        // 若被手动破坏，服务启动失败会进入错误页并提示。
-        return Ok(managed);
+        if node_version(&managed).is_some_and(|(maj, min, _)| node_satisfies(maj, min)) {
+            return Ok(managed);
+        }
+        crate::logging::log("runtime: 便携 Node 损坏或版本过旧，准备重新选择运行时");
+        std::fs::remove_dir_all(config.node_dir()).map_err(|e| {
+            crate::locale::owned(
+                format!("清理损坏的 Node.js 运行时失败：{e}"),
+                format!("Failed to remove the damaged Node.js runtime: {e}"),
+            )
+        })?;
     }
     if let Some(system) = find_system_node() {
         if let Some((maj, min, _)) = node_version(&system) {
@@ -201,61 +256,125 @@ pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<PathBuf, S
 
 /// 下载并安装便携版 Node 到应用数据目录。
 pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<PathBuf, String> {
-    emit_status(app, BootPhase::InstallingNode, "正在下载 Node.js…", "");
+    emit_status(
+        app,
+        BootPhase::InstallingNode,
+        crate::locale::text("正在下载 Node.js…", "Downloading Node.js…"),
+        "",
+    );
     let version = latest_lts_cached(true)?; // 形如 v24.19.0；安装前强制刷新缓存
 
     // 按平台选择官方包（Windows zip / macOS、Linux tar.gz）
     let (dir_name, url, is_zip) = node_package(&version);
     let node_dir = config.node_dir();
+    if node_dir.exists() {
+        std::fs::remove_dir_all(&node_dir).map_err(|e| {
+            crate::locale::owned(
+                format!("清理旧 Node.js 安装目录失败：{e}"),
+                format!("Failed to remove the previous Node.js directory: {e}"),
+            )
+        })?;
+    }
     let archive_name = if is_zip {
         "node-download.zip"
     } else {
         "node-download.tar.gz"
     };
+    let official_archive_name = url.rsplit('/').next().ok_or_else(|| {
+        crate::locale::text(
+            "Node.js 下载地址格式错误",
+            "The Node.js download URL is invalid",
+        )
+    })?;
+    let expected_sha256 = node_archive_sha256(&version, official_archive_name)?;
     let archive_path = config.root.join(archive_name);
     std::fs::create_dir_all(&node_dir).map_err(|e| e.to_string())?;
 
-    emit_status(
-        app,
-        BootPhase::InstallingNode,
-        &format!("正在下载 Node.js {version}…"),
-        "",
-    );
-    let resp = client()
-        .get(&url)
-        .call()
-        .map_err(|e| format!("下载 Node.js 失败：{e}"))?;
+    let download_message = if crate::locale::is_chinese() {
+        format!("正在下载 Node.js {version}…")
+    } else {
+        format!("Downloading Node.js {version}…")
+    };
+    emit_status(app, BootPhase::InstallingNode, &download_message, "");
+    let resp = download_client().get(&url).call().map_err(|e| {
+        crate::locale::owned(
+            format!("下载 Node.js 失败：{e}"),
+            format!("Failed to download Node.js: {e}"),
+        )
+    })?;
     let total: u64 = resp
-        .header("Content-Length")
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let mut reader = resp.into_reader();
-    let mut file =
-        std::fs::File::create(&archive_path).map_err(|e| format!("写入临时文件失败：{e}"))?;
+    if total > MAX_NODE_ARCHIVE_BYTES {
+        return Err(crate::locale::text(
+            "Node.js 下载文件超过 256 MB 安全上限",
+            "The Node.js download exceeds the 256 MB safety limit",
+        )
+        .into());
+    }
+    let mut reader = resp.into_body().into_reader();
+    let mut file = std::fs::File::create(&archive_path).map_err(|e| {
+        crate::locale::owned(
+            format!("写入临时文件失败：{e}"),
+            format!("Failed to create the temporary download file: {e}"),
+        )
+    })?;
     let mut buf = [0u8; 65536];
     let mut done: u64 = 0;
     let mut last_pct: i64 = -1;
     let mut last_emit = std::time::Instant::now() - Duration::from_secs(1);
     loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| format!("下载 Node.js 失败：{e}"))?;
+        let n = match reader.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                // 清理半截下载文件（文件句柄先释放，Windows 下才能删除）
+                drop(file);
+                let _ = std::fs::remove_file(&archive_path);
+                return Err(crate::locale::owned(
+                    format!("下载 Node.js 失败：{e}"),
+                    format!("Failed to download Node.js: {e}"),
+                ));
+            }
+        };
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n])
-            .map_err(|e| format!("写入临时文件失败：{e}"))?;
         done += n as u64;
+        if done > MAX_NODE_ARCHIVE_BYTES {
+            drop(file);
+            let _ = std::fs::remove_file(&archive_path);
+            return Err(crate::locale::text(
+                "Node.js 下载文件超过 256 MB 安全上限",
+                "The Node.js download exceeds the 256 MB safety limit",
+            )
+            .into());
+        }
+        if let Err(e) = file.write_all(&buf[..n]) {
+            drop(file);
+            let _ = std::fs::remove_file(&archive_path);
+            return Err(crate::locale::owned(
+                format!("写入临时文件失败：{e}"),
+                format!("Failed to write the temporary download file: {e}"),
+            ));
+        }
         if total > 0 {
             // 节流：仅跨整数百分点且距上次广播 ≥200ms 才发 IPC，避免数百次高频事件
-            let pct = ((done as f64 / total as f64) * 100.0) as i64;
+            let pct = (((done as f64 / total as f64) * 100.0) as i64).min(100);
             if pct > last_pct && last_emit.elapsed() >= Duration::from_millis(200) {
                 last_pct = pct;
                 last_emit = std::time::Instant::now();
+                let message = if crate::locale::is_chinese() {
+                    format!("正在下载 Node.js {version}… {pct}%")
+                } else {
+                    format!("Downloading Node.js {version}… {pct}%")
+                };
                 emit_status_progress(
                     app,
                     BootPhase::InstallingNode,
-                    &format!("正在下载 Node.js {version}… {pct}%",),
+                    &message,
                     &format!(
                         "{:.1} MB / {:.1} MB",
                         done as f64 / 1048576.0,
@@ -268,7 +387,23 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     }
     drop(file);
 
-    emit_status(app, BootPhase::InstallingNode, "正在解压 Node.js…", "");
+    let actual_sha256 = sha256_file(&archive_path)?;
+    if actual_sha256 != expected_sha256 {
+        let _ = std::fs::remove_file(&archive_path);
+        return Err(crate::locale::owned(
+            format!("Node.js 下载文件校验失败：期望 {expected_sha256}，实际 {actual_sha256}"),
+            format!(
+                "Node.js download verification failed: expected {expected_sha256}, got {actual_sha256}"
+            ),
+        ));
+    }
+
+    emit_status(
+        app,
+        BootPhase::InstallingNode,
+        crate::locale::text("正在解压 Node.js…", "Extracting Node.js…"),
+        "",
+    );
     #[cfg(windows)]
     extract_zip(&archive_path, &node_dir)?;
     #[cfg(not(windows))]
@@ -292,7 +427,11 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     }
 
     if !config.node_exe().exists() {
-        return Err("Node.js 解压后未找到 node 可执行文件".into());
+        return Err(crate::locale::text(
+            "Node.js 解压完成，但找不到 node 可执行文件",
+            "The Node.js executable was not found after extraction",
+        )
+        .into());
     }
     Ok(config.node_exe())
 }
@@ -347,6 +486,63 @@ fn node_package(version: &str) -> (String, String, bool) {
     }
 }
 
+/// 从 Node.js 官方校验清单中取得目标归档的 SHA-256。
+fn node_archive_sha256(version: &str, archive_name: &str) -> Result<String, String> {
+    let checksums_url = format!("https://nodejs.org/dist/{version}/SHASUMS256.txt");
+    let checksums = get_text(&checksums_url).map_err(|e| {
+        crate::locale::owned(
+            format!("获取 Node.js 校验信息失败：{e}"),
+            format!("Failed to retrieve the Node.js checksum list: {e}"),
+        )
+    })?;
+    parse_node_sha256(&checksums, archive_name).ok_or_else(|| {
+        crate::locale::owned(
+            format!("Node.js 官方校验列表中未找到 {archive_name}"),
+            format!("{archive_name} was not found in the official Node.js checksum list"),
+        )
+    })
+}
+
+fn parse_node_sha256(checksums: &str, archive_name: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let hash = parts.next()?;
+        let file_name = parts.next()?.trim_start_matches('*');
+        (file_name == archive_name
+            && hash.len() == 64
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| hash.to_ascii_lowercase())
+    })
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|e| {
+        crate::locale::owned(
+            format!("读取下载文件失败：{e}"),
+            format!("Failed to read the downloaded file: {e}"),
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|e| {
+            crate::locale::owned(
+                format!("校验下载文件失败：{e}"),
+                format!("Failed to verify the downloaded file: {e}"),
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
 /// Windows：zip 解压（bsdtar 优先，PowerShell 回退）。
 #[cfg(windows)]
 fn extract_zip(zip: &Path, dest: &Path) -> Result<(), String> {
@@ -363,28 +559,51 @@ fn extract_zip(zip: &Path, dest: &Path) -> Result<(), String> {
     if matches!(status, Ok(true)) {
         return Ok(());
     }
-    let ps_args = format!(
-        "-NoProfile -Command \"Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force\"",
-        zip.to_string_lossy(),
-        dest.to_string_lossy()
-    );
+    let ps_script = "Expand-Archive -LiteralPath $env:DSHD_NODE_ARCHIVE -DestinationPath $env:DSHD_NODE_DESTINATION -Force";
     // PowerShell 回退：优先 pwsh（PowerShell 7，若已安装），否则系统自带 5.1。
-    // 只做"有就用"，不强制安装/更新——两者对 Expand-Archive 能力相同。
+    // 仅检测使用，不强制安装或更新——两者对 Expand-Archive 能力相同。
     let mut last_err = String::new();
-    for ps in ["pwsh", "powershell.exe"] {
-        let mut cmd = std::process::Command::new(ps);
-        cmd.args(["-NoProfile", "-Command", &ps_args]);
+    // pwsh 用绝对路径优先（应用启动后才安装的 pwsh 不在 PATH 快照里）
+    for (name, mut cmd) in [
+        ("pwsh", processes::pwsh_command()),
+        (
+            "powershell.exe",
+            std::process::Command::new("powershell.exe"),
+        ),
+    ] {
+        cmd.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            ps_script,
+        ]);
+        cmd.env("DSHD_NODE_ARCHIVE", zip);
+        cmd.env("DSHD_NODE_DESTINATION", dest);
         processes::hide_console(&mut cmd);
         match cmd.status() {
             Ok(s) if s.success() => return Ok(()),
-            Ok(_) => last_err = format!("{ps} 解压失败"),
-            Err(e) => last_err = format!("启动 {ps} 失败：{e}"),
+            Ok(_) => {
+                last_err = crate::locale::owned(
+                    format!("{name} 解压失败"),
+                    format!("{name} could not extract the archive"),
+                )
+            }
+            Err(e) => {
+                last_err = crate::locale::owned(
+                    format!("启动 {name} 失败：{e}"),
+                    format!("Failed to start {name}: {e}"),
+                )
+            }
         }
     }
     Err(if last_err.is_empty() {
-        "解压 Node.js 失败".into()
+        crate::locale::text("解压 Node.js 失败", "Failed to extract Node.js").into()
     } else {
-        format!("解压 Node.js 失败（{last_err}）")
+        crate::locale::owned(
+            format!("解压 Node.js 失败（{last_err}）"),
+            format!("Failed to extract Node.js ({last_err})"),
+        )
     })
 }
 
@@ -400,11 +619,13 @@ fn extract_tar(archive: &Path, dest: &Path) -> Result<(), String> {
     let status = std::process::Command::new("tar")
         .args(&args)
         .status()
-        .map_err(|e| format!("解压失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::owned(format!("解压失败：{e}"), format!("Extraction failed: {e}"))
+        })?;
     if status.success() {
         Ok(())
     } else {
-        Err("解压 Node.js 失败".into())
+        Err(crate::locale::text("解压 Node.js 失败", "Failed to extract Node.js").into())
     }
 }
 
@@ -422,17 +643,28 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     emit_status(
         app,
         BootPhase::InstallingDsh,
-        "正在安装 dsh（首次运行，需要联网）…",
+        crate::locale::text(
+            "正在安装 dsh（需要联网）…",
+            "Installing dsh (internet required)…",
+        ),
         "",
     );
     std::fs::create_dir_all(config.dsh_dir()).map_err(|e| e.to_string())?;
 
     let npm_cli = node_exe
         .parent()
-        .unwrap()
+        .ok_or_else(|| {
+            crate::locale::text(
+                "Node.js 可执行文件路径无父目录",
+                "The Node.js executable path has no parent directory",
+            )
+        })?
         .join("node_modules/npm/bin/npm-cli.js");
     if !npm_cli.exists() {
-        return Err(format!("未找到 npm：{}", npm_cli.display()));
+        return Err(crate::locale::owned(
+            format!("未找到 npm：{}", npm_cli.display()),
+            format!("npm was not found: {}", npm_cli.display()),
+        ));
     }
     let args = vec![
         npm_cli.to_string_lossy().into_owned(),
@@ -448,25 +680,32 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     let npm_log = config.logs_dir().join("npm-install.log");
     let mut child =
         processes::spawn_process(node_exe, &args, &envs, Some(&config.root), Some(&npm_log))
-            .map_err(|e| format!("运行 npm 失败：{e}"))?;
+            .map_err(|e| {
+                crate::locale::owned(
+                    format!("运行 npm 失败：{e}"),
+                    format!("Failed to run npm: {e}"),
+                )
+            })?;
     // 安装进程也纳入守卫，应用退出时不会遗留 npm/node 后台进程。
     let _install_guard = processes::TreeGuard::from_child(&child);
     // 安装期间每秒汇报已用时（npm 非 TTY 时不输出进度，用计时替代）。
     let start = Instant::now();
     let code = loop {
-        match child
-            .try_wait()
-            .map_err(|e| format!("等待 npm 失败：{e}"))?
-        {
+        match child.try_wait().map_err(|e| {
+            crate::locale::owned(
+                format!("等待 npm 失败：{e}"),
+                format!("Failed while waiting for npm: {e}"),
+            )
+        })? {
             Some(status) => break status.code().unwrap_or(-1),
             None => {
                 let secs = start.elapsed().as_secs();
-                emit_status(
-                    app,
-                    BootPhase::InstallingDsh,
-                    &format!("正在安装 dsh（首次运行，需要联网）… 已用时 {secs}s"),
-                    "",
-                );
+                let message = if crate::locale::is_chinese() {
+                    format!("正在安装 dsh（需要联网）… 已用时 {secs}s")
+                } else {
+                    format!("Installing dsh (internet required)… {secs}s elapsed")
+                };
+                emit_status(app, BootPhase::InstallingDsh, &message, "");
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
@@ -474,10 +713,17 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     drop(child);
     if code != 0 {
         let tail = read_log_tail(&npm_log, 600);
-        return Err(format!("安装 dsh 失败（npm 退出码 {code}）：\n{}", tail));
+        return Err(crate::locale::owned(
+            format!("安装 dsh 失败（npm 退出码 {code}）：\n{}", tail),
+            format!("Failed to install dsh (npm exit code {code}):\n{}", tail),
+        ));
     }
     if !dsh_installed(config) {
-        return Err("dsh 已安装，但未找到入口文件".into());
+        return Err(crate::locale::text(
+            "dsh 已安装，但找不到入口文件",
+            "dsh was installed, but its entry file was not found",
+        )
+        .into());
     }
     Ok(())
 }
@@ -529,7 +775,12 @@ pub(crate) fn start_server(
     let log = config.dsh_log();
     let child =
         processes::spawn_process(node_exe, &args, &envs, Some(&config.dsh_dir()), Some(&log))
-            .map_err(|e| format!("启动 dsh 服务失败：{e}"))?;
+            .map_err(|e| {
+                crate::locale::owned(
+                    format!("启动 dsh 服务失败：{e}"),
+                    format!("Failed to start the dsh service: {e}"),
+                )
+            })?;
     let pid = child.id();
 
     // 建立进程树守卫（Windows Job / Unix 进程组）；失败不致命，退出时另有兜底。
@@ -537,4 +788,20 @@ pub(crate) fn start_server(
     // child 句柄随函数结束关闭；进程由守卫/taskkill 管理。
     drop(child);
     Ok((pid, guard))
+}
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::parse_node_sha256;
+
+    #[test]
+    fn parses_only_the_exact_archive_name() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let checksums = format!("{hash}  node-v24.1.0-win-x64.zip\n{hash}  other.zip\n");
+        assert_eq!(
+            parse_node_sha256(&checksums, "node-v24.1.0-win-x64.zip").as_deref(),
+            Some(hash)
+        );
+        assert!(parse_node_sha256(&checksums, "missing.zip").is_none());
+    }
 }

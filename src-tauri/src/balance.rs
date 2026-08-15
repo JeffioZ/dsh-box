@@ -1,9 +1,8 @@
 //! DeepSeek API 余额查询：GET {base}/user/balance。
 //!
-//! API Key 解析顺序：config.json 的 api_key → 环境变量 DEEPSEEK_API_KEY
-//! → dsh 凭据文件（$DSH_HOME/.credentials.yaml，格式 `DEEPSEEK_API_KEY: sk-...`）。
-
-use std::path::PathBuf;
+//! API Key 解析顺序：环境变量 DSH_DESKTOP_API_KEY → config.json 的 api_key
+//! → 环境变量 DEEPSEEK_API_KEY → dsh 凭据文件（$DSH_HOME/.credentials.yaml，
+//! 格式 `DEEPSEEK_API_KEY: sk-...`）。
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -62,14 +61,7 @@ struct RawBalanceInfo {
 
 /// 解析 dsh 凭据文件（$DSH_HOME/.credentials.yaml）。
 fn key_from_dsh_credentials(config: &Config) -> Option<String> {
-    let home = config
-        .dsh_home
-        .clone()
-        .or_else(|| std::env::var("DSH_HOME").ok().map(PathBuf::from))
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default()).join(".dsh")
-        });
-    let file = home.join(".credentials.yaml");
+    let file = config.dsh_home().join(".credentials.yaml");
     let text = std::fs::read_to_string(file).ok()?;
     for line in text.lines() {
         let line = line.trim();
@@ -97,7 +89,11 @@ fn resolve_api_key(config: &Config) -> Result<String, String> {
     if let Some(k) = key_from_dsh_credentials(config) {
         return Ok(k);
     }
-    Err("未找到 DeepSeek API Key。\n可在应用数据目录的 config.json 中添加 api_key 字段，\n或设置环境变量 DEEPSEEK_API_KEY，\n或确认 dsh 凭据文件中已有该密钥。".into())
+    Err(crate::locale::text(
+        "未找到 DeepSeek API Key。\n可在应用数据目录的 config.json 中添加 api_key 字段，\n或设置环境变量 DSH_DESKTOP_API_KEY / DEEPSEEK_API_KEY，\n或确认 dsh 凭据文件中已有该密钥。",
+        "No DeepSeek API Key was found.\nAdd an api_key field to config.json in the app data directory,\nset DSH_DESKTOP_API_KEY or DEEPSEEK_API_KEY,\nor confirm that the dsh credentials file contains the key.",
+    )
+    .into())
 }
 
 /// 同步查询并记录日志（托盘线程直接调用）。
@@ -105,14 +101,10 @@ pub(crate) fn query_balance(config: &Config) -> BalancePayload {
     match query(config) {
         Ok(mut payload) => {
             payload.updated_at = Some(unix_now());
-            let total = payload
-                .balances
-                .first()
-                .map(|b| format!("{} {}", b.currency, b.total_balance))
-                .unwrap_or_else(|| "无余额信息".into());
+            // 日志只记录账户可用状态，不写入余额金额
             crate::logging::log(&format!(
-                "balance: ok is_available={} total={}",
-                payload.is_available, total
+                "balance: 查询成功 is_available={}",
+                payload.is_available
             ));
             payload
         }
@@ -121,7 +113,11 @@ pub(crate) fn query_balance(config: &Config) -> BalancePayload {
                 BalanceError::NoKey(m) => (Some("no_key"), m),
                 BalanceError::InvalidKey => (
                     Some("invalid_key"),
-                    "API Key 无效，请检查配置的密钥是否正确。".to_string(),
+                    crate::locale::text(
+                        "API Key 无效，请检查配置的密钥是否正确。",
+                        "The API Key is invalid. Check the configured key.",
+                    )
+                    .to_string(),
                 ),
                 BalanceError::Other(m) => (None, m),
             };
@@ -168,18 +164,15 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
 
 #[tauri::command]
 pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayload {
-    // 仅允许本地来源（标题栏/启动页）查询余额
-    if let Ok(url) = webview.url() {
-        if url.as_str().starts_with("http://127.0.0.1:") {
-            return BalancePayload {
-                ok: false,
-                is_available: false,
-                balances: Vec::new(),
-                error: Some("此操作不允许从页面发起。".into()),
-                error_kind: None,
-                updated_at: None,
-            };
-        }
+    if let Err(error) = crate::commands::ensure_local_origin(&webview) {
+        return BalancePayload {
+            ok: false,
+            is_available: false,
+            balances: Vec::new(),
+            error: Some(error),
+            error_kind: None,
+            updated_at: None,
+        };
     }
     let config = app.state::<AppState>().config();
     // 网络查询放到阻塞线程，避免占用主线程/异步工作线程。
@@ -191,7 +184,13 @@ pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayl
                 ok: false,
                 is_available: false,
                 balances: Vec::new(),
-                error: Some(format!("余额查询线程异常：{e}")),
+                error: Some(format!(
+                    "{}: {e}",
+                    crate::locale::text(
+                        "余额查询失败（内部错误）",
+                        "Balance query failed (internal error)"
+                    )
+                )),
                 error_kind: None,
                 updated_at: None,
             }
@@ -204,18 +203,24 @@ fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
     let url = format!("{}/user/balance", config.api_base.trim_end_matches('/'));
     let resp = crate::runtime::client()
         .get(&url)
-        .set("Authorization", &format!("Bearer {key}"))
+        .header("Authorization", &format!("Bearer {key}"))
         .call()
         .map_err(|e| {
-            if matches!(e, ureq::Error::Status(401, _)) {
+            if matches!(e, ureq::Error::StatusCode(401)) {
                 BalanceError::InvalidKey
             } else {
-                BalanceError::Other(format!("查询余额失败：{e}"))
+                BalanceError::Other(format!(
+                    "{}: {e}",
+                    crate::locale::text("查询余额失败", "Balance query failed")
+                ))
             }
         })?;
-    let raw: RawBalance = resp
-        .into_json()
-        .map_err(|e| BalanceError::Other(format!("解析余额响应失败：{e}")))?;
+    let raw: RawBalance = resp.into_body().read_json().map_err(|e| {
+        BalanceError::Other(format!(
+            "{}: {e}",
+            crate::locale::text("解析余额响应失败", "Failed to parse the balance response")
+        ))
+    })?;
     let balances = raw
         .balance_infos
         .into_iter()

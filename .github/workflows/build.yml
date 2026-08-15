@@ -81,14 +81,25 @@ jobs:
         if: matrix.cross != '' && github.event_name != 'pull_request'
         run: cargo build --locked --release --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml
 
+      # artifact 上传不会保留 Unix 可执行位；先打 tar.gz，下载解压后可直接运行。
+      - name: Package artifact (native Unix)
+        if: runner.os != 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        run: tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "DSHDesktop-${{ matrix.target }}.tar.gz" DSHDesktop
+
+      - name: Package artifact (cross Unix)
+        if: matrix.cross != '' && github.event_name != 'pull_request'
+        shell: bash
+        run: tar -C "src-tauri/target/${{ matrix.cross }}/release" -czf "DSHDesktop-${{ matrix.cross }}.tar.gz" DSHDesktop
+
       - name: Upload artifact (native)
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v6
         with:
           name: DSHDesktop-${{ matrix.target }}
           path: |
-            src-tauri/target/${{ matrix.target }}/release/DSHDesktop
             src-tauri/target/${{ matrix.target }}/release/DSHDesktop.exe
+            DSHDesktop-${{ matrix.target }}.tar.gz
           if-no-files-found: warn
 
       - name: Upload artifact (cross)
@@ -97,6 +108,6 @@ jobs:
         with:
           name: DSHDesktop-${{ matrix.cross }}
           path: |
-            src-tauri/target/${{ matrix.cross }}/release/DSHDesktop
             src-tauri/target/${{ matrix.cross }}/release/DSHDesktop.exe
+            DSHDesktop-${{ matrix.cross }}.tar.gz
           if-no-files-found: warn
