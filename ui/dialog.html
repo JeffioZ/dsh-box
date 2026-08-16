@@ -16,12 +16,12 @@
     /* 左侧导航 + 右侧内容 */
     #shell { flex: 1; min-height: 0; display: flex; }
     #nav {
-      width: 168px; flex: none; display: flex; flex-direction: column; gap: 2px;
-      padding: 10px 8px; border-right: 1px solid var(--dshd-border); overflow-y: auto;
+      width: 152px; flex: none; display: flex; flex-direction: column; gap: 2px;
+      padding: 12px 8px 8px; border-right: 1px solid var(--dshd-border); overflow-y: auto;
     }
     .nav-item {
       display: flex; align-items: center; gap: 9px; width: 100%;
-      padding: 8px 10px; border: none; border-radius: 9px; background: transparent;
+      padding: 7px 10px; border: none; border-radius: 9px; background: transparent;
       color: var(--dshd-text-dim); font-size: 13px; cursor: pointer; text-align: left;
       transition: background-color .12s, color .12s;
     }
@@ -29,8 +29,16 @@
     .nav-item:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
     .nav-item.active { background: var(--dshd-accent); color: #fff; font-weight: 500; }
     .nav-item.active:hover { background: var(--dshd-accent); color: #fff; }
-    .nav-item svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-item .nic {
+      width: 24px; height: 24px; flex: none; display: inline-flex; align-items: center;
+      justify-content: center; border-radius: 7px;
+    }
+    .nav-item.active .nic { background: rgba(255, 255, 255, .16); }
+    .nav-item svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: 11px; color: var(--dshd-text-dim); opacity: .6; }
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    /* 内容居中容器：余额/关于等轻内容不撑满右侧，避免空旷 */
+    .center-wrap { max-width: 420px; margin: 6px auto 0; width: 100%; }
     @media (prefers-reduced-motion: reduce) { .nav-item { transition: none; } }
 
     /* 展示/关闭微动效：窗口透明，内容淡入淡出在卡片上播放，
@@ -63,7 +71,7 @@
     @keyframes dlg-refresh-spin { to { transform: rotate(360deg); } }
     .hidden { display: none !important; }
 
-    .body { flex: 1; min-height: 0; padding: 12px 16px; overflow-y: auto; }
+    .body { flex: 1; min-height: 0; padding: 14px 18px; overflow-y: auto; }
     .big { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
     .big .cur { font-size: 11px; color: var(--dshd-text-dim); font-weight: 400; }
     .balance-parts { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -90,7 +98,7 @@
     .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .msg.success { color: #56d364; }
     .msg.error { color: #ff7b72; }
-    .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+    .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
     .about .nm { font-size: 15px; font-weight: 600; }
     .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
     .about .cp { font-size: 11px; color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
@@ -246,9 +254,11 @@
       const dot = data.is_available ? '' : ' warn';
       const st = data.is_available ? dshdT('accountAvailable') : dshdT('accountUnavailable');
       body.innerHTML =
+        '<div class="center-wrap">' +
         '<div class="big">' + cur(b.currency) + fmt(b.total_balance) +
         '<span class="cur">' + esc(b.currency) + '</span></div>' + parts +
-        '<div class="status"><span class="dot' + dot + '"></span>' + st + upd + '</div>';
+        '<div class="status"><span class="dot' + dot + '"></span>' + st + upd + '</div>' +
+        '</div>';
       foot(dshdT('close'));
     }
 
@@ -434,10 +444,16 @@
         btn.className = 'nav-item' + (item.kind === activeKind ? ' active' : '');
         btn.dataset.kind = item.kind;
         btn.setAttribute('aria-current', item.kind === activeKind ? 'page' : 'false');
-        btn.innerHTML = NAV_ICONS[item.icon] + '<span>' + esc(dshdT(item.label)) + '</span>';
+        btn.innerHTML = '<span class="nic">' + NAV_ICONS[item.icon] + '</span><span>' + esc(dshdT(item.label)) + '</span>';
         btn.addEventListener('click', () => navigateTo(item.kind));
         nav.append(btn);
       }
+      // 导航底部版本号（填充空间，弱化显示）
+      const ver = document.createElement('div');
+      ver.className = 'nav-ver';
+      const v = (currentOpen && currentOpen.initial && currentOpen.initial.app_version) || '';
+      ver.textContent = v ? 'v' + v : '';
+      nav.append(ver);
     }
     function renderCurrent(opts) {
       const k = openKind;

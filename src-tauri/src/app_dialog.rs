@@ -15,9 +15,10 @@ use crate::app_state::AppState;
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
 
-/// 弹窗统一为"左侧导航 + 右侧内容"布局：固定宽度容纳导航栏与内容区。
+/// 弹窗统一为"左侧导航 + 右侧内容"布局：固定尺寸容纳导航栏与内容区。
+/// 680 宽（导航 152 + 内容 528）、560 高——紧凑不空旷。
 fn dialog_size(_kind: &str) -> (f64, f64) {
-    (720.0, 640.0)
+    (680.0, 560.0)
 }
 
 fn main_is_presented(main: &tauri::Window) -> bool {
@@ -44,7 +45,7 @@ pub fn precreate(app: &AppHandle) {
         WebviewUrl::App("dialog.html".into()),
     )
     .title(crate::APP_TITLE)
-    .inner_size(720.0, 640.0)
+    .inner_size(680.0, 560.0)
     .initialization_script(crate::locale::init_script())
     .resizable(false)
     .decorations(false)
@@ -140,6 +141,14 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
         } else {
             let _ = win.center();
         }
+    }
+    // 统一注入应用版本号：导航栏底部显示（任何 kind 打开都可用）
+    let mut initial = initial;
+    if let Some(obj) = initial.as_object_mut() {
+        obj.insert(
+            "app_version".into(),
+            serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
     }
     let payload = AppDialogOpen {
         title: title.to_string(),
