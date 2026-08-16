@@ -116,6 +116,7 @@ const DSHD_MESSAGES = {
   upToDateLts: ['已是最新 LTS', 'Latest LTS installed'],
   update: ['更新', 'Update'],
   updatedAt: ['更新于 {time}', 'Updated {time}'],
+  updateApp: ['更新应用', 'Update app'],
   updateDsh: ['更新 dsh', 'Update dsh'],
   updateDshWait: ['正在更新 dsh，请稍候…', 'Updating dsh. Please wait…'],
   updateFailed: ['更新失败：{message}', 'Update failed: {message}'],

@@ -1,5 +1,6 @@
 //! 一键更新：检查/更新 dsh（npm 包）、Node（便携版），以及 Windows 的 PowerShell 7（可选增强）。
 
+use std::io::Read;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -26,6 +27,8 @@ pub struct CheckResult {
     pub dsh: Option<VersionInfo>,
     pub node: Option<NodeInfo>,
     pub pwsh: Option<PwshInfo>,
+    /// 应用自身更新（GitHub Releases）。
+    pub app: Option<VersionInfo>,
     pub error: Option<String>,
 }
 
@@ -265,6 +268,8 @@ pub fn check(app: &AppHandle) -> CheckResult {
             }
         }
     });
+    // 应用自身更新（GitHub Releases；失败静默，不阻塞其他检查）
+    let app_handle = std::thread::spawn(check_app_update);
 
     if let Ok((d, d_err)) = dsh_handle.join() {
         result.dsh = d;
@@ -291,7 +296,53 @@ pub fn check(app: &AppHandle) -> CheckResult {
             update_available,
         });
     }
+    if let Ok(app_info) = app_handle.join() {
+        result.app = app_info;
+    }
     result
+}
+
+/// 应用自身更新检查：GitHub Releases latest 的版本号对比。
+/// 检查失败（网络/仓库不存在/无 Release）静默返回 None，不打扰用户。
+fn check_app_update() -> Option<VersionInfo> {
+    const REPO: &str = "JeffioZ/dsh-desktop";
+    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let resp = match runtime::client()
+        .get(&url)
+        .header("User-Agent", "DSHDesktop")
+        .call()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            crate::logging::log(&format!("updater: 应用版本查询失败：{e}"));
+            return None;
+        }
+    };
+    let mut text = String::new();
+    if resp
+        .into_body()
+        .into_reader()
+        .read_to_string(&mut text)
+        .is_err()
+    {
+        return None;
+    }
+    let json: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let latest = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(|t| t.trim_start_matches('v').to_string())?;
+    let installed = env!("CARGO_PKG_VERSION").to_string();
+    let update_available = versions::compare_versions(&latest, &installed)
+        == std::cmp::Ordering::Greater;
+    Some(VersionInfo {
+        installed,
+        latest,
+        update_available,
+    })
 }
 
 // ---------- PowerShell 7（可选增强，仅 Windows） ----------
@@ -563,6 +614,8 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         update_node(app, &state.config())
     } else if which == "pwsh" {
         update_pwsh(app)
+    } else if which == "app" {
+        update_app_exe(app, &state.config())
     } else {
         Err(format!(
             "{}: {which}",
@@ -650,6 +703,128 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
         }
     }
     result
+}
+
+// ---------- 应用自身更新（Windows：下载 → 替换 → 重启） ----------
+
+/// 更新应用本体 exe：下载 GitHub Releases 的 DSHDesktop.exe → 基础校验 →
+/// 用户确认 → 写替换脚本并退出（脚本在进程退出后替换并重启新版本）。
+///
+/// 仅 Windows 支持（单文件分发场景）；macOS/Linux 提示从官网下载。
+fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, config);
+        return Err(crate::locale::text(
+            "当前平台请从官网下载新版安装包。",
+            "Please download the new version from the official website on this platform.",
+        )
+        .into());
+    }
+    #[cfg(windows)]
+    {
+        const ASSET_URL: &str =
+            "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop.exe";
+        let dir = config.root.join("exe-update");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败：{e}"))?;
+        let target = dir.join("DSHDesktop.exe");
+
+        // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
+        emit_progress(
+            app,
+            crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
+        );
+        let resp = runtime::download_client()
+            .get(ASSET_URL)
+            .header("User-Agent", "DSHDesktop")
+            .call()
+            .map_err(|e| format!("下载失败：{e}"))?;
+        let mut reader = resp.into_body().into_reader();
+        let mut file = std::fs::File::create(&target).map_err(|e| format!("写入失败：{e}"))?;
+        std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
+
+        // 2) 基础校验：PE 头（MZ）+ 合理体积。HTML 错误页/截断文件在此被拦截
+        let bytes = std::fs::read(&target).map_err(|e| format!("读取下载文件失败：{e}"))?;
+        if bytes.len() < 1024 * 1024 {
+            return Err(crate::locale::text(
+                "下载的文件大小异常，已中止更新。",
+                "The downloaded file size looks wrong. Update aborted.",
+            )
+            .into());
+        }
+        if bytes.get(0..2) != Some(b"MZ") {
+            return Err(crate::locale::text(
+                "下载的文件不是有效的程序，已中止更新。",
+                "The downloaded file is not a valid program. Update aborted.",
+            )
+            .into());
+        }
+
+        // 3) 确认：更新需要退出并自动重启
+        use tauri_plugin_dialog::MessageDialogKind;
+        if !crate::dialog::ask(
+            app,
+            crate::locale::text(
+                "应用将退出并自动重启以完成更新。是否继续？",
+                "The app will exit and restart automatically to finish the update. Continue?",
+            )
+            .to_string(),
+            crate::locale::text("更新应用", "Update app"),
+            MessageDialogKind::Info,
+            crate::locale::text("更新并重启", "Update and restart"),
+            crate::locale::text("取消", "Cancel"),
+        ) {
+            return Ok(());
+        }
+
+        // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动）
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+        let backup = dir.join("DSHDesktop.exe.old");
+        let script = dir.join("replace.ps1");
+        let script_text = format!(
+            "$ErrorActionPreference = 'Continue'\n\
+             Start-Sleep -Seconds 2\n\
+             $src = '{}'\n\
+             $dst = '{}'\n\
+             $old = '{}'\n\
+             $i = 0\n\
+             while ($i -lt 60) {{ try {{ Move-Item -LiteralPath $dst -Destination $old -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
+             $i = 0\n\
+             while ($i -lt 60) {{ try {{ Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
+             Start-Process -FilePath $dst\n",
+            target.display(),
+            exe.display(),
+            backup.display(),
+        );
+        std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
+
+        // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
+        let spawn = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&script)
+            .spawn();
+        if spawn.is_err() {
+            return Err(crate::locale::text(
+                "无法启动更新脚本。",
+                "Failed to start the update script.",
+            )
+            .into());
+        }
+        crate::logging::log(&format!("updater: 应用更新已就绪，退出并重启（{exe:?}）"));
+        // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）
+        crate::window::save_window_state_now(app);
+        crate::dsh::shutdown(app);
+        app.exit(0);
+        Ok(())
+    }
 }
 
 // ---------- dsh 更新 ----------

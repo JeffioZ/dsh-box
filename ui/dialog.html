@@ -212,14 +212,20 @@
             : (r.pwsh.installed ? ' (' + label + ')' : '')) + '</div></div>' +
           '<span id="u-pwsh"></span></div>';
       }
+      if (r.app) {
+        html += '<div class="uprow"><div class="info"><div class="name">DSHDesktop</div>' +
+          '<div class="ver">' + esc(r.app.installed) + (r.app.update_available ? ' → ' + esc(r.app.latest) : ' (' + dshdT('upToDate') + ')') + '</div></div>' +
+          '<span id="u-app"></span></div>';
+      }
       if (r.error) html += '<div class="msg">' + esc(r.error) + '</div>';
-      if (!r.dsh && !r.node && !r.pwsh) html += '<div class="msg error">' + dshdT('checkFailedRetry') + '</div>';
+      if (!r.dsh && !r.node && !r.pwsh && !r.app) html += '<div class="msg error">' + dshdT('checkFailedRetry') + '</div>';
       body.innerHTML = html;
       if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
       if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
       if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
-      const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available);
-      if (!any && !r.error && (r.dsh || r.node || r.pwsh)) {
+      if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
+      const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.app && r.app.update_available);
+      if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.app)) {
         const message = document.createElement('div');
         message.className = 'msg';
         message.textContent = dshdT('noUpdates');
