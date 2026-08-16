@@ -1072,6 +1072,47 @@ if (!window.__dshdHeartbeat) {
 }
 "#;
 
+/// 对话页内余额小部件注入：右下角沉底显示实时余额，点击刷新、5 分钟自动刷新。
+/// 样式走 dsh 设计系统变量（深浅色自适应）；无 API Key 时显示引导文案。
+const BALANCE_WIDGET_INJECT: &str = r#"
+if (!window.__dshdBalanceWidget) {
+  window.__dshdBalanceWidget = true;
+  var w = document.createElement('div');
+  w.id = '__dshd_balance_widget';
+  w.style.cssText = 'position:fixed;right:16px;bottom:14px;z-index:2147483001;' +
+    'display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;' +
+    'font:12px/1 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;cursor:pointer;' +
+    'user-select:none;opacity:.85;transition:opacity .15s;' +
+    'background:var(--dsw-specific-menu,#353638);color:var(--dsw-alias-label-primary,#f9fafb);' +
+    'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.08));' +
+    'box-shadow:var(--dsw-shadow-lv3,0 8px 24px rgba(0,0,0,.35));';
+  w.title = 'API 余额';
+  w.setAttribute('role', 'status');
+  w.addEventListener('mouseenter', function () { w.style.opacity = '1'; });
+  w.addEventListener('mouseleave', function () { w.style.opacity = '.85'; });
+  function refreshBalance() {
+    w.textContent = '余额 …';
+    try {
+      window.__TAURI__.core.invoke('page_balance').then(function (p) {
+        if (p && p.ok && p.balances && p.balances.length) {
+          w.textContent = '余额 ¥' + p.balances[0].total_balance;
+        } else if (p && p.error_kind === 'no_key') {
+          w.textContent = '余额 未配置';
+        } else if (p && p.error) {
+          w.textContent = '余额 查询失败';
+        } else {
+          w.textContent = '余额 不可用';
+        }
+      }).catch(function () { w.textContent = '余额 查询失败'; });
+    } catch (e) { w.textContent = '余额 不可用'; }
+  }
+  w.addEventListener('click', refreshBalance);
+  document.documentElement.appendChild(w);
+  refreshBalance();
+  setInterval(refreshBalance, 300000);
+}
+"#;
+
 /// 让 WebView 跳到 dsh 界面（或返回本地启动页）。
 pub fn navigate(app: &AppHandle, url: &str) {
     let Some(wv) = main_webview(app) else {
@@ -1121,10 +1162,11 @@ pub fn navigate(app: &AppHandle, url: &str) {
                      fix(); \
                      const el = document.querySelector('head > title'); \
                      if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-                     {menu} {heartbeat} {hide_tools} }})();",
+                     {menu} {heartbeat} {hide_tools} {balance_widget} }})();",
                     menu = MENU_INJECT,
                     heartbeat = HEARTBEAT_INJECT,
                     hide_tools = hide_tools,
+                    balance_widget = BALANCE_WIDGET_INJECT,
                     protocol_token = protocol_token,
                 ));
             }

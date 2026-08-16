@@ -392,6 +392,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         session_changes,
         session_revert,
         crate::balance::api_balance,
+        crate::balance::page_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,
         titlebar_close,
