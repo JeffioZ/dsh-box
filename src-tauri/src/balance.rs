@@ -170,24 +170,6 @@ pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayl
     run_balance_query(app).await
 }
 
-/// 对话页内余额小部件用：仅允许 dsh 页面调用（无副作用，只读余额）。
-#[tauri::command]
-pub async fn page_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayload {
-    let config = app.state::<AppState>().config();
-    let allowed = match webview.url() {
-        Ok(u) => crate::is_dsh_url(&u, &config),
-        Err(_) => false,
-    };
-    if !allowed {
-        return denied_payload(crate::locale::text(
-            "仅允许 dsh 页面调用此操作。",
-            "This action can only be invoked from the dsh page.",
-        )
-        .into());
-    }
-    run_balance_query(app).await
-}
-
 fn denied_payload(error: String) -> BalancePayload {
     BalancePayload {
         ok: false,
