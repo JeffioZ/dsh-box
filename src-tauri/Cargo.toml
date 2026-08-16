@@ -59,6 +59,8 @@ url = "2"
 http = "1"
 # 图标 PNG 编码用（deflate）；miniz_oxide 纯 Rust 后端，不引入系统 zlib
 flate2 = "1"
+tauri-plugin-notification = "2"
+zstd = "0.13.3"
 
 # TLS 后端按平台选择：Windows/macOS 走系统原生实现（schannel / Security.framework），
 # 体积更小且证书使用系统信任库（企业代理/自定义 CA 场景更友好）；

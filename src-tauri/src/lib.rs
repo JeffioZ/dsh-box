@@ -16,6 +16,7 @@ mod file_actions;
 mod icons;
 pub mod locale;
 mod logging;
+mod notify;
 mod processes;
 mod runtime;
 mod titlebar;
@@ -1097,6 +1098,7 @@ pub fn run() {
             show_main(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
         .invoke_handler(commands::invoke_handler())
         .setup(|app| {
@@ -1323,6 +1325,8 @@ pub fn run() {
             balance::start_periodic_refresh(app.handle().clone());
             // 运行期每 6 小时自动检查一次 dsh 更新（发现新版弹提示，不自动安装）
             updater::start_periodic_check(app.handle().clone());
+            // 任务完成系统通知（主窗口不可见时；只读轮询 dsh 会话日志）
+            notify::start_task_watch(app.handle().clone());
             // 跟随 dsh 的设置（语言/主题）：后台每 15s 读取 settings.yaml
             tray::start_follow_dsh_settings(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标

@@ -5,6 +5,7 @@
   "windows": ["main", "titlebar", "tray-menu", "app-dialog"],
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "notification:default"
   ]
 }
