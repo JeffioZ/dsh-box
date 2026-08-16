@@ -3,6 +3,21 @@
 function dshdCreateMenu(container, options) {
   const settings = options || {};
   const keyboardNavKeys = new Set(['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']);
+
+  // 菜单条目图标（stroke 风格，与全局 --dshd 图标体系一致）
+  const ICONS = {
+    window: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18"></path></svg>',
+    globe: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3c3 3.4 3 14 0 18"></path><path d="M12 3c-3 3.4-3 14 0 18"></path></svg>',
+    restart: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 1 3 6.7"></path><path d="M3 4v5h5"></path></svg>',
+    download: '<svg viewBox="0 0 24 24"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M4 21h16"></path></svg>',
+    puzzle: '<svg viewBox="0 0 24 24"><path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M21 16v5h-5"></path><path d="M3 16v5h5"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>',
+    file: '<svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path></svg>',
+    power: '<svg viewBox="0 0 24 24"><path d="M12 3v9"></path><path d="M6.3 6.3a9 9 0 1 0 11.4 0"></path></svg>',
+    eye: '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>',
+    info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path></svg>',
+    exit: '<svg viewBox="0 0 24 24"><path d="M9 4h10a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H9"></path><path d="M4 12h10"></path><path d="M11 8l4 4-4 4"></path></svg>',
+  };
+
   let items = [];
   let expandedId = '';
   let lastItemsKey = '';
@@ -113,6 +128,14 @@ function dshdCreateMenu(container, options) {
     const label = document.createElement('span');
     label.className = 'lb';
     label.textContent = item.label;
+    // 图标（.ic 由 common.css 定义 16px；stroke SVG 随文字颜色）
+    if (item.icon && ICONS[item.icon]) {
+      const ic = document.createElement('span');
+      ic.className = 'ic';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.innerHTML = ICONS[item.icon];
+      row.append(ic);
+    }
     row.append(label);
 
     if (item.children && item.children.length) {

@@ -27,6 +27,9 @@ pub struct TrayMenuItem {
     pub children: Vec<TrayMenuItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
+    /// 图标名（menu.js 的 ICONS 表）；None 不显示图标
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
 }
 
 impl TrayMenuItem {
@@ -37,6 +40,13 @@ impl TrayMenuItem {
             sep: false,
             children: Vec::new(),
             checked: None,
+            icon: None,
+        }
+    }
+    fn row_icon(id: &str, icon: &'static str, label: &str) -> Self {
+        Self {
+            icon: Some(icon),
+            ..Self::row(id, label)
         }
     }
     fn choice(id: &str, label: &str, checked: bool) -> Self {
@@ -58,6 +68,7 @@ impl TrayMenuItem {
             sep: true,
             children: Vec::new(),
             checked: None,
+            icon: None,
         }
     }
 }
@@ -66,38 +77,38 @@ impl TrayMenuItem {
 /// （打开应用与余额入口）。
 pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     let mut rows = vec![
-        TrayMenuItem::row(
-            "open",
+        TrayMenuItem::row_icon(
+            "open", "window",
             &format!(
                 "{} {}",
                 crate::locale::text("打开", "Open"),
                 crate::APP_TITLE
             ),
         ),
-        TrayMenuItem::row(
-            "open_browser",
+        TrayMenuItem::row_icon(
+            "open_browser", "globe",
             crate::locale::text("在浏览器中打开", "Open in browser"),
         ),
         TrayMenuItem::sep(),
-        TrayMenuItem::row(
-            "restart",
+        TrayMenuItem::row_icon(
+            "restart", "restart",
             crate::locale::text("重启服务", "Restart service"),
         ),
-        TrayMenuItem::row(
-            "check_update",
+        TrayMenuItem::row_icon(
+            "check_update", "download",
             crate::locale::text("检查更新…", "Check for updates…"),
         ),
-        TrayMenuItem::row(
-            "plugins",
+        TrayMenuItem::row_icon(
+            "plugins", "puzzle",
             crate::locale::text("插件管理…", "Plugin manager…"),
         ),
-        TrayMenuItem::row(
-            "session_diff",
+        TrayMenuItem::row_icon(
+            "session_diff", "file",
             crate::locale::text("会话文件变更…", "Session file changes…"),
         ),
         TrayMenuItem::sep(),
-        TrayMenuItem::row(
-            "autostart",
+        TrayMenuItem::row_icon(
+            "autostart", "power",
             &format!(
                 "{}: {}",
                 crate::locale::text("开机自启动", "Launch at startup"),
@@ -108,8 +119,8 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
                 }
             ),
         ),
-        TrayMenuItem::row(
-            "hide_tool_calls",
+        TrayMenuItem::row_icon(
+            "hide_tool_calls", "eye",
             &format!(
                 "{}: {}",
                 crate::locale::text("隐藏工具调用", "Hide tool calls"),
@@ -128,12 +139,12 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         rows.push(profile_item);
     }
     rows.push(TrayMenuItem::sep());
-    rows.push(TrayMenuItem::row(
-        "about",
+    rows.push(TrayMenuItem::row_icon(
+        "about", "info",
         crate::locale::text("关于", "About"),
     ));
-    rows.push(TrayMenuItem::row(
-        "quit",
+    rows.push(TrayMenuItem::row_icon(
+        "quit", "exit",
         crate::locale::text("退出", "Quit"),
     ));
     if tray_surface {

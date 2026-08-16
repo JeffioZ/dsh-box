@@ -112,10 +112,15 @@
     .about .cp { font-size: 11px; color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
 
     /* —— 插件管理（统一弹窗内） —— */
-    .psearch { display: flex; gap: 8px; margin-bottom: 8px; }
+    .psearch { display: flex; gap: 8px; margin-bottom: 8px; position: relative; align-items: center; }
+    .psearch-ic {
+      position: absolute; left: 10px; width: 15px; height: 15px; color: var(--dshd-text-dim);
+      pointer-events: none; display: inline-flex;
+    }
+    .psearch-ic svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .pinput {
       flex: 1; background: var(--dshd-hover); border: 1px solid var(--dshd-border);
-      border-radius: 8px; padding: 7px 10px; color: var(--dshd-text); font-size: 13px; outline: none;
+      border-radius: 8px; padding: 7px 10px 7px 32px; color: var(--dshd-text); font-size: 13px; outline: none;
     }
     .pinput:focus { border-color: var(--dshd-accent); }
     .pinput:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
@@ -137,11 +142,18 @@
     }
     .psection { margin-top: 10px; }
     .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
+    .pcount { font-weight: 400; color: var(--dshd-text-dim); font-size: 11px; }
     .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
     .pitem {
       display: flex; align-items: center; gap: 10px;
       border: 1px solid var(--dshd-border); border-radius: 10px; padding: 8px 12px;
       background: var(--dshd-hover);
+    }
+    .pitem .pmark {
+      flex: none; width: 28px; height: 28px; border-radius: 8px;
+      background: var(--dshd-pressed); color: var(--dshd-text);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 600; text-transform: uppercase;
     }
     .pitem .info { flex: 1; min-width: 0; }
     .pitem .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -169,6 +181,10 @@
     .sditem-head:hover { background: var(--dshd-hover); }
     .sditem-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .sditem-meta { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
+    .sditem-count {
+      font-size: 11px; padding: 1px 8px; border-radius: 999px; flex: none;
+      color: var(--dshd-text-dim); background: var(--dshd-hover); border: 1px solid var(--dshd-border);
+    }
     .sditem-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; flex: none; }
     .sditem-tag.ok { color: var(--dshd-success-text); background: rgba(63, 185, 80, .12); }
     .sditem-tag.no { color: var(--dshd-text-dim); background: var(--dshd-hover); }
@@ -513,6 +529,7 @@
       const body = $('body');
       body.innerHTML =
         '<div class="psearch">' +
+        '<span class="psearch-ic" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg></span>' +
         '<input class="pinput" id="p-query" type="search" placeholder="' + esc(dshdT('pluginSearchHint')) + '" autocomplete="off" spellcheck="false" />' +
         '<button type="button" class="dshd-btn" id="p-search">' + esc(dshdT('pluginSearch')) + '</button>' +
         '</div>' +
@@ -523,8 +540,11 @@
         '<button type="button" class="pcat-btn" data-cat="workflow">' + esc(dshdT('pluginCatWorkflow')) + '</button>' +
         '</div>' +
         '<div class="pstatus" id="p-status" role="status" aria-live="polite"></div>' +
-        '<div class="psection"><h3>' + esc(dshdT('pluginResults')) + '</h3><ul class="plist" id="p-results"></ul></div>' +
-        '<div class="psection"><h3>' + esc(dshdT('pluginInstalledTitle')) + '</h3><ul class="plist" id="p-installed"></ul></div>';
+        '<div class="psection hidden" id="p-results-sec">' +
+        '<h3>' + esc(dshdT('pluginResults')) + ' <span class="pcount" id="p-results-count"></span></h3>' +
+        '<ul class="plist" id="p-results"></ul></div>' +
+        '<div class="psection"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
+        '<ul class="plist" id="p-installed"></ul></div>';
       foot(dshdT('close'));
       $('p-search').addEventListener('click', () => doPluginSearch());
       $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(); });
@@ -533,7 +553,7 @@
           document.querySelectorAll('.pcat-btn').forEach((b) => b.classList.toggle('active', b === btn));
           const q = btn.dataset.cat ? CAT_QUERIES[btn.dataset.cat] : '';
           if (q) doPluginSearch(q);
-          else { $('p-query').value = ''; $('p-results').innerHTML = ''; }
+          else { $('p-query').value = ''; $('p-results-sec').classList.add('hidden'); $('p-results').innerHTML = ''; }
         });
       });
       refreshPlugins();
@@ -565,6 +585,13 @@
     function pluginItemRow(p, actions) {
       const li = document.createElement('li');
       li.className = 'pitem';
+      // 包名首字母徽标（无图标源时的视觉锚点）
+      const mark = document.createElement('span');
+      mark.className = 'pmark';
+      mark.setAttribute('aria-hidden', 'true');
+      const seg = p.name.replace(/^@[^/]+\//, ''); // 去 scope 前缀
+      mark.textContent = (seg[0] || '?').toUpperCase();
+      li.append(mark);
       const info = document.createElement('div');
       info.className = 'info';
       const name = document.createElement('div');
@@ -587,6 +614,8 @@
     function renderInstalled(list) {
       const ul = $('p-installed');
       if (!ul) return;
+      const countEl = $('p-installed-count');
+      if (countEl) countEl.textContent = list.length ? '(' + list.length + ')' : '';
       ul.textContent = '';
       if (!list.length) {
         const e = document.createElement('li');
@@ -615,8 +644,17 @@
       }
     }
     function renderResults(list) {
+      const sec = $('p-results-sec');
       const ul = $('p-results');
-      if (!ul) return;
+      if (!sec || !ul) return;
+      // 未搜索（null）：整个结果区隐藏，不显示空标题
+      if (list === null || list === undefined) {
+        sec.classList.add('hidden');
+        return;
+      }
+      sec.classList.remove('hidden');
+      const countEl = $('p-results-count');
+      if (countEl) countEl.textContent = list.length ? '(' + list.length + ')' : '';
       ul.textContent = '';
       if (!list.length) {
         const e = document.createElement('li');
@@ -702,9 +740,8 @@
         path.title = f.path;
         head.append(path);
         const meta = document.createElement('span');
-        meta.className = 'sditem-meta';
-        meta.textContent = dshdT('sessionDiffEdits', { count: f.edits.length }) +
-          (f.rewritten ? ' · ' + dshdT('sessionDiffRewritten') : '');
+        meta.className = 'sditem-count';
+        meta.textContent = dshdT('sessionDiffEdits', { count: f.edits.length });
         head.append(meta);
         const tag = document.createElement('span');
         tag.className = 'sditem-tag ' + (f.revertible ? 'ok' : 'no');
