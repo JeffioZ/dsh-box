@@ -1321,6 +1321,8 @@ pub fn run() {
             tray_menu::precreate(app.handle());
             // 标题栏余额常驻显示：后台每 5 分钟刷新一次
             balance::start_periodic_refresh(app.handle().clone());
+            // 运行期每 6 小时自动检查一次 dsh 更新（发现新版弹提示，不自动安装）
+            updater::start_periodic_check(app.handle().clone());
             // 跟随 dsh 的设置（语言/主题）：后台每 15s 读取 settings.yaml
             tray::start_follow_dsh_settings(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标
