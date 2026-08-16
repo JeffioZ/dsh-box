@@ -863,29 +863,30 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
 }
 
 /// 后台预下载应用更新（无需用户确认）：发现新版且未下载时自动下载，
-/// 完成后弹提示"重启应用以更新"。仅 Windows；下载失败静默记日志。
+/// 完成后弹提示"重启应用以更新"。仅 Windows（其他平台提示官网下载）；失败静默记日志。
 pub fn prefetch_app_update(app: &AppHandle) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static PREFETCHING: AtomicBool = AtomicBool::new(false);
-    if PREFETCHING.swap(true, Ordering::SeqCst) {
-        return; // 已有预下载在进行
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        return;
     }
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        // 作用域内复位标记（提前返回/正常结束都复位）
-        struct Reset;
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                PREFETCHING.store(false, Ordering::Release);
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static PREFETCHING: AtomicBool = AtomicBool::new(false);
+        if PREFETCHING.swap(true, Ordering::SeqCst) {
+            return; // 已有预下载在进行
+        }
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            // 作用域内复位标记（提前返回/正常结束都复位）
+            struct Reset;
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    PREFETCHING.store(false, Ordering::Release);
+                }
             }
-        }
-        let _reset = Reset;
-        #[cfg(not(windows))]
-        {
-            let _ = &handle;
-        }
-        #[cfg(windows)]
-        {
+            let _reset = Reset;
             let Some(info) = check_app_update() else {
                 return;
             };
@@ -914,8 +915,8 @@ pub fn prefetch_app_update(app: &AppHandle) {
                 .set_app_update_ready(Some(info.latest.clone()));
             crate::logging::log("updater: 应用更新已预下载，提示用户重启应用");
             prompt_apply_prefetched(&handle, &target, &info.latest);
-        }
-    });
+        });
+    }
 }
 
 /// 提示用户应用已下载的更新（"重启应用以完成更新"）。

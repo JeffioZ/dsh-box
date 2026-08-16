@@ -189,11 +189,23 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
         cmd.env(k, v);
     }
     // 输出重定向到临时文件：npm 输出可能远超管道缓冲（64KB），
-    // 若不持续读取会让子进程写阻塞，误触 5 分钟超时
+    // 若不持续读取会让子进程写阻塞，误触 5 分钟超时。
+    // 文件名做安全化：scope 包名含 @ / 等字符，Windows 文件名不允许
+    let safe_args: String = args
+        .join("_")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let out_path = std::env::temp_dir().join(format!(
         "dshd-plugin-{}-{}.log",
         std::process::id(),
-        args.join("-")
+        safe_args
     ));
     let out_file = std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
     cmd.stdout(out_file.try_clone().map_err(|e| format!("复制输出句柄失败：{e}"))?)
