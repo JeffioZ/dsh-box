@@ -140,6 +140,7 @@ const DSHD_MESSAGES = {
   sessionDiffTitle: ['会话文件变更', 'Session file changes'],
   skip: ['跳过', 'Skip'],
   startUsing: ['开始使用', 'Get started'],
+  stepOf: ['第 {n} 步 / 共 {total} 步', 'Step {n} of {total}'],
   theme: ['主题', 'Theme'],
   themeDark: ['深色', 'Dark'],
   themeLight: ['浅色', 'Light'],

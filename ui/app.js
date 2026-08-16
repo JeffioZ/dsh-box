@@ -77,6 +77,13 @@ function renderStatus(payload) {
   lastStatusPayload = payload;
   setStatus(payload.phase, payload.message, payload.detail);
   renderVersions(payload);
+  // 多步骤引导：安装 Node → 安装 dsh → 启动服务，显示"第 x 步 / 共 3 步"
+  const STEP_OF = { 'installing-node': 1, 'installing-dsh': 2, 'starting-server': 3 };
+  const step = STEP_OF[payload.phase];
+  const stepLine = step ? dshdT('stepOf', { n: step, total: 3 }) : '';
+  $('status-detail').textContent = stepLine
+    ? (stepLine + (payload.detail ? ' · ' + payload.detail : ''))
+    : (payload.detail || '');
   const progressBar = $('progress-bar');
   const fill = $('bar-fill');
   // 终态清除 inline width，避免覆盖 .done/.err 的 100%

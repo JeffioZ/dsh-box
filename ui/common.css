@@ -6,10 +6,12 @@
    供 tray-menu.html、dialog.html 引用；注入 dsh 页面的菜单脚本保持运行时
    读 dsh 令牌，仅回退色与本文件一致。 */
 :root {
+  --dshd-bg: #151517;
   --dshd-card: #353638;
   --dshd-text: #f9fafb;
   --dshd-text-dim: #adb2b8;
   --dshd-border: rgba(255, 255, 255, 0.06);
+  --dshd-border-strong: #3a3a46;
   --dshd-hover: rgba(255, 255, 255, 0.08);
   --dshd-pressed: rgba(255, 255, 255, 0.14);
   --dshd-accent: #4d6bfe;
@@ -17,18 +19,57 @@
   --dshd-accent-pressed: #3957cf;
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
+  --dshd-error: #f85149;
+  --dshd-success: #3fb950;
+  --dshd-success-text: #56d364;
+  --dshd-warning: #d29922;
   --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
   --dshd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
+
+  /* 字号层级（正文基准 13px，与 dsh 界面一致） */
+  --dshd-fs-xs: 11px;
+  --dshd-fs-sm: 12px;
+  --dshd-fs-base: 13px;
+  --dshd-fs-md: 14px;
+  --dshd-fs-lg: 20px;
+  --dshd-fs-xl: 22px;
+
+  /* 圆角层级 */
+  --dshd-r-sm: 8px;
+  --dshd-r-md: 10px;
+  --dshd-r-lg: 12px;
+  --dshd-r-pill: 999px;
+
+  /* 间距层级（4px 基准） */
+  --dshd-sp-1: 4px;
+  --dshd-sp-2: 8px;
+  --dshd-sp-3: 12px;
+  --dshd-sp-4: 16px;
+  --dshd-sp-5: 20px;
+
+  /* 动效 token：进入减速(ease-out)、离开加速、旋转/进度 linear；
+     时长按移动距离分层，不全局一刀切 */
+  --dshd-m-fast: 110ms;
+  --dshd-m-base: 140ms;
+  --dshd-m-slow: 200ms;
+  --dshd-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dshd-ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
 @media (prefers-color-scheme: light) {
   :root {
+    --dshd-bg: #f7f8fa;
     --dshd-card: #ffffff;
     --dshd-text: #0f1115;
     --dshd-text-dim: #656a73;
     --dshd-border: rgba(0, 0, 0, 0.06);
+    --dshd-border-strong: #d9dce3;
     --dshd-hover: rgba(38, 49, 72, 0.06);
     --dshd-pressed: rgba(38, 49, 72, 0.1);
+    --dshd-error: #b42318;
+    --dshd-success: #1a7f37;
+    --dshd-success-text: #1a7f37;
+    --dshd-warning: #9a6700;
     --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
     --dshd-scroll-thumb-hover: rgba(38, 49, 72, 0.4);
   }

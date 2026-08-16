@@ -8,15 +8,15 @@
   <link rel="stylesheet" href="common.css" />
   <style>
 :root {
-  --bg: #151517;
-  --card: #17171d;
-  --line: #26262e;
-  --text: #ececf1;
-  --muted: #8b8b94;
-  --blue: #4d6bfe;
-  --blue-dim: #3a52c9;
-  --red: #f85149;
-  --green: #3fb950;
+  --bg: var(--dshd-bg);
+  --card: var(--dshd-card);
+  --line: var(--dshd-border-strong);
+  --text: var(--dshd-text);
+  --muted: var(--dshd-text-dim);
+  --blue: var(--dshd-accent);
+  --blue-dim: var(--dshd-accent-hover);
+  --red: var(--dshd-error);
+  --green: var(--dshd-success);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
@@ -103,18 +103,8 @@ body.fade-out { opacity: 0; }
   .ob-input { background: #fff; }
 }
 
-/* 浅色系统主题适配（--bg 与 dsh 浅色主题纯白一致，切换无缝） */
+/* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #ffffff;
-    --card: #ffffff;
-    --line: #e2e4ea;
-    --text: #1b1b22;
-    --muted: #6a6a76;
-    --blue: #4d6bfe;
-    --blue-dim: #3a52c9;
-    --red: #b42318;
-  }
   body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
   .logo-wrap { box-shadow: 0 12px 40px rgba(77, 107, 254, .25); }
   .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
