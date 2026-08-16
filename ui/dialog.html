@@ -81,7 +81,7 @@
     .balance-part { min-width: 0; padding: 7px 9px; border: 1px solid var(--dshd-border); border-radius: 9px; background: var(--dshd-hover); }
     .balance-part span { display: block; font-size: 11px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .balance-part b { display: block; margin-top: 1px; color: var(--dshd-text); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .status { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dshd-border); display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim); }
+    .status { margin-top: 12px; padding-top: 10px; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim); }
     .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dshd-success); }
     .status .dot.warn { background: var(--dshd-warning); }
     .status .dot.err { background: var(--dshd-error); }
@@ -103,7 +103,7 @@
     .v-ok { color: var(--dshd-text-dim); font-size: 11px; margin-left: 6px; }
     .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .msg.success { color: var(--dshd-success-text); }
-    .msg.error { color: var(--dshd-error); }
+    .msg.error { color: var(--dshd-error-text); }
     .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
     .about .nm { font-size: 15px; font-weight: 600; }
     .about .tag { font-size: 12px; color: var(--dshd-text-dim); margin-top: -2px; }
@@ -129,10 +129,10 @@
     .pcat-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
     .pcat-btn.active { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; font-weight: 500; }
     .pstatus { min-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
-    .pstatus.err { color: var(--dshd-error); }
+    .pstatus.err { color: var(--dshd-error-text); }
     .pstatus.ok { color: var(--dshd-success-text); }
     @media (prefers-color-scheme: light) {
-      .pstatus.err { color: var(--dshd-error); }
+      .pstatus.err { color: var(--dshd-error-text); }
       .pstatus.ok { color: var(--dshd-success-text); }
     }
     .psection { margin-top: 10px; }
@@ -150,12 +150,12 @@
     .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
     /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
     .dshd-btn.danger {
-      background: rgba(248, 81, 73, .12); color: var(--dshd-error);
+      background: rgba(248, 81, 73, .12); color: var(--dshd-error-text);
       border-color: rgba(248, 81, 73, .35);
     }
     .dshd-btn.danger:hover { background: rgba(248, 81, 73, .2); }
     @media (prefers-color-scheme: light) {
-      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: var(--dshd-error); border-color: rgba(180, 35, 24, .35); }
+      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: var(--dshd-error-text); border-color: rgba(180, 35, 24, .35); }
       .dshd-btn.danger:hover { background: rgba(180, 35, 24, .14); }
     }
 
@@ -199,7 +199,7 @@
     }
     @media (prefers-color-scheme: light) {
       .msg.success { color: var(--dshd-success-text); }
-      .msg.error { color: var(--dshd-error); }
+      .msg.error { color: var(--dshd-error-text); }
     }
   </style>
 </head>

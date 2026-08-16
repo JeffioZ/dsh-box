@@ -20,6 +20,8 @@
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
   --dshd-error: #f85149;
+  /* 错误文字专用色：深色下比 error 更亮，保证正文对比度 ≥4.5:1 */
+  --dshd-error-text: #ff7b72;
   --dshd-success: #3fb950;
   --dshd-success-text: #56d364;
   --dshd-warning: #d29922;
@@ -67,6 +69,7 @@
     --dshd-hover: rgba(38, 49, 72, 0.06);
     --dshd-pressed: rgba(38, 49, 72, 0.1);
     --dshd-error: #b42318;
+    --dshd-error-text: #b42318;
     --dshd-success: #1a7f37;
     --dshd-success-text: #1a7f37;
     --dshd-warning: #9a6700;

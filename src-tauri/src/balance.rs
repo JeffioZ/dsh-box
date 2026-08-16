@@ -5,6 +5,7 @@
 //! 格式 `DEEPSEEK_API_KEY: sk-...`）。
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_state::{AppState, Config};
@@ -201,7 +202,16 @@ async fn run_balance_query(app: AppHandle) -> BalancePayload {
 fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
     let key = resolve_api_key(config).map_err(BalanceError::NoKey)?;
     let url = format!("{}/user/balance", config.api_base.trim_end_matches('/'));
-    let resp = crate::runtime::client()
+    // 余额是小请求：用短超时专用客户端。默认 client 的读超时 90s——
+    // 网络挂起时弹窗会长时间转圈，用户感知"余额一直 loading"。
+    let agent = ureq::Agent::config_builder()
+        .tls_config(crate::default_tls_config())
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_recv_response(Some(Duration::from_secs(5)))
+        .timeout_recv_body(Some(Duration::from_secs(10)))
+        .build()
+        .new_agent();
+    let resp = agent
         .get(&url)
         .header("Authorization", &format!("Bearer {key}"))
         .call()
