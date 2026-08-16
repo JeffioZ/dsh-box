@@ -109,13 +109,14 @@ function renderPop(data) {
   const balance = data.balances[0];
   const currency = esc(dshdCurrency(balance.currency)) + ' ';
   const format = (value) => esc(dshdBalanceValue(value));
-  const row = (label, value) =>
-    `<div class="pop-row"><span>${label}</span><b title="${format(value)}">${currency}${format(value)}</b></div>`;
+  // 明细改为双格卡片（与统一弹窗余额页的指标卡一致），视觉更聚焦
+  const part = (label, value) =>
+    `<div class="pop-part"><span>${label}</span><b title="${format(value)}">${currency}${format(value)}</b></div>`;
   // 明细仅在赠送 > 0 时展示：此时"总余额 = 已充值 + 赠送"的拆分才有信息量；
   // 赠送为 0 时两行与总数重复，不展示（用户此前反馈）
   const granted = parseFloat(balance.granted_balance || '0') || 0;
-  const rows = granted > 0
-    ? `<div class="pop-rows">${row(dshdT('toppedUpBalance'), balance.topped_up_balance)}${row(dshdT('grantedBalance'), balance.granted_balance)}</div>`
+  const parts = granted > 0
+    ? `<div class="pop-parts">${part(dshdT('toppedUpBalance'), balance.topped_up_balance)}${part(dshdT('grantedBalance'), balance.granted_balance)}</div>`
     : '';
   const updated = data.updated_at
     ? '<span class="pop-upd">' + dshdT('updatedAt', {
@@ -127,7 +128,7 @@ function renderPop(data) {
     : `<div class="pop-status"><span class="dot warn"></span>${dshdT('accountStatusUnavailable')}${updated}</div>`;
   setPopContent(
     `<div class="pop-total">${currency}${format(balance.total_balance)}<span class="cur">${esc(balance.currency)}</span></div>` +
-    rows + status,
+    parts + status,
   );
 }
 

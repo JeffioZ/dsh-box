@@ -72,7 +72,10 @@
     .hidden { display: none !important; }
 
     .body { flex: 1; min-height: 0; padding: 14px 18px; overflow-y: auto; }
-    .big { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
+    .big {
+      font-size: 24px; font-weight: 600; display: flex; align-items: baseline; gap: 6px;
+      letter-spacing: -.2px; padding: 2px 0 10px; border-bottom: 1px solid var(--dshd-border);
+    }
     .big .cur { font-size: 11px; color: var(--dshd-text-dim); font-weight: 400; }
     .balance-parts { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .balance-part { min-width: 0; padding: 7px 9px; border: 1px solid var(--dshd-border); border-radius: 9px; background: var(--dshd-hover); }
@@ -95,12 +98,17 @@
     .uprow .info { flex: 1; min-width: 0; }
     .uprow .name { font-weight: 500; }
     .uprow .ver { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .v-arrow { color: var(--dshd-text-dim); margin: 0 4px; font-size: 11px; }
+    .v-latest { color: var(--dshd-success-text); font-weight: 600; margin-left: 2px; }
+    .v-ok { color: var(--dshd-text-dim); font-size: 11px; margin-left: 6px; }
     .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .msg.success { color: var(--dshd-success-text); }
     .msg.error { color: var(--dshd-error); }
     .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
     .about .nm { font-size: 15px; font-weight: 600; }
-    .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .about .tag { font-size: 12px; color: var(--dshd-text-dim); margin-top: -2px; }
+    .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .about #about-check { margin-top: 4px; }
     .about .cp { font-size: 11px; color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
 
     /* —— 插件管理（统一弹窗内） —— */
@@ -291,6 +299,13 @@
       });
       document.getElementById(id).append(btn);
     }
+    // 版本对比行：当前版本弱化 + 箭头 + 最新版本高亮（可更新时）
+    function verHtml(cur, latest, available, okLabel) {
+      if (available) {
+        return esc(cur) + '<span class="v-arrow">→</span><b class="v-latest">' + esc(latest) + '</b>';
+      }
+      return esc(cur) + '<span class="v-ok">' + (okLabel || dshdT('upToDate')) + '</span>';
+    }
     function renderCheckResult(r) {
       if (openKind !== 'check') return;
       lastCheckResult = r;
@@ -298,7 +313,7 @@
       let html = '';
       if (r.dsh) {
         html += '<div class="uprow"><div class="info"><div class="name">dsh</div>' +
-          '<div class="ver">' + esc(r.dsh.installed) + (r.dsh.update_available ? ' → ' + esc(r.dsh.latest) : ' (' + dshdT('upToDate') + ')') + '</div></div>' +
+          '<div class="ver">' + verHtml(r.dsh.installed, r.dsh.latest, r.dsh.update_available) + '</div></div>' +
           '<span id="u-dsh"></span></div>';
       }
       if (r.node) {
@@ -311,9 +326,9 @@
           : dshdT('upToDateLts');
         const hint = r.node.latest_error ? ' title="' + esc(r.node.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">Node.js</div>' +
-          '<div class="ver"' + hint + '>' + esc(v) + (r.node.update_available
-            ? ' → ' + esc(r.node.latest_lts || dshdT('latestVersion'))
-            : (r.node.installed ? ' (' + label + ')' : '')) + '</div></div>' +
+          '<div class="ver"' + hint + '>' + (r.node.update_available
+            ? verHtml(v, r.node.latest_lts || dshdT('latestVersion'), true)
+            : (r.node.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
           '<span id="u-node"></span></div>';
       }
       if (r.pwsh) {
@@ -323,14 +338,14 @@
           : dshdT('upToDate');
         const hint = r.pwsh.latest_error ? ' title="' + esc(r.pwsh.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">PowerShell 7</div>' +
-          '<div class="ver"' + hint + '>' + esc(v) + (r.pwsh.update_available
-            ? ' → ' + esc(r.pwsh.latest || dshdT('latestVersion'))
-            : (r.pwsh.installed ? ' (' + label + ')' : '')) + '</div></div>' +
+          '<div class="ver"' + hint + '>' + (r.pwsh.update_available
+            ? verHtml(v, r.pwsh.latest || dshdT('latestVersion'), true)
+            : (r.pwsh.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
           '<span id="u-pwsh"></span></div>';
       }
       if (r.app) {
         html += '<div class="uprow"><div class="info"><div class="name">DSHDesktop</div>' +
-          '<div class="ver">' + esc(r.app.installed) + (r.app.update_available ? ' → ' + esc(r.app.latest) : ' (' + dshdT('upToDate') + ')') + '</div></div>' +
+          '<div class="ver">' + verHtml(r.app.installed, r.app.latest, r.app.update_available) + '</div></div>' +
           '<span id="u-app"></span></div>';
       }
       if (r.error) html += '<div class="msg">' + esc(r.error) + '</div>';
@@ -405,13 +420,17 @@
         '<div class="about">' +
         ABOUT_LOGO +
         '<div class="nm">DeepSeek Harness Desktop</div>' +
+        '<div class="tag">' + dshdT('aboutTagline') + '</div>' +
         '<div class="ver-row">' +
         '<span>' + dshdT('appVersion', { version: esc(initial.app_version) }) + '</span>' +
         '<span>dsh ' + esc(initial.dsh_version) + '</span>' +
         '</div>' +
+        '<button type="button" class="dshd-btn" id="about-check">' + dshdT('checkUpdates') + '</button>' +
         '<div class="cp">© ' + new Date().getFullYear() + ' JeffioZ</div>' +
         '</div>';
       foot(dshdT('close'));
+      const checkBtn = $('about-check');
+      if (checkBtn) checkBtn.addEventListener('click', () => navigateTo('check'));
     }
 
     // —— 左侧导航（单窗口多功能切换） ——

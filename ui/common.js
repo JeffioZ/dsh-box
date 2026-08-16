@@ -37,6 +37,7 @@ if (!window.__TAURI__) {
 }
 
 const DSHD_MESSAGES = {
+  aboutTagline: ['DeepSeek Harness 桌面外壳 · 薄壳不改内核', 'A thin desktop shell for DeepSeek Harness'],
   about: ['关于', 'About'],
   apiKey: ['API Key', 'API Key'],
   apiKeyHint: ['留空则之后在 dsh 设置页配置', 'Leave empty to configure later in dsh settings'],
@@ -141,6 +142,7 @@ const DSHD_MESSAGES = {
   skip: ['跳过', 'Skip'],
   startUsing: ['开始使用', 'Get started'],
   stepOf: ['第 {n} 步 / 共 {total} 步', 'Step {n} of {total}'],
+  tagline: ['本地智能体 · 一键启航', 'Local agent, one-click launch'],
   theme: ['主题', 'Theme'],
   themeDark: ['深色', 'Dark'],
   themeLight: ['浅色', 'Light'],

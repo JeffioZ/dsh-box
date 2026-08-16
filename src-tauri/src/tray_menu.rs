@@ -120,10 +120,11 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
                 }
             ),
         ),
-        TrayMenuItem::sep(),
     ];
-    // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）
+    // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）；
+    // 分隔线按需添加，避免无 profile 时 hide_tool_calls 与 about 之间出现双分隔线
     if let Some(profile_item) = profile_menu_item() {
+        rows.push(TrayMenuItem::sep());
         rows.push(profile_item);
     }
     rows.push(TrayMenuItem::sep());

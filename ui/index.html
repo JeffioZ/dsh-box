@@ -38,10 +38,17 @@ body.fade-out { opacity: 0; }
   background: var(--blue);
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 12px 40px rgba(77, 107, 254, .35);
+  /* 品牌呼吸光晕：启动等待期的视觉重心（减弱动态效果时关闭） */
+  animation: logo-breathe 2.8s ease-in-out infinite;
+}
+@keyframes logo-breathe {
+  0%, 100% { box-shadow: 0 12px 40px rgba(77, 107, 254, .32); transform: scale(1); }
+  50% { box-shadow: 0 14px 56px rgba(77, 107, 254, .55); transform: scale(1.02); }
 }
 .logo { width: 52px; height: 52px; }
 .logo path { fill: #fff; }
 .title { font-size: 22px; font-weight: 600; letter-spacing: .2px; margin-top: 6px; }
+.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: -16px; }
 
 .status { width: 100%; margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
 .status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
@@ -120,6 +127,7 @@ body.fade-out { opacity: 0; }
   body { transition: none; }
   .spinner { animation: none; }
   .bar-fill { animation: none; transition: none; }
+  .logo-wrap { animation: none; }
 }
 </style>
 </head>
@@ -130,6 +138,7 @@ body.fade-out { opacity: 0; }
         <img class="logo" src="assets/favicon.svg" alt="" />
       </div>
       <h1 class="title">DeepSeek Harness Desktop</h1>
+      <p class="tagline" data-i18n="tagline">本地智能体 · 一键启航</p>
 
       <div id="ob-box" class="ob-box hidden">
         <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
