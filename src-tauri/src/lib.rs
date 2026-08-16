@@ -22,6 +22,7 @@ mod onboarding;
 mod plugins;
 mod processes;
 mod runtime;
+mod session_diff;
 mod titlebar;
 mod tray;
 mod tray_menu;

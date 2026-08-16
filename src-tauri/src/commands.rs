@@ -164,6 +164,29 @@ pub async fn plugin_remove(
     crate::plugins::remove(&app, &name)
 }
 
+// ---------- 会话文件变更（session-diff 窗口调用） ----------
+
+/// 最新会话的文件改动汇总。
+#[tauri::command]
+pub fn session_changes(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::session_diff::SessionChanges, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::session_diff::changes(&app))
+}
+
+/// 还原指定文件到会话前状态（反向应用会话内全部 edit）。
+#[tauri::command]
+pub fn session_revert(
+    app: AppHandle,
+    webview: tauri::Webview,
+    path: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::session_diff::revert(&app, &path)
+}
+
 // ---------- 自绘标题栏（titlebar 子 webview 调用） ----------
 
 #[tauri::command]
@@ -366,6 +389,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         plugin_search,
         plugin_install,
         plugin_remove,
+        session_changes,
+        session_revert,
         crate::balance::api_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,

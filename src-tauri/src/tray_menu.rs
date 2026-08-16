@@ -91,6 +91,10 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             "plugins",
             crate::locale::text("插件管理…", "Plugin manager…"),
         ),
+        TrayMenuItem::row(
+            "session_diff",
+            crate::locale::text("会话文件变更…", "Session file changes…"),
+        ),
         TrayMenuItem::sep(),
         TrayMenuItem::row(
             "autostart",
