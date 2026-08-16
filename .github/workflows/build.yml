@@ -21,6 +21,8 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x64
+            # 面向用户的产物名（去掉技术化的 Rust target triple）
+            asset: windows-x64
             target: x86_64-pc-windows-msvc
             cross: ""
             timeout: 45
@@ -28,11 +30,14 @@ jobs:
           # 濒临退役、排队极慢的 macos-13 Intel runner）
           - os: macos-14
             name: macos-arm64
+            asset: macos-arm64
             target: aarch64-apple-darwin
             cross: x86_64-apple-darwin
+            cross-asset: macos-x64
             timeout: 90
           - os: ubuntu-latest
             name: linux-x64
+            asset: linux-x64
             target: x86_64-unknown-linux-gnu
             cross: ""
             timeout: 45
@@ -82,32 +87,38 @@ jobs:
         run: cargo build --locked --release --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml
 
       # artifact 上传不会保留 Unix 可执行位；先打 tar.gz，下载解压后可直接运行。
+      # 产物用面向用户的 asset 名（windows-x64/macos-arm64/linux-x64），
+      # 而非 Rust target triple。
       - name: Package artifact (native Unix)
         if: runner.os != 'Windows' && github.event_name != 'pull_request'
         shell: bash
-        run: tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "DSHDesktop-${{ matrix.target }}.tar.gz" DSHDesktop
+        run: tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "DSHDesktop-${{ matrix.asset }}.tar.gz" DSHDesktop
 
       - name: Package artifact (cross Unix)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         shell: bash
-        run: tar -C "src-tauri/target/${{ matrix.cross }}/release" -czf "DSHDesktop-${{ matrix.cross }}.tar.gz" DSHDesktop
+        run: tar -C "src-tauri/target/${{ matrix.cross }}/release" -czf "DSHDesktop-${{ matrix.cross-asset }}.tar.gz" DSHDesktop
+
+      - name: Rename Windows asset
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        run: cp "src-tauri/target/${{ matrix.target }}/release/DSHDesktop.exe" "DSHDesktop-${{ matrix.asset }}.exe"
 
       - name: Upload artifact (native)
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v6
         with:
-          name: DSHDesktop-${{ matrix.target }}
+          name: DSHDesktop-${{ matrix.asset }}
           path: |
-            src-tauri/target/${{ matrix.target }}/release/DSHDesktop.exe
-            DSHDesktop-${{ matrix.target }}.tar.gz
+            DSHDesktop-${{ matrix.asset }}.exe
+            DSHDesktop-${{ matrix.asset }}.tar.gz
           if-no-files-found: warn
 
       - name: Upload artifact (cross)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v6
         with:
-          name: DSHDesktop-${{ matrix.cross }}
+          name: DSHDesktop-${{ matrix.cross-asset }}
           path: |
-            src-tauri/target/${{ matrix.cross }}/release/DSHDesktop.exe
-            DSHDesktop-${{ matrix.cross }}.tar.gz
+            DSHDesktop-${{ matrix.cross-asset }}.tar.gz
           if-no-files-found: warn
