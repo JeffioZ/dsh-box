@@ -61,12 +61,28 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
 
 /// 首次使用配置未完成时停留启动页等待确认（save_onboarding 完成后补跳转）。
 /// 返回 true 表示已停留：调用方应直接返回，不再 navigate。
+/// 防御：等待上限 60 秒——若启动页因任何原因未显示配置面板（如 IPC 时序），
+/// 自动落 onboarded 标记并放行，避免永久卡在启动页。
 fn wait_onboarding(state: &AppState) -> bool {
     if !state.onboarding_pending() {
         return false;
     }
     crate::logging::log("boot: 首次使用配置未完成，停留启动页等待确认");
-    true
+    for _ in 0..60 {
+        std::thread::sleep(Duration::from_secs(1));
+        if !state.onboarding_pending() {
+            return false; // 用户已保存/跳过（config.json 已生成）
+        }
+    }
+    // 超时兜底：自动落标记并继续，避免启动页卡死
+    let config = state.config();
+    let _ = crate::app_state::save_config_value(
+        &config.root,
+        "onboarded",
+        serde_json::Value::Bool(true),
+    );
+    crate::logging::log("boot: 首次配置等待超时，自动跳过并进入界面");
+    false
 }
 
 /// 一轮完整引导；成功返回 Ok(())，失败返回错误信息。

@@ -766,15 +766,12 @@ impl AppState {
         Ok(())
     }
 
-    /// 首次使用配置是否尚未完成（config.json 无 `onboarded: true` 标记）。
-    /// boot 就绪后据此停留启动页等待确认，避免配置界面被导航盖掉。
+    /// 首次使用配置是否尚未完成：仅当数据目录完全没有 config.json（全新安装）
+    /// 时才需要引导。老用户升级（config.json 已存在，含窗口记忆/语言等）一律
+    /// 跳过——此前按 onboarded 标记判断会把升级用户误判为首次，导致 boot
+    /// 永久等待配置而无法进入 dsh 界面。
     pub(crate) fn onboarding_pending(&self) -> bool {
-        let config = self.config();
-        let text = std::fs::read_to_string(config.root.join("config.json")).unwrap_or_default();
-        serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|json| json.get("onboarded").and_then(|v| v.as_bool()))
-            != Some(true)
+        !self.config().root.join("config.json").is_file()
     }
 
     pub fn snapshot(&self) -> StatusPayload {

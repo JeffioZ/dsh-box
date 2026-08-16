@@ -133,13 +133,10 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     Ok(())
 }
 
-/// 是否首次使用：config.json 无 `onboarded: true`。
+/// 是否首次使用：仅当 config.json 完全不存在（全新安装）。
+/// 与 AppState::onboarding_pending 保持一致（老用户升级不再引导）。
 fn needs_onboarding(config: &app_state::Config) -> bool {
-    let text = std::fs::read_to_string(config.root.join("config.json")).unwrap_or_default();
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|json| json.get("onboarded").and_then(|v| v.as_bool()))
-        != Some(true)
+    !config.root.join("config.json").is_file()
 }
 
 /// dsh 凭据文件是否已配置 DEEPSEEK_API_KEY。
