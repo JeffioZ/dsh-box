@@ -67,42 +67,77 @@ mod webview2_check {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    /// 检查注册表中是否存在 WebView2 版本值。
-    fn reg_value_exists(root: HKEY, path: &str, value: &str) -> bool {
+    /// 读取注册表字符串值（如 WebView2 版本号）。
+    fn reg_read_string(root: HKEY, path: &str, value: &str) -> Option<String> {
         let path_w = to_wide(path);
         let value_w = to_wide(value);
         let mut hkey: HKEY = std::ptr::null_mut();
-        let status = unsafe { RegOpenKeyExW(root, path_w.as_ptr(), 0, KEY_QUERY_VALUE, &mut hkey) };
-        if status != 0 {
-            return false;
+        if unsafe { RegOpenKeyExW(root, path_w.as_ptr(), 0, KEY_QUERY_VALUE, &mut hkey) } != 0 {
+            return None;
         }
-        let mut buf = [0u8; 64];
-        let mut len = buf.len() as u32;
-        let result = unsafe {
+        let mut len = 0u32;
+        let status = unsafe {
             RegQueryValueExW(
                 hkey,
                 value_w.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null_mut(),
-                buf.as_mut_ptr(),
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if status != 0 || len == 0 {
+            unsafe {
+                let _ = RegCloseKey(hkey);
+            }
+            return None;
+        }
+        let mut buf = vec![0u16; (len / 2) as usize];
+        let status = unsafe {
+            RegQueryValueExW(
+                hkey,
+                value_w.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut u8,
                 &mut len,
             )
         };
         unsafe {
             let _ = RegCloseKey(hkey);
         }
-        result == 0
+        if status != 0 {
+            return None;
+        }
+        let s = String::from_utf16_lossy(&buf);
+        let s = s.trim_end_matches('\0').trim().to_string();
+        (!s.is_empty()).then_some(s)
     }
 
-    fn webview2_installed() -> bool {
+    /// 读取本机 WebView2 Evergreen Runtime 版本（任一注册表路径命中即可）。
+    fn webview2_version() -> Option<String> {
         for path in REG_PATHS {
-            if reg_value_exists(HKEY_LOCAL_MACHINE, path, "pv")
-                || reg_value_exists(HKEY_CURRENT_USER, path, "pv")
-            {
-                return true;
+            if let Some(v) = reg_read_string(HKEY_LOCAL_MACHINE, path, "pv") {
+                return Some(v);
+            }
+            if let Some(v) = reg_read_string(HKEY_CURRENT_USER, path, "pv") {
+                return Some(v);
             }
         }
-        false
+        None
+    }
+
+    /// 最低要求的 WebView2 主版本：tauri v2 依赖的 evergreen 运行时下限。
+    /// 低于此值视为“过旧”，引导用户运行官方安装器修复。
+    const MIN_WEBVIEW2_MAJOR: u32 = 100;
+
+    fn version_too_old(version: &str) -> bool {
+        let major = version
+            .split('.')
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        major < MIN_WEBVIEW2_MAJOR
     }
 
     fn msgbox(text: &str, title: &str, style: u32) -> i32 {
@@ -192,16 +227,32 @@ mod webview2_check {
         Ok(())
     }
 
-    /// 确保 WebView2 可用；缺失时下载官方引导安装器自动安装。
+    /// 确保 WebView2 可用；缺失或版本过旧时下载官方引导安装器安装/修复。
     /// 返回 false 表示未就绪（应退出）。
     pub fn ensure_webview2() -> bool {
-        if webview2_installed() {
-            return true;
+        match webview2_version() {
+            Some(v) if !version_too_old(&v) => {
+                return true; // 已安装且版本合格
+            }
+            _ => {}
         }
+        let too_old = webview2_version().is_some();
         // 自启动（--minimized）场景无人可问，直接静默安装（仍会弹 UAC）。
         let silent = std::env::args().any(|a| a == "--minimized");
         if !silent {
-            let prompt = if locale::is_chinese() {
+            let prompt = if too_old {
+                if locale::is_chinese() {
+                    format!(
+                        "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机检测到的 WebView2 版本过旧（{}），是否立即更新？\n（需联网下载安装组件，并弹出管理员授权提示，请选择“是”）",
+                        webview2_version().unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "{APP_TITLE} requires the Microsoft Edge WebView2 Runtime to display its interface.\n\nAn outdated WebView2 Runtime was found ({}). Update it now?\n(Internet access and an administrator approval prompt are required.)",
+                        webview2_version().unwrap_or_default()
+                    )
+                }
+            } else if locale::is_chinese() {
                 format!(
                     "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机未检测到该组件，是否立即自动安装？\n（需联网下载安装组件，并弹出管理员授权提示，请选择“是”）"
                 )
@@ -289,7 +340,7 @@ mod webview2_check {
         // 等待安装完成（最多 120 秒）
         for _ in 0..120 {
             std::thread::sleep(Duration::from_secs(1));
-            if webview2_installed() {
+            if webview2_version().is_some_and(|v| !version_too_old(&v)) {
                 let _ = std::fs::remove_file(&installer);
                 return true;
             }
