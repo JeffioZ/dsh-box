@@ -69,7 +69,8 @@
   "port": 3080,
   "api_key": "sk-...",
   "api_base": "https://api.deepseek.com",
-  "language": "zh-CN"
+  "language": "zh-CN",
+  "hide_tool_calls": false
 }
 ```
 

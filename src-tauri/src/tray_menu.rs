@@ -100,6 +100,18 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
                 }
             ),
         ),
+        TrayMenuItem::row(
+            "hide_tool_calls",
+            &format!(
+                "{}: {}",
+                crate::locale::text("隐藏工具调用", "Hide tool calls"),
+                if crate::app_state::Config::load().hide_tool_calls {
+                    crate::locale::text("已开启", "On")
+                } else {
+                    crate::locale::text("已关闭", "Off")
+                }
+            ),
+        ),
         TrayMenuItem::sep(),
         TrayMenuItem::parent(
             "language",

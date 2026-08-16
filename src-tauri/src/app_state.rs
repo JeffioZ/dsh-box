@@ -72,6 +72,8 @@ pub struct Config {
     pub api_base: String,
     /// Desktop shell UI language (zh-CN / en); None follows the OS.
     pub ui_language: Option<String>,
+    /// 隐藏 dsh 对话中的工具调用卡片（仅保留文本消息与最终输出）。
+    pub hide_tool_calls: bool,
 }
 
 impl Config {
@@ -97,6 +99,7 @@ impl Config {
             api_key: None,
             api_base,
             ui_language: None,
+            hide_tool_calls: false,
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
@@ -123,6 +126,9 @@ impl Config {
                     if matches!(language, "zh-CN" | "en") {
                         cfg.ui_language = Some(language.to_string());
                     }
+                }
+                if let Some(hide) = json.get("hide_tool_calls").and_then(|v| v.as_bool()) {
+                    cfg.hide_tool_calls = hide;
                 }
             }
         }
@@ -592,6 +598,15 @@ impl AppState {
         self.lock_inner().config.ui_language = Some(language.to_string());
         crate::locale::set_preference(Some(language));
         Ok(())
+    }
+
+    /// 切换“隐藏工具调用”开关，持久化到 config.json，返回新值。
+    pub fn toggle_hide_tool_calls(&self) -> Result<bool, String> {
+        let config = self.config();
+        let next = !config.hide_tool_calls;
+        save_config_value(&config.root, "hide_tool_calls", serde_json::Value::Bool(next))?;
+        self.lock_inner().config.hide_tool_calls = next;
+        Ok(next)
     }
 
     pub fn snapshot(&self) -> StatusPayload {

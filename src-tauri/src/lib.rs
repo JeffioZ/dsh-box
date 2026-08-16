@@ -1040,6 +1040,22 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// 应用“隐藏工具调用”开关到 dsh 页面：开启注入隐藏样式，关闭移除。
+/// 导航注入与菜单切换共用同一逻辑。
+pub fn apply_hide_tools(app: &AppHandle) {
+    let hide = app.state::<AppState>().config().hide_tool_calls;
+    let script = if hide {
+        "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
+         s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
+         document.documentElement.appendChild(s);}"
+    } else {
+        "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();"
+    };
+    if let Some(wv) = main_webview(app) {
+        let _ = wv.eval(script.to_string());
+    }
+}
+
 /// 页面心跳注入：dsh 页面每 10s 上报一次存活标记。
 /// 页面主线程挂起/崩溃时 setInterval 停摆，Rust 侧据此重载自愈（见 heartbeat.rs）。
 const HEARTBEAT_INJECT: &str = r#"
@@ -1087,6 +1103,13 @@ pub fn navigate(app: &AppHandle, url: &str) {
                 // 单实例：重复 navigate 不叠加观察器/菜单监听；
                 // MutationObserver 只在 title 真正变化时拉回（无常驻轮询开销）；
                 // 右键菜单定制一并注入（此通道在 dsh 页面生效）
+                let hide_tools = if handle.state::<AppState>().config().hide_tool_calls {
+                    "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
+                     s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
+                     document.documentElement.appendChild(s);}"
+                } else {
+                    ""
+                };
                 let _ = wv.eval(format!(
                     "(() => {{ if (window.__dshdInit) return; window.__dshdInit = true; \
                      window.__dshdProtocolToken = {protocol_token}; \
@@ -1095,9 +1118,10 @@ pub fn navigate(app: &AppHandle, url: &str) {
                      fix(); \
                      const el = document.querySelector('head > title'); \
                      if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-                     {menu} {heartbeat} }})();",
+                     {menu} {heartbeat} {hide_tools} }})();",
                     menu = MENU_INJECT,
                     heartbeat = HEARTBEAT_INJECT,
+                    hide_tools = hide_tools,
                     protocol_token = protocol_token,
                 ));
             }

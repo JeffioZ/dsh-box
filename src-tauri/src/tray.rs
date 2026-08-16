@@ -169,6 +169,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "restart" => restart_from_tray(app),
         "check_update" => crate::app_dialog::open_check(app),
         "autostart" => toggle_autostart(app),
+        "hide_tool_calls" => toggle_hide_tool_calls(app),
         "language_zh" => change_language(app, "zh-CN"),
         "language_en" => change_language(app, "en"),
         "about" => crate::app_dialog::open_about(app),
@@ -466,6 +467,19 @@ fn restart_from_tray(app: &AppHandle) {
             );
         }
     });
+}
+
+fn toggle_hide_tool_calls(app: &AppHandle) {
+    match app.state::<AppState>().toggle_hide_tool_calls() {
+        Ok(on) => {
+            crate::logging::log(&format!(
+                "hide-tools: 已{}隐藏工具调用",
+                if on { "开启" } else { "关闭" }
+            ));
+            crate::apply_hide_tools(app);
+        }
+        Err(e) => crate::logging::log(&format!("hide-tools: 保存失败：{e}")),
+    }
 }
 
 fn toggle_autostart(app: &AppHandle) {
