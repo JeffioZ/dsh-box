@@ -442,8 +442,9 @@ function openSub(parentNode, list) {
 
 function closeSubSoon() {
   clearTimeout(subTimer);
-  // 容差放宽：慢速移动鼠标跨过间隙时不至于误关
-  subTimer = setTimeout(closeSub, 350);
+  // 容差：慢速移动鼠标跨过父项与子菜单间隙时不至于误关。
+  // 150ms 兼顾跟手（移走后快速收起）与防误关
+  subTimer = setTimeout(closeSub, 150);
 }
 
 function show(x, y, list) {

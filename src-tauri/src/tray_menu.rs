@@ -150,8 +150,9 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     if tray_surface {
         rows.insert(
             1,
-            TrayMenuItem::row(
+            TrayMenuItem::row_icon(
                 "balance",
+                "wallet",
                 crate::locale::text("查询 API 余额…", "Check API balance…"),
             ),
         );

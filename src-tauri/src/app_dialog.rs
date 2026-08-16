@@ -224,8 +224,9 @@ pub fn open_balance(app: &AppHandle) {
     );
     let handle = app.clone();
     let config = app.state::<AppState>().config();
-    // 清空旧结果：轮询期间显示“查询中…”而非上次的陈旧数据
-    handle.state::<AppState>().set_last_balance(None);
+    // stale-while-revalidate：保留上次缓存立即渲染（打开不长时间转圈），
+    // 后台刷新完成后替换。首次打开无缓存时短暂显示“查询中…”，
+    // 查询 ≤10s 短超时内完成
     std::thread::spawn(move || {
         let payload = crate::balance::query_balance(&config);
         handle.state::<AppState>().set_last_balance(Some(payload));
