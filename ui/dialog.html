@@ -79,9 +79,9 @@
     .balance-part span { display: block; font-size: 11px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .balance-part b { display: block; margin-top: 1px; color: var(--dshd-text); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .status { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dshd-border); display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim); }
-    .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; }
-    .status .dot.warn { background: #d29922; }
-    .status .dot.err { background: #f85149; }
+    .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dshd-success); }
+    .status .dot.warn { background: var(--dshd-warning); }
+    .status .dot.err { background: var(--dshd-error); }
     .status .upd { margin-left: auto; font-size: 11px; }
     .spin {
       display: inline-block; width: 12px; height: 12px; margin-right: 8px;
@@ -96,8 +96,8 @@
     .uprow .name { font-weight: 500; }
     .uprow .ver { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-    .msg.success { color: #56d364; }
-    .msg.error { color: #ff7b72; }
+    .msg.success { color: var(--dshd-success-text); }
+    .msg.error { color: var(--dshd-error); }
     .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
     .about .nm { font-size: 15px; font-weight: 600; }
     .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
@@ -121,11 +121,11 @@
     .pcat-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
     .pcat-btn.active { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; font-weight: 500; }
     .pstatus { min-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
-    .pstatus.err { color: #ff7b72; }
-    .pstatus.ok { color: #56d364; }
+    .pstatus.err { color: var(--dshd-error); }
+    .pstatus.ok { color: var(--dshd-success-text); }
     @media (prefers-color-scheme: light) {
-      .pstatus.err { color: #b42318; }
-      .pstatus.ok { color: #1a7f37; }
+      .pstatus.err { color: var(--dshd-error); }
+      .pstatus.ok { color: var(--dshd-success-text); }
     }
     .psection { margin-top: 10px; }
     .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
@@ -142,12 +142,12 @@
     .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
     /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
     .dshd-btn.danger {
-      background: rgba(248, 81, 73, .12); color: #f85149;
+      background: rgba(248, 81, 73, .12); color: var(--dshd-error);
       border-color: rgba(248, 81, 73, .35);
     }
     .dshd-btn.danger:hover { background: rgba(248, 81, 73, .2); }
     @media (prefers-color-scheme: light) {
-      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: #b42318; border-color: rgba(180, 35, 24, .35); }
+      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: var(--dshd-error); border-color: rgba(180, 35, 24, .35); }
       .dshd-btn.danger:hover { background: rgba(180, 35, 24, .14); }
     }
 
@@ -162,9 +162,9 @@
     .sditem-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .sditem-meta { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
     .sditem-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; flex: none; }
-    .sditem-tag.ok { color: #56d364; background: rgba(63, 185, 80, .12); }
+    .sditem-tag.ok { color: var(--dshd-success-text); background: rgba(63, 185, 80, .12); }
     .sditem-tag.no { color: var(--dshd-text-dim); background: var(--dshd-hover); }
-    @media (prefers-color-scheme: light) { .sditem-tag.ok { color: #1a7f37; } }
+    @media (prefers-color-scheme: light) { .sditem-tag.ok { color: var(--dshd-success-text); } }
     .sddiff { display: none; border-top: 1px solid var(--dshd-border); padding: 8px 12px; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
     .sditem.open .sddiff { display: flex; }
     .dop { font-size: 12px; }
@@ -190,8 +190,8 @@
       .dshd-refresh.refreshing svg { animation: none; }
     }
     @media (prefers-color-scheme: light) {
-      .msg.success { color: #1a7f37; }
-      .msg.error { color: #b42318; }
+      .msg.success { color: var(--dshd-success-text); }
+      .msg.error { color: var(--dshd-error); }
     }
   </style>
 </head>

@@ -20,7 +20,7 @@
 html, body { height: 100%; overflow: hidden; }
 body {
   background: transparent;
-  color: #f9fafb;
+  color: var(--dshd-text);
   font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   user-select: none;
 }
@@ -39,9 +39,9 @@ body.window-inactive .balance-chip { opacity: .55; }
    导致平时无分隔线、浮层展开加高时才“多出”一条线——错误观感） */
 .titlebar::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
-  background: rgba(255, 255, 255, .06);
+  background: var(--dshd-border);
 }
-.brand { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #adb2b8; white-space: nowrap; }
+.brand { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; }
 .brand-icon { width: 16px; height: 16px; -webkit-user-drag: none; user-drag: none; }
 .drag-space { flex: 1; height: 100%; }
 
@@ -54,20 +54,20 @@ body.window-inactive .balance-chip { opacity: .55; }
 .balance-chip {
   display: inline-flex; align-items: center; gap: 6px;
   color: inherit; font: inherit;
-  background: #101014; border: 1px solid #26262e; border-radius: 999px;
+  background: #101014; border: 1px solid var(--dshd-border-strong); border-radius: 999px;
   padding: 3px 10px; font-size: 11.5px; line-height: 1; cursor: pointer;
   transition: background-color .16s ease, border-color .16s ease;
 }
 .balance-wrap:hover .balance-chip,
-.balance-chip:focus-visible { border-color: #3a3a46; }
+.balance-chip:focus-visible { border-color: var(--dshd-border-strong); }
 .balance-chip:focus-visible,
 .tb-btn:focus-visible {
   /* 焦点环与全局强调色一致（dshd-accent） */
   outline: 2px solid var(--dshd-accent); outline-offset: -2px;
 }
-.balance-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; }
-.balance-chip .dot.warn { background: #d29922; }
-.balance-chip .dot.err { background: #f85149; }
+.balance-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dshd-success); }
+.balance-chip .dot.warn { background: var(--dshd-warning); }
+.balance-chip .dot.err { background: var(--dshd-error); }
 
 .balance-pop {
   /* 定位规则见 :root 注释：入口下方 0 间距、右缘对齐 */
@@ -76,7 +76,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   width: max-content; min-width: 180px; max-width: 320px;
   /* 卡片色与 dsh 菜单面一致（bluish-800）；上缘不画边框，
      分隔交给标题栏的分层线，避免两条亮线叠出“发亮接缝” */
-  background: #353638; border: 1px solid rgba(255, 255, 255, .06); border-top: none; border-radius: 12px;
+  background: var(--dshd-card); border: 1px solid var(--dshd-border); border-top: none; border-radius: var(--dshd-r-lg);
   /* 双层阴影：近距细影+远距柔影；blur/offset 控制在展开高度内，避免底缘被视口裁切 */
   box-shadow: var(--tb-overlay-shadow);
   padding: 12px 14px;
@@ -88,15 +88,15 @@ body.window-inactive .balance-chip { opacity: .55; }
 .balance-wrap.open .balance-pop {
   opacity: 1; transform: translateY(0); pointer-events: auto;
 }
-.pop-head { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #adb2b8; margin-bottom: 6px; letter-spacing: .3px; }
+.pop-head { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dshd-text-dim); margin-bottom: 6px; letter-spacing: .3px; }
 .pop-head-label { flex: 1; min-width: 0; }
 .pop-refresh {
   flex: none; width: 24px; height: 24px; border: none; border-radius: 7px;
-  background: transparent; color: #adb2b8; cursor: pointer;
+  background: transparent; color: var(--dshd-text-dim); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   padding: 0; outline: none;
 }
-.pop-refresh:hover { background: rgba(255, 255, 255, .08); color: #f9fafb; }
+.pop-refresh:hover { background: rgba(255, 255, 255, .08); color: var(--dshd-text); }
 .pop-refresh { transition: background-color .12s ease, color .12s ease; }
 .pop-refresh:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .pop-refresh:disabled { cursor: default; opacity: .5; }
@@ -107,24 +107,24 @@ body.window-inactive .balance-chip { opacity: .55; }
 }
 .pop-refresh.refreshing .refresh-glyph { animation: refresh-spin .8s linear infinite; }
 @keyframes refresh-spin { to { transform: rotate(360deg); } }
-.pop-error-title { margin-bottom: 4px; color: #f9fafb; font-size: 12px; font-weight: 500; }
+.pop-error-title { margin-bottom: 4px; color: var(--dshd-text); font-size: 12px; font-weight: 500; }
 .pop-total { font-size: 20px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
-.pop-total .cur { font-size: 11px; color: #adb2b8; font-weight: 400; }
+.pop-total .cur { font-size: 11px; color: var(--dshd-text-dim); font-weight: 400; }
 .pop-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-.pop-row { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; color: #adb2b8; }
+.pop-row { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; color: var(--dshd-text-dim); }
 .pop-row b {
-  color: #f9fafb; font-weight: 500; white-space: nowrap;
+  color: var(--dshd-text); font-weight: 500; white-space: nowrap;
   max-width: 210px; overflow: hidden; text-overflow: ellipsis;
 }
 .pop-status {
-  margin-top: 10px; padding-top: 10px; border-top: 1px solid #26262e;
-  display: flex; align-items: center; gap: 7px; font-size: 12px; color: #adb2b8;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dshd-border-strong);
+  display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim);
 }
-.pop-status .dot { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; }
-.pop-status .dot.warn { background: #d29922; }
-.pop-status .dot.err { background: #f85149; }
+.pop-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dshd-success); }
+.pop-status .dot.warn { background: var(--dshd-warning); }
+.pop-status .dot.err { background: var(--dshd-error); }
 .pop-upd { margin-left: auto; font-size: 11px; white-space: nowrap; }
-.pop-error { font-size: 12px; line-height: 1.6; color: #b9b9c2; white-space: pre-wrap; word-break: break-all; }
+.pop-error { font-size: 12px; line-height: 1.6; color: var(--dshd-text-dim); white-space: pre-wrap; word-break: break-all; }
 
 /* ---------- 标题栏主菜单（与托盘菜单共用 menu.js / common.css） ---------- */
 .main-menu-wrap { position: relative; height: 100%; display: inline-flex; align-items: center; }
@@ -135,7 +135,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px）：标题栏页面无基础字号，
      不显式设置会落到浏览器默认 16px，与托盘菜单产生字号差 */
   font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  background: #353638; border: 1px solid rgba(255, 255, 255, .06); border-top: none; border-radius: 12px;
+  background: var(--dshd-card); border: 1px solid var(--dshd-border); border-top: none; border-radius: var(--dshd-r-lg);
   box-shadow: var(--tb-overlay-shadow);
   opacity: 0; transform: translateY(-4px); pointer-events: none;
   transition: opacity .14s ease, transform .14s ease;
@@ -148,15 +148,15 @@ body.window-inactive .balance-chip { opacity: .55; }
 .win-buttons { display: flex; height: 100%; margin-left: -8px; }
 .tb-btn {
   width: 46px; height: 100%; border: none; background: transparent;
-  color: #9a9aa5; cursor: pointer;
+  color: var(--dshd-text-dim); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background-color .14s ease, color .14s ease;
 }
-.tb-btn:hover { background: #2c2c36; color: #f9fafb; }
+.tb-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 .tb-btn:active,
-.main-menu-wrap.open .tb-btn.menu { background: #3a3a46; color: #fff; }
-.tb-btn.close:hover { background: #e81123; color: #fff; }
-.tb-btn.close:active { background: #c50f1f; color: #fff; }
+.main-menu-wrap.open .tb-btn.menu { background: var(--dshd-pressed); color: var(--dshd-text); }
+.tb-btn.close:hover { background: var(--dshd-danger); color: #fff; }
+.tb-btn.close:active { background: var(--dshd-danger-pressed); color: #fff; }
 .tb-glyph {
   font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
   font-size: 10px; line-height: 1; -webkit-font-smoothing: antialiased;
@@ -205,30 +205,14 @@ body.linux .win-buttons .tb-btn.maximized .css-restore { display: block; }
 /* macOS：系统红绿灯悬浮于左侧，标题栏内容让位 */
 body.macos .titlebar { padding-left: 82px; }
 
-/* 浅色系统主题适配 */
+/* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留标题栏专用覆盖） */
 @media (prefers-color-scheme: light) {
-  body { color: #1b1b22; }
   /* 阴影令牌统一切换：两个浮层同一处生效 */
   :root { --tb-overlay-shadow: 0 4px 12px rgba(0, 0, 0, .10); }
   /* 浅色标题栏底色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
   .titlebar { background: #fcfcfd; }
   .titlebar::after { background: rgba(0, 0, 0, .04); }
-  .brand { color: #6a6a76; }
   .balance-chip { background: #f4f5f8; border-color: #e2e4ea; }
-  .balance-pop { background: #ffffff; border-color: #e2e4ea; }
-  .pop-refresh { color: #6a6a76; }
-  .pop-refresh:hover { background: rgba(38, 49, 72, .06); color: #1b1b22; }
-  .pop-error-title { color: #1b1b22; }
-  .main-menu-panel { background: #ffffff; border-color: #e2e4ea; }
-  .pop-row b { color: #1b1b22; }
-  .pop-status { border-top-color: #e2e4ea; }
-  .pop-error { color: #4a4a55; }
-  .tb-btn { color: #6a6a76; }
-  .tb-btn:hover { background: #e6e8ef; color: #1b1b22; }
-  .tb-btn:active,
-  .main-menu-wrap.open .tb-btn.menu { background: #d8dbe4; color: #1b1b22; }
-  .tb-btn.close:hover { background: #e81123; color: #fff; }
-  .tb-btn.close:active { background: #c50f1f; color: #fff; }
   body.window-inactive .brand { color: #a6a6b2; }
   body.window-inactive .tb-btn { color: #9c9ca8; }
 }
