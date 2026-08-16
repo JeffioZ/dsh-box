@@ -1,6 +1,6 @@
 # DSHDesktop
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面加载官方 `dsh web`，并补充桌面标题栏、托盘、更新与本地文件菜单。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、托盘、一键更新与本地文件菜单。
 
 ## 目录
 
@@ -10,7 +10,7 @@
 - [配置](#配置)
 - [构建](#构建)
 - [项目结构](#项目结构)
-- [开发约定](#开发约定)
+- [边界与规划](#边界与规划)
 - [许可](#许可)
 
 ## 功能
@@ -34,13 +34,13 @@
 | 平台 | 架构 | 最低系统版本 | 状态 |
 |---|---|---|---|
 | Windows | x64 | Windows 10 及以上 | 支持；主要测试平台 |
-| macOS | arm64 / x64 | macOS 11.0 (Big Sur) 及以上 | 支持；CI 产物未签名 |
+| macOS | arm64 / x64 | macOS 13.5 及以上 | 支持；CI 产物未签名 |
 | Linux | x64 / arm64 | Ubuntu 22.04 / Debian 12 及等价发行版（WebKitGTK 4.1） | 支持 |
 
-最低版本由底层依赖的上限决定（dsh 本身是纯 Node.js 工具，三平台通用）：
+最低版本取各底层依赖中最严格的一个（dsh 本身是纯 Node.js 工具，三平台通用）：
 
 - **Windows 10**：Node.js 22 的最低支持版本；WebView2 支持 1803+（Win11 预装，较老系统由外壳引导安装 Runtime）
-- **macOS 11.0**：Node.js 22 的 Tier 1 支持下限（高于 Tauri v2 的 10.15）
+- **macOS 13.5**：外壳自动安装的 Node.js 24 LTS 要求 macOS 13.5+
 - **Ubuntu 22.04 / Debian 12**：Tauri v2 依赖 WebKitGTK 4.1（高于 Node 的 glibc 2.28 要求）
 
 Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；不满足时 dsh 自动降级，不影响 Web 主界面运行。
@@ -52,9 +52,9 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 - Windows：直接运行 `DSHDesktop.exe`
 - macOS / Linux：解压 `.zip` 后运行 `DSHDesktop`
 
-各平台产物的提供情况以最新 Release 附件为准；仓库的 GitHub Actions 也会产出各平台构建 artifacts。所有产物均未签名，系统安全策略可能要求手动允许。
+各平台产物以最新 Release 附件为准，GitHub Actions 也会产出各平台的构建产物。所有产物均未签名，系统安全策略可能要求手动允许。
 
-首次运行会自动安装 Node.js（缺失或版本不满足要求时）与 dsh 包，随后启动 `dsh web`（默认端口 3080）。Linux 仍需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
+首次运行会自动补齐运行环境——按需安装 Node.js 与 dsh 包——随后启动 `dsh web`（默认端口 3080）。Linux 还需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
 
 ## 配置
 
@@ -178,20 +178,18 @@ desktop/
 
 ## 边界与规划
 
-DSHDesktop 是 dsh 的**薄外壳**：不 fork、不 patch 官方 dsh，与 dsh 只通过注入页面脚本、读写 `$DSH_HOME` 配置、调用 dsh CLI 三条通道交互，因此始终跟随官方升级。我们刻意不重做 dsh 的 Web UI、不把应用做成 IDE、不复制会话数据到第二套数据库。更完整的设计取舍见 [docs/why-desktop.md](docs/why-desktop.md)。
+DSHDesktop 是 dsh 的**桌面封装**，而不是另一套实现：
 
-规划中的能力（尚未交付，不在本期功能内）：
+- **不改动 dsh**：主界面直接加载官方 `dsh web`，dsh 照常独立升级，外壳随之跟进
+- **只做桌面层**：托盘、标题栏、系统通知、更新、本地文件菜单等桌面体验；不重复实现 dsh 的对话与会话能力，也不另存一份会话数据
+- **交互克制**：仅通过 dsh 官方提供的页面、数据文件与 CLI 与之协作，不依赖任何未公开的内部接口
 
-- 手机远程控制（在手机浏览器/App 中继续本机会话）
-- IM 通道（在微信/飞书等聊天工具中向 Agent 发起任务）
-- 会话文件变更追踪与还原、插件市场等桌面增强（按版本逐步发布）
+更多设计取舍见 [docs/why-desktop.md](docs/why-desktop.md)。
 
-## 开发约定
+规划中的能力（尚未交付）：
 
-- 提交信息使用 Conventional Commits 风格
-- 推荐使用 PowerShell 7（pwsh）执行构建脚本；脚本兼容系统自带 Windows PowerShell 5.1
-- 图标改动后需 `npm run icons` 并重新构建
-- 本项目由 AI（DeepSeek 智能体）辅助开发与维护，改动经人工审阅
+- 手机远程控制：在手机浏览器/App 中继续本机会话
+- IM 通道：在微信/飞书等聊天工具中向 Agent 发起任务
 
 ## 许可
 
@@ -199,4 +197,4 @@ DSHDesktop 是 dsh 的**薄外壳**：不 fork、不 patch 官方 dsh，与 dsh 
 
 ## 致谢
 
-感谢 DeepSeek Harness 团队与开源社区，以及同类桌面端项目带来的启发；感谢每一位参与测试与反馈的用户。
+感谢 DeepSeek Harness 团队与开源社区，以及每一位参与测试与反馈的用户。

@@ -482,8 +482,8 @@ fn update_pwsh(app: &AppHandle) -> Result<(), String> {
     {
         let _ = app;
         Err(crate::locale::text(
-            "PowerShell 仅支持在 Windows 上安装更新；macOS/Linux 请使用系统自带终端。",
-            "PowerShell updates are supported only on Windows. Use the system terminal on macOS/Linux.",
+            "PowerShell 更新仅支持 Windows。",
+            "PowerShell updates are supported only on Windows.",
         )
         .into())
     }
@@ -580,8 +580,8 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
             Ok(())
         }
         None => Err(crate::locale::text(
-            "winget 报告成功，但未检测到 pwsh，请打开新的终端确认。",
-            "winget reported success, but pwsh was not detected. Open a new terminal and check again.",
+            "winget 报告成功，但尚未检测到 pwsh，请稍后重试或重新打开 PowerShell 确认。",
+            "winget reported success, but pwsh was not detected. Please retry later or reopen PowerShell to confirm.",
         )
         .into()),
     }
@@ -749,15 +749,15 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
         let bytes = std::fs::read(&target).map_err(|e| format!("读取下载文件失败：{e}"))?;
         if bytes.len() < 1024 * 1024 {
             return Err(crate::locale::text(
-                "下载的文件大小异常，已中止更新。",
-                "The downloaded file size looks wrong. Update aborted.",
+                "下载的文件大小异常，已取消更新。",
+                "The downloaded file size looks wrong. Update cancelled.",
             )
             .into());
         }
         if bytes.get(0..2) != Some(b"MZ") {
             return Err(crate::locale::text(
-                "下载的文件不是有效的程序，已中止更新。",
-                "The downloaded file is not a valid program. Update aborted.",
+                "下载的文件不是有效的程序，已取消更新。",
+                "The downloaded file is not a valid program. Update cancelled.",
             )
             .into());
         }

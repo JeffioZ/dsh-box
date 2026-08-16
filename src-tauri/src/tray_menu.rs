@@ -130,7 +130,7 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             ],
         ),
     ];
-    // 多 profile 时追加“启动 profile”子菜单（单选，切换后重启生效）
+    // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）
     if let Some(profile_item) = profile_menu_item() {
         rows.push(profile_item);
     }
@@ -157,7 +157,7 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows
 }
 
-/// “启动 profile”子菜单：多个可用 profile 时显示（单选，切换后重启生效）。
+/// “启动配置”子菜单：多个可用 profile 时显示（单选，切换后重启生效）。
 fn profile_menu_item() -> Option<TrayMenuItem> {
     let config = crate::app_state::Config::load();
     let profiles = crate::app_state::list_profiles(&config);
@@ -166,7 +166,7 @@ fn profile_menu_item() -> Option<TrayMenuItem> {
     }
     Some(TrayMenuItem::parent(
         "profile",
-        crate::locale::text("启动 profile", "Launch profile"),
+        crate::locale::text("启动配置", "Launch profile"),
         profiles
             .into_iter()
             .map(|name| {
