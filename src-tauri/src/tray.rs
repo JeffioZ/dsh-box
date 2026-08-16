@@ -5,7 +5,9 @@
 //! - macOS/Linux：使用系统原生托盘菜单（macOS 菜单栏点击即弹菜单、
 //!   Linux AppIndicator 亦是左键菜单），稳定可靠，无需自绘替代。
 
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
+#[cfg(windows)]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
 use crate::app_state::AppState;

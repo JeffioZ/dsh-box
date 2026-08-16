@@ -280,9 +280,11 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     if let Ok(size) = win.inner_size() {
         // 位置是逻辑坐标（乘缩放换物理）；inner_size 本身已是物理像素
         let (x0, y0) = ((x * scale) as i32, (y * scale) as i32);
-        let (x1, y1) = (x0 + size.width as i32, y0 + size.height as i32);
         #[cfg(windows)]
-        watch_outside_click(app.clone(), TRAY_MENU_WINDOW, (x0, y0, x1, y1));
+        {
+            let (x1, y1) = (x0 + size.width as i32, y0 + size.height as i32);
+            watch_outside_click(app.clone(), TRAY_MENU_WINDOW, (x0, y0, x1, y1));
+        }
     }
     // 先显示再发事件：隐藏窗口收不到 emit 的内容，事件仅作即时更新，
     // 页面另有 __dshdRefresh（Rust eval 直呼）作为确定性兜底

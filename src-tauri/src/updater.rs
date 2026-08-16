@@ -394,6 +394,7 @@ fn update_pwsh(app: &AppHandle) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        let _ = app;
         Err(crate::locale::text(
             "PowerShell 仅支持在 Windows 上安装更新；macOS/Linux 请使用系统自带终端。",
             "PowerShell updates are supported only on Windows. Use the system terminal on macOS/Linux.",

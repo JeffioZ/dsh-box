@@ -106,7 +106,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     // 子 webview 透明：浮层展开加高时透出下层的 dsh 界面（浮层“盖在”其上而非推挤）；
     // 导航白名单与主窗口一致（IPC 另有来源校验兜底）
     let navigation_app = app.clone();
-    let child = WebviewBuilder::new(TITLEBAR_LABEL, WebviewUrl::App("titlebar.html".into()))
+    let mut child = WebviewBuilder::new(TITLEBAR_LABEL, WebviewUrl::App("titlebar.html".into()))
         .initialization_script(crate::locale::init_script())
         .on_navigation(move |url| {
             let allowed =
@@ -115,8 +115,14 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                 crate::logging::log(&format!("titlebar: 已拦截非白名单导航 {url}"));
             }
             allowed
-        })
-        .transparent(true);
+        });
+    // 子 webview 透明：浮层展开加高时透出下层的 dsh 界面（浮层“盖在”其上而非推挤）。
+    // macOS 上 transparent 需要 macos-private-api feature，暂不启用私有 API，
+    // 子 webview 透明仅在 Windows/Linux 生效
+    #[cfg(not(target_os = "macos"))]
+    {
+        child = child.transparent(true);
+    }
     let size = window.inner_size()?;
     let scale = window.scale_factor().unwrap_or(1.0);
     let w = size.width as f64 / scale;

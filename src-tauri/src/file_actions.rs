@@ -5,9 +5,7 @@
 //! 供 dshd:// 自定义协议处理函数调用（dsh 页面右键文件路径时触发）。
 
 use std::io::Read;
-use std::path::Path;
-#[cfg(any(windows, target_os = "linux"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 是否为绝对路径（Windows 盘符/UNC，POSIX 以 / 开头）。
 /// 相对路径一律拒绝：页面上下文的工作区根目录只有 dsh 后端知道，
@@ -180,6 +178,7 @@ pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        let _ = (app, path);
         Err(crate::locale::text(
             "“指定应用打开”仅支持 Windows",
             "\"Open with app\" is only supported on Windows",
