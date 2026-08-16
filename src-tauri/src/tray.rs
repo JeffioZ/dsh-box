@@ -168,6 +168,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "open_browser" => open_browser(app),
         "restart" => restart_from_tray(app),
         "check_update" => crate::app_dialog::open_check(app),
+        "plugins" => crate::plugins::open(app),
         "autostart" => toggle_autostart(app),
         "hide_tool_calls" => toggle_hide_tool_calls(app),
         "language_zh" => change_language(app, "zh-CN"),

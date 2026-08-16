@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>插件管理</title>
+  <link rel="stylesheet" href="common.css" />
+  <style>
+    :root {
+      --bg: #1b1b22;
+      --card: #22222b;
+      --line: #2e2e3a;
+      --text: #ececf1;
+      --muted: #8b8b94;
+      --blue: #4d6bfe;
+      --red: #f85149;
+      --green: #3fb950;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg); color: var(--text);
+      font: 13px/1.5 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      padding: 18px 20px; user-select: none;
+    }
+    .ptitle { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
+    .psearch { display: flex; gap: 8px; margin-bottom: 10px; }
+    .pinput {
+      flex: 1; background: #26262f; border: 1px solid var(--line); border-radius: 8px;
+      padding: 7px 10px; color: var(--text); font-size: 13px; outline: none;
+    }
+    .pinput:focus { border-color: var(--blue); }
+    .pbtn {
+      background: #2c2c36; color: var(--text); border: 1px solid var(--line);
+      border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+      transition: background .15s;
+    }
+    .pbtn:hover { background: #363642; }
+    .pbtn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .pbtn.primary:hover { background: #3a52c9; }
+    .pbtn:disabled { opacity: .5; cursor: default; }
+    .pbtn.small { padding: 3px 10px; font-size: 12px; }
+    .pstatus { min-height: 20px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .pstatus.err { color: var(--red); }
+    .pstatus.ok { color: var(--green); }
+    section { margin-top: 14px; }
+    section h2 { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+    .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .pitem {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 8px 12px;
+    }
+    .pitem .info { flex: 1; min-width: 0; }
+    .pitem .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .desc { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .ver { font-size: 11px; color: var(--muted); flex: none; }
+    .pempty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
+    .dshd-scroll::-webkit-scrollbar { width: 10px; }
+    .dshd-scroll::-webkit-scrollbar-thumb { background: #3a3a46; border-radius: 5px; }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f7f8fa; --card: #fff; --line: #e2e4ea;
+        --text: #1b1b22; --muted: #6a6a76; --red: #b42318;
+      }
+      .pinput { background: #fff; }
+      .pbtn { background: #f0f1f5; }
+      .pbtn:hover { background: #e6e8ef; }
+      .dshd-scroll::-webkit-scrollbar-thumb { background: #c8ccd4; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body class="dshd-scroll">
+  <main>
+    <h1 class="ptitle" data-i18n="pluginsTitle">插件管理</h1>
+    <div class="psearch">
+      <input id="p-query" class="pinput" type="search" placeholder="" data-i18n-placeholder="pluginSearchHint" autocomplete="off" spellcheck="false" />
+      <button id="p-search" class="pbtn primary" data-i18n="pluginSearch">搜索</button>
+    </div>
+    <div id="p-status" class="pstatus" role="status" aria-live="polite"></div>
+    <section>
+      <h2 data-i18n="pluginResults">搜索结果</h2>
+      <ul id="p-results" class="plist"></ul>
+    </section>
+    <section>
+      <h2 data-i18n="pluginInstalledTitle">已安装</h2>
+      <ul id="p-installed" class="plist"></ul>
+    </section>
+  </main>
+  <script src="common.js"></script>
+  <script src="plugins.js"></script>
+</body>
+</html>

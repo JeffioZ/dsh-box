@@ -19,6 +19,7 @@ pub mod locale;
 mod logging;
 mod notify;
 mod onboarding;
+mod plugins;
 mod processes;
 mod runtime;
 mod titlebar;

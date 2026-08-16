@@ -112,6 +112,58 @@ pub async fn apply_updates(
     Ok(())
 }
 
+// ---------- 插件管理（plugins 窗口调用） ----------
+
+/// 已安装插件列表。
+#[tauri::command]
+pub fn plugin_list(app: AppHandle, webview: tauri::Webview) -> Result<Vec<crate::plugins::PluginInfo>, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::plugins::list(&app))
+}
+
+/// npm 搜索插件。
+#[tauri::command]
+pub fn plugin_search(
+    app: AppHandle,
+    webview: tauri::Webview,
+    query: String,
+) -> Result<Vec<crate::plugins::PluginInfo>, String> {
+    ensure_local_origin(&webview)?;
+    crate::plugins::search(&query).map(|mut list| {
+        // 标注已安装状态（与 list 结果合并）
+        let installed: std::collections::HashMap<String, String> = crate::plugins::list(&app)
+            .into_iter()
+            .filter_map(|p| p.installed.map(|v| (p.name, v)))
+            .collect();
+        for p in &mut list {
+            p.installed = installed.get(&p.name).cloned();
+        }
+        list
+    })
+}
+
+/// 安装插件（成功后自动重启服务）。
+#[tauri::command]
+pub async fn plugin_install(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::plugins::install(&app, &name)
+}
+
+/// 卸载插件（成功后自动重启服务）。
+#[tauri::command]
+pub async fn plugin_remove(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::plugins::remove(&app, &name)
+}
+
 // ---------- 自绘标题栏（titlebar 子 webview 调用） ----------
 
 #[tauri::command]
@@ -310,6 +362,10 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         apply_updates,
         get_onboarding_state,
         save_onboarding,
+        plugin_list,
+        plugin_search,
+        plugin_install,
+        plugin_remove,
         crate::balance::api_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,

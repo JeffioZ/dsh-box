@@ -87,6 +87,10 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             "check_update",
             crate::locale::text("检查更新…", "Check for updates…"),
         ),
+        TrayMenuItem::row(
+            "plugins",
+            crate::locale::text("插件管理…", "Plugin manager…"),
+        ),
         TrayMenuItem::sep(),
         TrayMenuItem::row(
             "autostart",

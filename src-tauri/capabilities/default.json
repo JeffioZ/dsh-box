@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "DSHDesktop default capability: core IPC and titlebar dragging",
-  "windows": ["main", "titlebar", "tray-menu", "app-dialog"],
+  "windows": ["main", "titlebar", "tray-menu", "app-dialog", "plugins"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
