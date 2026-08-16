@@ -140,6 +140,11 @@ mod webview2_check {
         major < MIN_WEBVIEW2_MAJOR
     }
 
+    #[cfg(test)]
+    fn version_too_old_pub(version: &str) -> bool {
+        version_too_old(version)
+    }
+
     fn msgbox(text: &str, title: &str, style: u32) -> i32 {
         let t = to_wide(text);
         let cap = to_wide(title);
@@ -355,5 +360,19 @@ mod webview2_check {
             MB_OK | MB_ICONERROR,
         );
         false
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::version_too_old;
+
+        #[test]
+        fn webview2_version_floor() {
+            assert!(version_too_old("99.0.0.0"));
+            assert!(version_too_old(""));
+            assert!(version_too_old("abc"));
+            assert!(!version_too_old("100.0.0.0"));
+            assert!(!version_too_old("118.0.2088.69"));
+        }
     }
 }
