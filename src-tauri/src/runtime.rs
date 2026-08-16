@@ -765,12 +765,16 @@ pub(crate) fn start_server(
     config: &Config,
     node_exe: &Path,
 ) -> Result<(u32, Option<TreeGuard>), String> {
-    let args = vec![
-        config.dsh_entry().to_string_lossy().into_owned(),
-        "web".into(),
-        "--port".into(),
-        config.port.to_string(),
-    ];
+    let mut args = vec![config.dsh_entry().to_string_lossy().into_owned()];
+    // 默认 web profile 保持 `dsh web` 别名；其他 profile 用 `dsh --profile <name>`
+    if config.profile == "web" {
+        args.push("web".into());
+    } else {
+        args.push("--profile".into());
+        args.push(config.profile.clone());
+    }
+    args.push("--port".into());
+    args.push(config.port.to_string());
     let envs = base_envs(node_exe, config);
     let log = config.dsh_log();
     let child =

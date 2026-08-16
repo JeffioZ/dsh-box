@@ -174,6 +174,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "hide_tool_calls" => toggle_hide_tool_calls(app),
         "language_zh" => change_language(app, "zh-CN"),
         "language_en" => change_language(app, "en"),
+        _ if id.starts_with("profile_") => switch_profile(app, id.trim_start_matches("profile_")),
         "about" => crate::app_dialog::open_about(app),
         "quit" => quit(app),
         _ => {}
@@ -467,6 +468,25 @@ fn restart_from_tray(app: &AppHandle) {
                 crate::locale::text("重启服务", "Restart service"),
                 MessageDialogKind::Warning,
             );
+        }
+    });
+}
+
+/// 切换启动 profile：持久化 → 重启服务（新 profile 启动）。
+fn switch_profile(app: &AppHandle, name: &str) {
+    let state = app.state::<AppState>();
+    if state.config().profile == name {
+        return;
+    }
+    if let Err(e) = state.set_profile(name) {
+        crate::logging::log(&format!("profile: 切换失败：{e}"));
+        return;
+    }
+    crate::logging::log(&format!("profile: 已切换至 {name}，重启服务生效"));
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = crate::updater::restart_service(&handle) {
+            crate::logging::log(&format!("profile: 重启服务失败（已保存配置）：{e}"));
         }
     });
 }

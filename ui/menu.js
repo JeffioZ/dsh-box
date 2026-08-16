@@ -35,7 +35,7 @@ function dshdCreateMenu(container, options) {
       expandedId = '';
       setTimeout(() => {
         if (token !== collapseToken) return;
-        if (settings.onSubmenuChange) settings.onSubmenuChange(false);
+        if (settings.onSubmenuChange) settings.onSubmenuChange('', false);
         applyExpansion(previous);
       }, 100);
       return;
@@ -44,7 +44,7 @@ function dshdCreateMenu(container, options) {
     expandedId = next;
     // 先通知容器（托盘窗口据此改高度），再改 DOM：
     // 窗口调整与插入新行并行，首帧即画在改好高度的窗口内，无裁切闪烁
-    if (settings.onSubmenuChange) settings.onSubmenuChange(Boolean(expandedId));
+    if (settings.onSubmenuChange) settings.onSubmenuChange(next, true);
     applyExpansion(previous);
   }
 
@@ -177,7 +177,7 @@ function dshdCreateMenu(container, options) {
     if (!expandedId) return;
     const previous = expandedId;
     expandedId = '';
-    if (notify && settings.onSubmenuChange) settings.onSubmenuChange(false);
+    if (notify && settings.onSubmenuChange) settings.onSubmenuChange('', false);
     applyExpansion(previous);
   }
 

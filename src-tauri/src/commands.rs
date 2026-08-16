@@ -273,13 +273,14 @@ pub fn menu_choose(app: AppHandle, webview: tauri::Webview, id: String) -> Resul
 
 /// 托盘窗口的语言子菜单展开后需要同步调整原生窗口高度。
 #[tauri::command]
-pub fn tray_menu_set_language_expanded(
+pub fn tray_menu_set_submenu_expanded(
     app: AppHandle,
     webview: tauri::Webview,
+    id: String,
     expanded: bool,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
-    crate::tray_menu::set_language_expanded(&app, expanded);
+    crate::tray_menu::set_submenu_expanded(&app, &id, expanded);
     Ok(())
 }
 
@@ -401,7 +402,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         titlebar_expand,
         menu_get,
         menu_choose,
-        tray_menu_set_language_expanded,
+        tray_menu_set_submenu_expanded,
         app_dialog_open_balance,
         app_dialog_refresh_balance,
         app_dialog_get,

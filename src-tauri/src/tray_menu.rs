@@ -129,10 +129,14 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
                 TrayMenuItem::choice("language_en", "English", !crate::locale::is_chinese()),
             ],
         ),
-        TrayMenuItem::sep(),
-        TrayMenuItem::row("about", crate::locale::text("关于", "About")),
-        TrayMenuItem::row("quit", crate::locale::text("退出", "Quit")),
     ];
+    // 多 profile 时追加“启动 profile”子菜单（单选，切换后重启生效）
+    if let Some(profile_item) = profile_menu_item() {
+        rows.push(profile_item);
+    }
+    rows.push(TrayMenuItem::sep());
+    rows.push(TrayMenuItem::row("about", crate::locale::text("关于", "About")));
+    rows.push(TrayMenuItem::row("quit", crate::locale::text("退出", "Quit")));
     if tray_surface {
         rows.insert(
             1,
@@ -145,6 +149,29 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         rows.remove(0);
     }
     rows
+}
+
+/// “启动 profile”子菜单：多个可用 profile 时显示（单选，切换后重启生效）。
+fn profile_menu_item() -> Option<TrayMenuItem> {
+    let config = crate::app_state::Config::load();
+    let profiles = crate::app_state::list_profiles(&config);
+    if profiles.len() <= 1 {
+        return None;
+    }
+    Some(TrayMenuItem::parent(
+        "profile",
+        crate::locale::text("启动 profile", "Launch profile"),
+        profiles
+            .into_iter()
+            .map(|name| {
+                TrayMenuItem::choice(
+                    &format!("profile_{name}"),
+                    &name,
+                    name == config.profile,
+                )
+            })
+            .collect(),
+    ))
 }
 
 /// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口
@@ -322,8 +349,9 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     let _ = win.set_focus();
 }
 
-/// 语言子菜单展开/收起时调整托盘窗口高度，底缘始终锚定托盘点击点。
-pub fn set_language_expanded(app: &AppHandle, expanded: bool) {
+/// 子菜单展开/收起时调整托盘窗口高度，底缘始终锚定托盘点击点。
+/// `id` 为父菜单项 id（language / profile）；未展开时精确还原基线高。
+pub fn set_submenu_expanded(app: &AppHandle, id: &str, expanded: bool) {
     let Some(win) = app.get_webview_window(TRAY_MENU_WINDOW) else {
         return;
     };
@@ -331,7 +359,16 @@ pub fn set_language_expanded(app: &AppHandle, expanded: bool) {
         return;
     };
     let scale = win.scale_factor().unwrap_or(1.0);
-    // 以基线几何为准：宽度恒定、高度只加减语言子菜单的物理增量，
+    // 子菜单展开高度增量（逻辑像素）：语言 2 行；profile 每项一行
+    let expand_rows: i32 = match id {
+        "language" => 2,
+        "profile" => {
+            let config = crate::app_state::Config::load();
+            crate::app_state::list_profiles(&config).len() as i32
+        }
+        _ => 0,
+    };
+    // 以基线几何为准：宽度恒定、高度只加减子菜单的物理增量，
     // 收起时精确还原基线高（消除残余裁切与宽度漂移）
     let geo = *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner());
     let (base_w, base_h, current_h) = match geo {
@@ -345,7 +382,7 @@ pub fn set_language_expanded(app: &AppHandle, expanded: bool) {
     };
     let new_width = base_w;
     let new_height = if expanded {
-        base_h + (80.0 * scale).round() as i32
+        base_h + (expand_rows as f64 * 40.0 * scale).round() as i32
     } else {
         base_h
     };

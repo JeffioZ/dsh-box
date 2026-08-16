@@ -30,8 +30,8 @@
 
     const menu = dshdCreateMenu(document.getElementById('list'), {
       onChoose: (id) => invoke('menu_choose', { id }).catch(() => {}),
-      onSubmenuChange: (expanded) =>
-        invoke('tray_menu_set_language_expanded', { expanded }).catch(() => {}),
+      onSubmenuChange: (id, expanded) =>
+        invoke('tray_menu_set_submenu_expanded', { id, expanded }).catch(() => {}),
       onEscape: () => currentWindow.hide(),
     });
 

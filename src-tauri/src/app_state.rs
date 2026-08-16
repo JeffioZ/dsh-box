@@ -74,6 +74,49 @@ pub struct Config {
     pub ui_language: Option<String>,
     /// 隐藏 dsh 对话中的工具调用卡片（仅保留文本消息与最终输出）。
     pub hide_tool_calls: bool,
+    /// 启动的 dsh profile 名（默认 web）。
+    pub profile: String,
+}
+
+/// profile 名合法性：仅允许安全字符（防止路径注入/穿越）。
+pub(crate) fn is_valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// 列出可用 dsh profile（`$DSH_HOME/profiles/` 下含 package.json 的目录，
+/// 排除 pnpm 自身的 node_modules）。
+pub(crate) fn list_profiles(config: &Config) -> Vec<String> {
+    let dir = config.dsh_home().join("profiles");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec!["web".to_string()];
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter_map(|ent| {
+            let name = ent.file_name().to_string_lossy().into_owned();
+            if name == "node_modules" || name == ".bin" {
+                return None;
+            }
+            if !ent.path().is_dir() {
+                return None;
+            }
+            if !ent.path().join("package.json").is_file() {
+                return None;
+            }
+            Some(name)
+        })
+        .filter(|n| is_valid_profile_name(n))
+        .collect();
+    out.sort();
+    if !out.contains(&config.profile) {
+        out.push("web".to_string());
+        out.sort();
+    }
+    out
 }
 
 impl Config {
@@ -100,6 +143,7 @@ impl Config {
             api_base,
             ui_language: None,
             hide_tool_calls: false,
+            profile: "web".into(),
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
@@ -129,6 +173,11 @@ impl Config {
                 }
                 if let Some(hide) = json.get("hide_tool_calls").and_then(|v| v.as_bool()) {
                     cfg.hide_tool_calls = hide;
+                }
+                if let Some(profile) = json.get("profile").and_then(|v| v.as_str()) {
+                    if is_valid_profile_name(profile) {
+                        cfg.profile = profile.to_string();
+                    }
                 }
             }
         }
@@ -665,6 +714,25 @@ impl AppState {
         save_config_value(&config.root, "hide_tool_calls", serde_json::Value::Bool(next))?;
         self.lock_inner().config.hide_tool_calls = next;
         Ok(next)
+    }
+
+    /// 切换启动 profile，持久化到 config.json 并更新内存配置。
+    /// 调用方负责重启服务使新 profile 生效。
+    pub fn set_profile(&self, name: &str) -> Result<(), String> {
+        if !is_valid_profile_name(name) {
+            return Err(crate::locale::text(
+                "非法的 profile 名称。",
+                "Invalid profile name.",
+            )
+            .into());
+        }
+        save_config_value(
+            &self.config().root,
+            "profile",
+            serde_json::Value::String(name.to_string()),
+        )?;
+        self.lock_inner().config.profile = name.to_string();
+        Ok(())
     }
 
     /// 首次使用配置是否尚未完成（config.json 无 `onboarded: true` 标记）。
