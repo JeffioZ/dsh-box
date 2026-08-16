@@ -289,6 +289,9 @@ fn pwsh_version() -> Option<String> {
     }
 }
 
+/// 从 GitHub 官方 metadata 解析稳定版本号（仅 Windows 的 PowerShell 检测使用；
+/// 单测跨平台引用，故非 Windows 下仅抑制 dead_code）。
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_pwsh_metadata(json: &serde_json::Value) -> Result<String, String> {
     json.get("StableReleaseTag")
         .or_else(|| json.get("ReleaseTag"))

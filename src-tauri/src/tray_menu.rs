@@ -127,6 +127,7 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
 
 /// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口
 /// （圆角外的四个角透明）；如后续恢复阴影方案再调大。
+#[cfg(windows)]
 const SHADOW_PAD: f64 = 0.0;
 
 /// 菜单窗口尺寸（含四周阴影边距）：卡片内边距 4×2 + 行高 40
@@ -134,6 +135,7 @@ const SHADOW_PAD: f64 = 0.0;
 ///
 /// 卡片无描边（透明窗口模型，边界由圆角/底色/阴影承担），高度不含边框；
 /// body 为 border-box，高度必须包含内边距，否则末行 hover 会被裁掉。
+#[cfg(windows)]
 fn menu_size(language_expanded: bool) -> (f64, f64) {
     let rows = items(true);
     let height = 8.0
@@ -158,6 +160,7 @@ struct Geometry {
 static GEOMETRY: std::sync::Mutex<Option<Geometry>> = std::sync::Mutex::new(None);
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
+#[cfg(windows)]
 pub fn precreate(app: &AppHandle) {
     let (w, h) = menu_size(false);
     // 导航白名单与主窗口一致：菜单内容只允许加载内置页面
@@ -215,6 +218,7 @@ pub fn precreate(app: &AppHandle) {
 }
 
 /// 在光标处弹出菜单（调用方已在主线程）。`at` 为屏幕物理坐标。
+#[cfg(windows)]
 pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     // 打开菜单时即时比对 dsh 设置（语言/主题）：用户在 dsh 里刚切换过，
     // 这次打开立即生效，不等 3s 轮询

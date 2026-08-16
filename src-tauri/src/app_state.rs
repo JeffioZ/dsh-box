@@ -727,6 +727,8 @@ impl AppState {
     pub fn set_pwsh_confirmed(&self, v: bool) {
         self.lock_inner().pwsh_confirmed = v;
     }
+    /// PowerShell 更新的弹窗内确认状态读取（仅 Windows 的 winget 更新流程使用）。
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn pwsh_confirmed(&self) -> bool {
         self.lock_inner().pwsh_confirmed
     }
