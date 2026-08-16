@@ -147,7 +147,28 @@ pub fn revert(app: &AppHandle, path: &str) -> Result<(), String> {
         )
         .into());
     }
-    let target = PathBuf::from(path);
+    // 还原目标必须位于会话工作目录内（会话日志可能来自不可信仓库，
+    // 防止把 edit 指向任意系统文件——如 ~/.ssh/authorized_keys——反向改写）
+    let Some(cwd) = session_workdir(&log_path) else {
+        return Err(crate::locale::text(
+            "无法确定会话工作目录，已取消还原。",
+            "Cannot determine the session working directory. Revert cancelled.",
+        )
+        .into());
+    };
+    let raw = PathBuf::from(path);
+    let target = if raw.is_absolute() {
+        raw
+    } else {
+        cwd.join(raw)
+    };
+    if !is_within_workdir(&target, &cwd) {
+        return Err(crate::locale::text(
+            "仅允许还原会话工作目录内的文件。",
+            "Only files inside the session working directory can be reverted.",
+        )
+        .into());
+    }
     let mut content = std::fs::read_to_string(&target).map_err(|e| {
         format!(
             "{}: {e}",
@@ -182,6 +203,9 @@ struct ParsedEdit {
     seq: u64,
 }
 
+/// 解压上限：防止高压缩比会话日志膨胀耗尽内存（压缩上限见压缩体积检查）。
+const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
 /// 解压并解析会话日志中的 edit/write 工具调用（按 seq 升序）。
 fn parse_edits(log_path: &Path) -> Vec<ParsedEdit> {
     let Ok(file) = std::fs::File::open(log_path) else {
@@ -191,7 +215,14 @@ fn parse_edits(log_path: &Path) -> Vec<ParsedEdit> {
         return vec![];
     };
     let mut buf = Vec::new();
-    if decoder.read_to_end(&mut buf).is_err() {
+    // 解压膨胀超限即放弃解析（尾部行级扫描同样受益）
+    if decoder
+        .by_ref()
+        .take(MAX_DECOMPRESSED_BYTES + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+        || buf.len() as u64 > MAX_DECOMPRESSED_BYTES
+    {
         return vec![];
     }
     let text = String::from_utf8_lossy(&buf);
@@ -248,9 +279,70 @@ fn parse_edits(log_path: &Path) -> Vec<ParsedEdit> {
     out
 }
 
+/// 从会话日志读取工作目录（首个 `session` 事件的 `cwd` 字段）。
+fn session_workdir(log_path: &Path) -> Option<PathBuf> {
+    let file = std::fs::File::open(log_path).ok()?;
+    let mut decoder = zstd::stream::read::Decoder::new(file).ok()?;
+    let mut buf = Vec::new();
+    if decoder
+        .by_ref()
+        .take(MAX_DECOMPRESSED_BYTES + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+        || buf.len() as u64 > MAX_DECOMPRESSED_BYTES
+    {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    for line in text.lines() {
+        if !line.contains("\"type\":\"session\"") {
+            continue;
+        }
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(cwd) = obj
+            .get("cwd")
+            .or_else(|| obj.get("data").and_then(|d| d.get("cwd")))
+            .and_then(|v| v.as_str())
+        {
+            return Some(PathBuf::from(cwd));
+        }
+    }
+    None
+}
+
+/// 词法规范化路径（解析 `.`/`..`，不做磁盘访问；文件可能已被删除）。
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// 还原目标是否位于会话工作目录内（大小写不敏感比较；Unix 上同目录
+/// 不同大小写仍不会越出 cwd，仅额外放行，无越界风险）。
+/// 前缀必须落在路径边界（`/` 或 `\` 之后），防止 `D:/repo2` 误匹配 `D:/repo`。
+fn is_within_workdir(target: &Path, cwd: &Path) -> bool {
+    let tn = lexical_normalize(target).to_string_lossy().to_lowercase();
+    let cn = lexical_normalize(cwd).to_string_lossy().to_lowercase();
+    if cn.is_empty() || tn == cn {
+        return false;
+    }
+    tn.strip_prefix(&cn)
+        .is_some_and(|rest| rest.starts_with('/') || rest.starts_with('\\'))
+}
+
 /// 最新会话：sessions/ 下 mtime 最新的 session.jsonl.zstd（排除备份）。
-fn latest_session(sessions_root: &Path) -> Option<(String, PathBuf)> {
-    if !sessions_root.is_dir() {
+fn latest_session(sessions_root: &Path) -> Option<(String, PathBuf)> {    if !sessions_root.is_dir() {
         return None;
     }
     let mut best: Option<(u64, String, PathBuf)> = None;
@@ -289,8 +381,9 @@ fn latest_session(sessions_root: &Path) -> Option<(String, PathBuf)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_edits;
+    use super::{is_within_workdir, parse_edits};
     use std::io::Write;
+    use std::path::Path;
 
     fn zstd_write(path: &std::path::Path, lines: &[&str]) {
         let file = std::fs::File::create(path).unwrap();
@@ -329,5 +422,24 @@ mod tests {
         assert!(ops[2].old.is_empty());
         assert_eq!(ops[2].new, "full");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workdir_containment_blocks_escape() {
+        let cwd = Path::new("D:/repo");
+        // 工作目录内：允许
+        assert!(is_within_workdir(Path::new("D:/repo/src/a.rs"), cwd));
+        assert!(is_within_workdir(Path::new("D:/repo/src/../a.rs"), cwd));
+        // 工作目录本身：拒绝（不能还原目录）
+        assert!(!is_within_workdir(Path::new("D:/repo"), cwd));
+        // 越界：拒绝
+        assert!(!is_within_workdir(Path::new("D:/other/a.rs"), cwd));
+        assert!(!is_within_workdir(Path::new("D:/repo2/a.rs"), cwd));
+        assert!(!is_within_workdir(Path::new("D:/repo/../outside/a.rs"), cwd));
+        assert!(!is_within_workdir(Path::new("C:/Windows/system32/x"), cwd));
+        // 大小写不敏感（Windows 语义）：同目录不同大小写放行
+        assert!(is_within_workdir(Path::new("d:/REPO/src/a.rs"), cwd));
+        // 空 cwd：拒绝
+        assert!(!is_within_workdir(Path::new("a.rs"), Path::new("")));
     }
 }

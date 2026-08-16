@@ -188,6 +188,16 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     for (k, v) in crate::runtime::base_envs(&node, &config) {
         cmd.env(k, v);
     }
+    // 输出重定向到临时文件：npm 输出可能远超管道缓冲（64KB），
+    // 若不持续读取会让子进程写阻塞，误触 5 分钟超时
+    let out_path = std::env::temp_dir().join(format!(
+        "dshd-plugin-{}-{}.log",
+        std::process::id(),
+        args.join("-")
+    ));
+    let out_file = std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
+    cmd.stdout(out_file.try_clone().map_err(|e| format!("复制输出句柄失败：{e}"))?)
+        .stderr(out_file);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 dsh 插件命令失败：{e}"))?;
@@ -211,23 +221,16 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
             Err(e) => return Err(format!("等待插件命令失败：{e}")),
         }
     };
-    // 输出（含 stderr 尾部）作为错误详情返回
-    let mut stdout = String::new();
-    use std::io::Read;
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
+    // 输出（含 stderr 尾部）作为错误详情返回（stdout/stderr 已重定向到临时文件）
+    let tail = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&out_path);
     if !status.success() {
-        let tail = format!("{stdout}\n{stderr}").trim().to_string();
-        return Err(if tail.is_empty() {
+        let detail = tail.trim().to_string();
+        return Err(if detail.is_empty() {
             crate::locale::text("dsh 插件命令执行失败。", "The dsh plugin command failed.").into()
         } else {
-            tail
+            detail
         });
     }
-    Ok(stdout)
+    Ok(tail)
 }

@@ -115,6 +115,9 @@ fn collect_sessions(root: &Path, out: &mut HashMap<PathBuf, SystemTime>) -> Resu
     Ok(())
 }
 
+/// 解压上限：防止高压缩比会话日志膨胀耗尽内存（压缩体积上限见下）。
+const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
 /// 解压会话日志，返回最后一个 `turn/end` 事件的 seq（无则 None）。
 /// 只做尾部行级扫描，不全量 JSON 解析。
 fn latest_turn_end_seq(path: &Path) -> Result<Option<u64>, String> {
@@ -126,9 +129,15 @@ fn latest_turn_end_seq(path: &Path) -> Result<Option<u64>, String> {
     let mut decoder =
         zstd::stream::read::Decoder::new(file).map_err(|e| format!("zstd 解压失败：{e}"))?;
     let mut buf = Vec::new();
+    // 解压膨胀超限即跳过（高压缩比日志可能膨胀到 GB 级）
     decoder
+        .by_ref()
+        .take(MAX_DECOMPRESSED_BYTES + 1)
         .read_to_end(&mut buf)
         .map_err(|e| format!("zstd 解压失败：{e}"))?;
+    if buf.len() as u64 > MAX_DECOMPRESSED_BYTES {
+        return Ok(None);
+    }
     let text = String::from_utf8_lossy(&buf);
     // 从尾部找最后一个 turn/end 行，提取其 seq
     let marker = "\"type\":\"turn/end\"";
@@ -142,9 +151,10 @@ fn latest_turn_end_seq(path: &Path) -> Result<Option<u64>, String> {
     Ok(seq)
 }
 
-/// 从事件行提取 `"seq":<n>` 字段（行级轻量解析）。
+/// 从事件行提取 `"seq":<n>` 字段（行级轻量解析；取行尾最后一个 seq，
+/// 避免事件 data 内自带的同名字段干扰）。
 fn parse_seq(line: &str) -> Option<u64> {
-    let idx = line.find("\"seq\"")?;
+    let idx = line.rfind("\"seq\"")?;
     let rest = &line[idx + 5..];
     let rest = rest.trim_start();
     let rest = rest.strip_prefix(':')?.trim_start();

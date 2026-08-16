@@ -741,9 +741,18 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
             .header("User-Agent", "DSHDesktop")
             .call()
             .map_err(|e| format!("下载失败：{e}"))?;
-        let mut reader = resp.into_body().into_reader();
+        // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
+        const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
+        let mut reader = resp.into_body().into_reader().take(MAX_APP_EXE_BYTES + 1);
         let mut file = std::fs::File::create(&target).map_err(|e| format!("写入失败：{e}"))?;
-        std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
+        let copied = std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
+        if copied > MAX_APP_EXE_BYTES {
+            return Err(crate::locale::text(
+                "下载内容超出预期大小，已取消更新。",
+                "The downloaded content exceeds the expected size. Update cancelled.",
+            )
+            .into());
+        }
 
         // 2) 基础校验：PE 头（MZ）+ 合理体积。HTML 错误页/截断文件在此被拦截
         let bytes = std::fs::read(&target).map_err(|e| format!("读取下载文件失败：{e}"))?;
@@ -761,7 +770,6 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
             )
             .into());
         }
-
         // 3) 确认：更新需要退出并自动重启
         use tauri_plugin_dialog::MessageDialogKind;
         if !crate::dialog::ask(
@@ -779,10 +787,13 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
             return Ok(());
         }
 
-        // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动）
+        // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动；
+        //    复制失败自动把备份移回，避免 exe 被移走留下损坏安装）
         let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
         let backup = dir.join("DSHDesktop.exe.old");
         let script = dir.join("replace.ps1");
+        // PowerShell 单引号字符串内转义：' → ''
+        let ps_quote = |s: &std::path::Path| s.to_string_lossy().replace('\'', "''");
         let script_text = format!(
             "$ErrorActionPreference = 'Continue'\n\
              Start-Sleep -Seconds 2\n\
@@ -791,12 +802,14 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
              $old = '{}'\n\
              $i = 0\n\
              while ($i -lt 60) {{ try {{ Move-Item -LiteralPath $dst -Destination $old -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
+             $copied = $false\n\
              $i = 0\n\
-             while ($i -lt 60) {{ try {{ Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
+             while ($i -lt 60) {{ try {{ Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; $copied = $true; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
+             if (-not $copied) {{ $j = 0; while ($j -lt 60) {{ try {{ Move-Item -LiteralPath $old -Destination $dst -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $j++ }} }} }}\n\
              Start-Process -FilePath $dst\n",
-            target.display(),
-            exe.display(),
-            backup.display(),
+            ps_quote(&target),
+            ps_quote(&exe),
+            ps_quote(&backup),
         );
         std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
 
