@@ -136,7 +136,7 @@
 }
 .dshd-row:hover { background: var(--dshd-hover); }
 /* hover 淡入淡出：与标题栏控件/余额 chip 的过渡一致（全局统一的微动效节奏） */
-.dshd-row { transition: background-color .12s ease, color .12s ease; }
+.dshd-row { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
 .dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
 .dshd-row.danger:hover { background: var(--dshd-danger); color: #fff; }
@@ -164,7 +164,7 @@
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   transform: translateX(-1px) rotate(-45deg);
-  transition: transform .14s ease;
+  transition: transform var(--dshd-m-base) ease;
 }
 .dshd-row .arrow.expanded::before { transform: translateY(-1px) rotate(45deg); }
 .dshd-row .check { flex: none; width: 16px; color: var(--dshd-accent); font-size: 13px; line-height: 1; text-align: center; }
@@ -185,11 +185,11 @@
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.dshd-row.child { animation: dshd-child-in .12s ease-out; }
+.dshd-row.child { animation: dshd-child-in var(--dshd-m-fast) ease-out; }
 @keyframes dshd-child-out {
   to { opacity: 0; transform: translateY(-4px); }
 }
-.dshd-row.child-collapsing { animation: dshd-child-out .1s ease-in forwards; }
+.dshd-row.child-collapsing { animation: dshd-child-out var(--dshd-m-fast) ease-in forwards; }
 
 /* 弹窗按钮 */
 .dshd-btn {
@@ -206,7 +206,7 @@
 .dshd-btn:hover { background: var(--dshd-hover); }
 .dshd-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
 .dshd-btn:active { background: var(--dshd-pressed); }
-.dshd-btn { transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
+.dshd-btn { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease; }
 .dshd-btn.primary { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; }
 .dshd-btn.primary:hover { background: var(--dshd-accent-hover); }
 .dshd-btn.primary:active { background: var(--dshd-accent-pressed); }
@@ -241,7 +241,7 @@
 .dshd-x:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 .dshd-x:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-x:active { background: var(--dshd-pressed); }
-.dshd-x { transition: background-color .12s ease, color .12s ease; }
+.dshd-x { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
 
 /* 弹窗页脚 */
 .dshd-foot {

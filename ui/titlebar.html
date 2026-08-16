@@ -56,7 +56,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   color: inherit; font: inherit;
   background: #101014; border: 1px solid var(--dshd-border-strong); border-radius: 999px;
   padding: 3px 10px; font-size: 11.5px; line-height: 1; cursor: pointer;
-  transition: background-color .16s ease, border-color .16s ease;
+  transition: background-color var(--dshd-m-base) ease, border-color var(--dshd-m-base) ease;
 }
 .balance-wrap:hover .balance-chip,
 .balance-chip:focus-visible { border-color: var(--dshd-border-strong); }
@@ -81,7 +81,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   box-shadow: var(--tb-overlay-shadow);
   padding: 12px 14px;
   opacity: 0; transform: translateY(-4px);
-  transition: opacity .16s ease, transform .16s ease;
+  transition: opacity var(--dshd-m-base) ease, transform var(--dshd-m-base) ease;
   pointer-events: none;
 }
 /* JS 统一控制 hover/focus 状态，避免主菜单打开时两个浮层重叠。 */
@@ -97,7 +97,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   padding: 0; outline: none;
 }
 .pop-refresh:hover { background: rgba(255, 255, 255, .08); color: var(--dshd-text); }
-.pop-refresh { transition: background-color .12s ease, color .12s ease; }
+.pop-refresh { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
 .pop-refresh:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .pop-refresh:disabled { cursor: default; opacity: .5; }
 .refresh-glyph { display: block; width: 14px; height: 14px; }
@@ -138,7 +138,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   background: var(--dshd-card); border: 1px solid var(--dshd-border); border-top: none; border-radius: var(--dshd-r-lg);
   box-shadow: var(--tb-overlay-shadow);
   opacity: 0; transform: translateY(-4px); pointer-events: none;
-  transition: opacity .14s ease, transform .14s ease;
+  transition: opacity var(--dshd-m-base) ease, transform var(--dshd-m-base) ease;
 }
 .main-menu-wrap.open .main-menu-panel { opacity: 1; transform: translateY(0); pointer-events: auto; }
 #main-menu-list { display: flex; flex-direction: column; }
@@ -150,7 +150,7 @@ body.window-inactive .balance-chip { opacity: .55; }
   width: 46px; height: 100%; border: none; background: transparent;
   color: var(--dshd-text-dim); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
-  transition: background-color .14s ease, color .14s ease;
+  transition: background-color var(--dshd-m-base) ease, color var(--dshd-m-base) ease;
 }
 .tb-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 .tb-btn:active,
