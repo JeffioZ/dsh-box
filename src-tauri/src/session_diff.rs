@@ -15,9 +15,6 @@ use tauri::Manager;
 
 use crate::app_state::AppState;
 
-/// 会话 diff 窗口 label。
-pub const SESSION_DIFF_WINDOW: &str = "session-diff";
-
 /// 单个文件改动上限（防止异常会话拖垮 UI）。
 const MAX_EDITS_PER_FILE: usize = 500;
 
@@ -42,40 +39,6 @@ pub struct FileChange {
 pub struct SessionChanges {
     pub session_id: String,
     pub files: Vec<FileChange>,
-}
-
-/// 打开会话文件变更窗口（已存在则聚焦）。
-pub fn open(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(SESSION_DIFF_WINDOW) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
-    let navigation_app = app.clone();
-    match tauri::WebviewWindowBuilder::new(
-        app,
-        SESSION_DIFF_WINDOW,
-        tauri::WebviewUrl::App("session-diff.html".into()),
-    )
-    .title(crate::locale::text("会话文件变更", "Session file changes"))
-    .inner_size(720.0, 640.0)
-    .min_inner_size(520.0, 480.0)
-    .resizable(true)
-    .on_navigation(move |url| {
-        let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
-        if !allowed {
-            crate::logging::log(&format!("session-diff: 已拦截非白名单导航 {url}"));
-        }
-        allowed
-    })
-    .build()
-    {
-        Ok(w) => {
-            let _ = w.show();
-            crate::logging::log("session-diff: 会话文件变更窗口已打开");
-        }
-        Err(e) => crate::logging::log(&format!("session-diff: 打开失败：{e}")),
-    }
 }
 
 /// 汇总最新会话的文件改动。

@@ -74,6 +74,87 @@
     .about .nm { font-size: 15px; font-weight: 600; }
     .about .ver-row { font-size: 12px; color: var(--dshd-text-dim); margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
     .about .cp { font-size: 11px; color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
+
+    /* —— 插件管理（统一弹窗内） —— */
+    .psearch { display: flex; gap: 8px; margin-bottom: 8px; }
+    .pinput {
+      flex: 1; background: var(--dshd-hover); border: 1px solid var(--dshd-border);
+      border-radius: 8px; padding: 7px 10px; color: var(--dshd-text); font-size: 13px; outline: none;
+    }
+    .pinput:focus { border-color: var(--dshd-accent); }
+    .pinput:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
+    .pcats { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .pcat-btn {
+      background: transparent; color: var(--dshd-text-dim); border: 1px solid var(--dshd-border);
+      border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+      transition: background-color .12s, color .12s, border-color .12s;
+    }
+    .pcat-btn:hover { color: var(--dshd-text); border-color: var(--dshd-text-dim); }
+    .pcat-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
+    .pcat-btn.active { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; font-weight: 500; }
+    .pstatus { min-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
+    .pstatus.err { color: #ff7b72; }
+    .pstatus.ok { color: #56d364; }
+    @media (prefers-color-scheme: light) {
+      .pstatus.err { color: #b42318; }
+      .pstatus.ok { color: #1a7f37; }
+    }
+    .psection { margin-top: 10px; }
+    .psection h3 { font-size: 11px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; }
+    .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
+    .pitem {
+      display: flex; align-items: center; gap: 10px;
+      border: 1px solid var(--dshd-border); border-radius: 10px; padding: 8px 12px;
+      background: var(--dshd-hover);
+    }
+    .pitem .info { flex: 1; min-width: 0; }
+    .pitem .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .desc { font-size: 12px; color: var(--dshd-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .ver { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
+    .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
+    /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
+    .dshd-btn.danger {
+      background: rgba(248, 81, 73, .12); color: #f85149;
+      border-color: rgba(248, 81, 73, .35);
+    }
+    .dshd-btn.danger:hover { background: rgba(248, 81, 73, .2); }
+    @media (prefers-color-scheme: light) {
+      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: #b42318; border-color: rgba(180, 35, 24, .35); }
+      .dshd-btn.danger:hover { background: rgba(180, 35, 24, .14); }
+    }
+
+    /* —— 会话文件变更（统一弹窗内） —— */
+    .sd-sub { font-size: 11px; color: var(--dshd-text-dim); margin-bottom: 10px; word-break: break-all; }
+    .sditem { border: 1px solid var(--dshd-border); border-radius: 10px; overflow: hidden; margin-bottom: 6px; }
+    .sditem-head {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
+      transition: background-color .12s;
+    }
+    .sditem-head:hover { background: var(--dshd-hover); }
+    .sditem-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .sditem-meta { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
+    .sditem-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; flex: none; }
+    .sditem-tag.ok { color: #56d364; background: rgba(63, 185, 80, .12); }
+    .sditem-tag.no { color: var(--dshd-text-dim); background: var(--dshd-hover); }
+    @media (prefers-color-scheme: light) { .sditem-tag.ok { color: #1a7f37; } }
+    .sddiff { display: none; border-top: 1px solid var(--dshd-border); padding: 8px 12px; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
+    .sditem.open .sddiff { display: flex; }
+    .dop { font-size: 12px; }
+    .dop-label { color: var(--dshd-text-dim); font-size: 11px; margin-bottom: 2px; }
+    .dop-old, .dop-new {
+      white-space: pre-wrap; word-break: break-all; padding: 4px 8px; border-radius: 6px;
+      font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.45;
+    }
+    .dop-old { background: rgba(248, 81, 73, .12); color: #f0a0a0; }
+    .dop-new { background: rgba(63, 185, 80, .12); color: #a8d8b0; }
+    .dop-arrow { color: var(--dshd-text-dim); font-size: 11px; padding: 2px 0; }
+    @media (prefers-color-scheme: light) {
+      .dop-old { color: #a04040; }
+      .dop-new { color: #2e7d32; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dshd-btn, .pcat-btn, .sditem-head { transition: none; }
+    }
     @media (prefers-reduced-motion: reduce) {
       .spin { animation: none; }
       .dshd-pop-in { animation: none; }
@@ -298,9 +379,268 @@
       foot(dshdT('close'));
     }
 
+    // —— 插件管理（统一弹窗内） ——
+    let pluginsBusy = false;
+    const CAT_QUERIES = {
+      skin: 'dsh-plugin skin OR dsh-web-ui OR dsh-ui theme',
+      tool: 'dsh-plugin tool',
+      workflow: 'dsh-plugin workflow',
+    };
+    function renderPlugins() {
+      const body = $('body');
+      body.innerHTML =
+        '<div class="psearch">' +
+        '<input class="pinput" id="p-query" type="search" placeholder="' + esc(dshdT('pluginSearchHint')) + '" autocomplete="off" spellcheck="false" />' +
+        '<button type="button" class="dshd-btn" id="p-search">' + esc(dshdT('pluginSearch')) + '</button>' +
+        '</div>' +
+        '<div class="pcats">' +
+        '<button type="button" class="pcat-btn active" data-cat="">' + esc(dshdT('pluginCatAll')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="skin">' + esc(dshdT('pluginCatSkin')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="tool">' + esc(dshdT('pluginCatTool')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="workflow">' + esc(dshdT('pluginCatWorkflow')) + '</button>' +
+        '</div>' +
+        '<div class="pstatus" id="p-status" role="status" aria-live="polite"></div>' +
+        '<div class="psection"><h3>' + esc(dshdT('pluginResults')) + '</h3><ul class="plist" id="p-results"></ul></div>' +
+        '<div class="psection"><h3>' + esc(dshdT('pluginInstalledTitle')) + '</h3><ul class="plist" id="p-installed"></ul></div>';
+      foot(dshdT('close'));
+      $('p-search').addEventListener('click', () => doPluginSearch());
+      $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(); });
+      document.querySelectorAll('.pcat-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.pcat-btn').forEach((b) => b.classList.toggle('active', b === btn));
+          const q = btn.dataset.cat ? CAT_QUERIES[btn.dataset.cat] : '';
+          if (q) doPluginSearch(q);
+          else { $('p-query').value = ''; $('p-results').innerHTML = ''; }
+        });
+      });
+      refreshPlugins();
+    }
+    function pluginStatus(text, kind) {
+      const el = $('p-status');
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'pstatus' + (kind ? ' ' + kind : '');
+    }
+    async function refreshPlugins() {
+      try {
+        const list = await invoke('plugin_list');
+        if (openKind !== 'plugins') return;
+        renderInstalled(list || []);
+      } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+    }
+    async function doPluginSearch(query) {
+      const q = (query != null ? query : $('p-query').value).trim();
+      if (!q) return;
+      pluginStatus(dshdT('pluginSearching'));
+      try {
+        const list = await invoke('plugin_search', { query: q });
+        if (openKind !== 'plugins') return;
+        renderResults(list || []);
+        pluginStatus(dshdT('pluginSearchDone', { count: (list || []).length }), 'ok');
+      } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+    }
+    function pluginItemRow(p, actions) {
+      const li = document.createElement('li');
+      li.className = 'pitem';
+      const info = document.createElement('div');
+      info.className = 'info';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = p.name;
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = p.description || '';
+      info.append(name, desc);
+      li.append(info);
+      if (p.version) {
+        const ver = document.createElement('span');
+        ver.className = 'ver';
+        ver.textContent = 'v' + p.version;
+        li.append(ver);
+      }
+      li.append(actions);
+      return li;
+    }
+    function renderInstalled(list) {
+      const ul = $('p-installed');
+      if (!ul) return;
+      ul.textContent = '';
+      if (!list.length) {
+        const e = document.createElement('li');
+        e.className = 'pempty';
+        e.textContent = dshdT('pluginNone');
+        ul.append(e);
+        return;
+      }
+      for (const p of list) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dshd-btn danger';
+        btn.textContent = dshdT('pluginUninstall');
+        btn.disabled = pluginsBusy;
+        btn.addEventListener('click', async () => {
+          pluginsBusy = true;
+          btn.disabled = true;
+          pluginStatus(dshdT('pluginRemoving', { name: p.name }));
+          try {
+            await invoke('plugin_remove', { name: p.name });
+            pluginStatus(dshdT('pluginRemoved', { name: p.name }), 'ok');
+          } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+          finally { pluginsBusy = false; await refreshPlugins(); }
+        });
+        ul.append(pluginItemRow(p, btn));
+      }
+    }
+    function renderResults(list) {
+      const ul = $('p-results');
+      if (!ul) return;
+      ul.textContent = '';
+      if (!list.length) {
+        const e = document.createElement('li');
+        e.className = 'pempty';
+        e.textContent = dshdT('pluginNoResult');
+        ul.append(e);
+        return;
+      }
+      for (const p of list) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dshd-btn primary';
+        if (p.installed) {
+          btn.textContent = dshdT('pluginInstalledTag');
+          btn.disabled = true;
+        } else {
+          btn.textContent = dshdT('pluginInstall');
+          btn.disabled = pluginsBusy;
+          btn.addEventListener('click', async () => {
+            pluginsBusy = true;
+            btn.disabled = true;
+            pluginStatus(dshdT('pluginInstalling', { name: p.name }));
+            try {
+              await invoke('plugin_install', { name: p.name });
+              pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
+            } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+            finally { pluginsBusy = false; await refreshPlugins(); }
+          });
+        }
+        ul.append(pluginItemRow(p, btn));
+      }
+    }
+
+    // —— 会话文件变更（统一弹窗内） ——
+    function renderSessionDiff() {
+      const body = $('body');
+      body.innerHTML =
+        '<div class="sd-sub" id="sd-sub"></div>' +
+        '<div class="pstatus" id="sd-status" role="status" aria-live="polite"></div>' +
+        '<ul class="plist" id="sd-list"></ul>';
+      foot(dshdT('close'));
+      refreshSessionDiff();
+    }
+    function sdStatus(text, kind) {
+      const el = $('sd-status');
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'pstatus' + (kind ? ' ' + kind : '');
+    }
+    async function refreshSessionDiff() {
+      try {
+        const data = await invoke('session_changes');
+        if (openKind !== 'session-diff') return;
+        renderDiffList(data);
+      } catch (e) { sdStatus(dshdT('sessionDiffFailed', { message: e }), 'err'); }
+    }
+    function renderDiffList(data) {
+      const list = $('sd-list');
+      if (!list) return;
+      list.textContent = '';
+      const sub = $('sd-sub');
+      if (sub && data.session_id) sub.textContent = dshdT('sessionDiffSession', { id: data.session_id });
+      if (!data.files || !data.files.length) {
+        const e = document.createElement('li');
+        e.className = 'pempty';
+        e.textContent = dshdT('sessionDiffNone');
+        list.append(e);
+        return;
+      }
+      for (const f of data.files) {
+        const li = document.createElement('li');
+        li.className = 'sditem';
+        const head = document.createElement('div');
+        head.className = 'sditem-head';
+        const path = document.createElement('span');
+        path.className = 'sditem-path';
+        path.textContent = f.path;
+        path.title = f.path;
+        head.append(path);
+        const meta = document.createElement('span');
+        meta.className = 'sditem-meta';
+        meta.textContent = dshdT('sessionDiffEdits', { count: f.edits.length }) +
+          (f.rewritten ? ' · ' + dshdT('sessionDiffRewritten') : '');
+        head.append(meta);
+        const tag = document.createElement('span');
+        tag.className = 'sditem-tag ' + (f.revertible ? 'ok' : 'no');
+        tag.textContent = f.revertible ? dshdT('sessionDiffRevertible') : dshdT('sessionDiffNotRevertible');
+        head.append(tag);
+        if (f.revertible) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'dshd-btn danger';
+          btn.textContent = dshdT('sessionDiffRevert');
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!window.confirm(dshdT('sessionDiffRevertConfirm', { path: f.path }))) return;
+            btn.disabled = true;
+            sdStatus(dshdT('sessionDiffReverting', { path: f.path }));
+            try {
+              await invoke('session_revert', { path: f.path });
+              sdStatus(dshdT('sessionDiffReverted', { path: f.path }), 'ok');
+            } catch (err) { sdStatus(dshdT('sessionDiffFailed', { message: err }), 'err'); }
+            finally { btn.disabled = false; await refreshSessionDiff(); }
+          });
+          head.append(btn);
+        }
+        head.addEventListener('click', () => li.classList.toggle('open'));
+        li.append(head);
+        const diff = document.createElement('div');
+        diff.className = 'sddiff dshd-scroll';
+        for (const op of f.edits) {
+          const wrap = document.createElement('div');
+          wrap.className = 'dop';
+          if (op.old && op.new) {
+            const label = document.createElement('div');
+            label.className = 'dop-label';
+            label.textContent = '#' + op.seq;
+            wrap.append(label);
+            const old = document.createElement('div');
+            old.className = 'dop-old';
+            old.textContent = op.old;
+            const arrow = document.createElement('div');
+            arrow.className = 'dop-arrow';
+            arrow.textContent = '→';
+            const neu = document.createElement('div');
+            neu.className = 'dop-new';
+            neu.textContent = op.new;
+            wrap.append(old, arrow, neu);
+          } else {
+            const label = document.createElement('div');
+            label.className = 'dop-label';
+            label.textContent = '#' + op.seq + ' ' + dshdT('sessionDiffRewriteOp');
+            wrap.append(label);
+            const neu = document.createElement('div');
+            neu.className = 'dop-new';
+            neu.textContent = op.new;
+            wrap.append(neu);
+          }
+          diff.append(wrap);
+        }
+        li.append(diff);
+        list.append(li);
+      }
+    }
+
     let closeTimer = null;
-    function close() {
-      // 内容先淡出（视觉上直接消失，不露出“…”标题），130ms 后请 Rust 清空并隐藏；
+    function close() {      // 内容先淡出（视觉上直接消失，不露出“…”标题），130ms 后请 Rust 清空并隐藏；
       // 淡出后的表面近似空卡片，天然充当下次打开前的中性帧
       if (document.body.classList.contains('fade-out')) return;
       document.body.classList.add('fade-out');
@@ -352,7 +692,7 @@
       if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
       currentOpen = p;
       openKind = p.kind;
-      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about' }[p.kind];
+      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about', plugins: 'pluginsTitle', 'session-diff': 'sessionDiffTitle' }[p.kind];
       $('title').textContent = titleKey ? dshdT(titleKey) : p.title;
       if (p.kind === 'balance') renderBalance(p.initial);
       else if (p.kind === 'check') {
@@ -360,6 +700,8 @@
         renderCheckLoading(p.initial && p.initial.updating ? dshdT('updateInProgress') : undefined);
       }
       else if (p.kind === 'about') renderAbout(p.initial);
+      else if (p.kind === 'plugins') renderPlugins();
+      else if (p.kind === 'session-diff') renderSessionDiff();
       // 轻量入场动效（重放；印章去重保证每次打开只播一次）
       document.body.classList.remove('dshd-pop-in');
       void document.body.offsetWidth;
@@ -410,13 +752,15 @@
     });
     window.addEventListener('dshd-language-changed', () => {
       if (!currentOpen) return;
-      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about' }[openKind];
+      const titleKey = { balance: 'balanceTitle', check: 'checkUpdates', about: 'about', plugins: 'pluginsTitle', 'session-diff': 'sessionDiffTitle' }[openKind];
       $('title').textContent = titleKey ? dshdT(titleKey) : currentOpen.title;
       if (openKind === 'balance') renderBalance(lastBalanceData);
       else if (openKind === 'check') {
         if (lastCheckResult) renderCheckResult(lastCheckResult);
         else renderCheckLoading();
       } else if (openKind === 'about') renderAbout(currentOpen.initial);
+      else if (openKind === 'plugins') renderPlugins();
+      else if (openKind === 'session-diff') renderSessionDiff();
     });
     // —— 轮询拉取（事件通道对该窗口不可靠，此为主通道）——
     let balanceStamp = '';

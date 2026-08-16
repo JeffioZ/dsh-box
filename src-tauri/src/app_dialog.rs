@@ -16,18 +16,17 @@ pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
 /// 弹窗内容宽度（不含阴影边距）；窗口实际尺寸在 dialog_size 中加边距。
 const DIALOG_WIDTH: f64 = 380.0;
-/// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口；
-/// 如后续恢复阴影方案再调大。
-const SHADOW_PAD: f64 = 0.0;
 
 /// 普通内容保持无滚动；长错误文案使用受限的滚动区域。
+/// plugins / session-diff 为宽内容（列表/表格），按 kind 定尺寸。
 fn dialog_size(kind: &str) -> (f64, f64) {
-    let height = match kind {
-        "balance" => 280.0,
-        "check" => 350.0,
-        _ => 320.0,
-    };
-    (DIALOG_WIDTH + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
+    match kind {
+        "plugins" => (560.0, 640.0),
+        "session-diff" => (720.0, 640.0),
+        "balance" => (DIALOG_WIDTH, 280.0),
+        "check" => (DIALOG_WIDTH, 350.0),
+        _ => (DIALOG_WIDTH, 320.0),
+    }
 }
 
 fn main_is_presented(main: &tauri::Window) -> bool {
@@ -300,4 +299,24 @@ pub fn open_about(app: &AppHandle) {
         "dsh_version": dsh_version,
     });
     show(app, crate::locale::text("关于", "About"), "about", initial);
+}
+
+/// 插件管理（统一弹窗内）：内容由前端拉取，无需初始载荷。
+pub fn open_plugins(app: &AppHandle) {
+    show(
+        app,
+        crate::locale::text("插件管理", "Plugin manager"),
+        "plugins",
+        serde_json::json!({}),
+    );
+}
+
+/// 会话文件变更（统一弹窗内）：内容由前端拉取，无需初始载荷。
+pub fn open_session_diff(app: &AppHandle) {
+    show(
+        app,
+        crate::locale::text("会话文件变更", "Session file changes"),
+        "session-diff",
+        serde_json::json!({}),
+    );
 }

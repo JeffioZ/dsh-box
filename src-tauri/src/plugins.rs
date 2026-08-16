@@ -9,9 +9,6 @@ use tauri::Manager;
 
 use crate::app_state::AppState;
 
-/// 插件管理窗口 label。
-pub const PLUGINS_WINDOW: &str = "plugins";
-
 #[derive(Serialize)]
 pub struct PluginInfo {
     pub name: String,
@@ -21,40 +18,6 @@ pub struct PluginInfo {
     /// 已安装版本（未安装为 None）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<String>,
-}
-
-/// 打开插件管理窗口（已存在则聚焦）。
-pub fn open(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(PLUGINS_WINDOW) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
-    let navigation_app = app.clone();
-    match tauri::WebviewWindowBuilder::new(
-        app,
-        PLUGINS_WINDOW,
-        tauri::WebviewUrl::App("plugins.html".into()),
-    )
-    .title(crate::locale::text("插件管理", "Plugin manager"))
-    .inner_size(560.0, 640.0)
-    .min_inner_size(420.0, 480.0)
-    .resizable(true)
-    .on_navigation(move |url| {
-        let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
-        if !allowed {
-            crate::logging::log(&format!("plugins: 已拦截非白名单导航 {url}"));
-        }
-        allowed
-    })
-    .build()
-    {
-        Ok(w) => {
-            let _ = w.show();
-            crate::logging::log("plugins: 插件管理窗口已打开");
-        }
-        Err(e) => crate::logging::log(&format!("plugins: 打开失败：{e}")),
-    }
 }
 
 /// 已安装插件列表：读 web profile 的 package.json dependencies。
