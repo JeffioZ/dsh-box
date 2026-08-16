@@ -121,14 +121,14 @@ async function refresh() {
   }
 }
 
-async function doSearch() {
-  const query = $('p-query').value.trim();
-  if (!query) return;
+async function doSearch(query) {
+  const q = (query != null ? query : $('p-query').value).trim();
+  if (!q) return;
   const btn = $('p-search');
   btn.disabled = true;
   setStatus(dshdT('pluginSearching'));
   try {
-    const list = await window.__TAURI__.core.invoke('plugin_search', { query });
+    const list = await window.__TAURI__.core.invoke('plugin_search', { query: q });
     renderResults(list || []);
     setStatus(dshdT('pluginSearchDone', { count: (list || []).length }), 'ok');
   } catch (e) {
@@ -138,13 +138,39 @@ async function doSearch() {
   }
 }
 
+// 分类快捷搜索：预设关键词（皮肤/工具/工作流），命中 npm 上的 dsh 插件
+const CAT_QUERIES = {
+  skin: 'dsh-plugin skin OR dsh-web-ui OR dsh-ui theme',
+  tool: 'dsh-plugin tool',
+  workflow: 'dsh-plugin workflow',
+};
+
+function bindCats() {
+  document.querySelectorAll('.pcats .pbtn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.cat || '';
+      document.querySelectorAll('.pcats .pbtn').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+      });
+      const q = cat ? CAT_QUERIES[cat] : '';
+      if (q) {
+        doSearch(q);
+      } else {
+        $('p-query').value = '';
+        renderResults([]);
+      }
+    });
+  });
+}
+
 async function init() {
   dshdApplyI18n();
   document.addEventListener('contextmenu', (e) => e.preventDefault());
-  $('p-search').addEventListener('click', doSearch);
+  $('p-search').addEventListener('click', () => doSearch());
   $('p-query').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') doSearch();
   });
+  bindCats();
   await refresh();
 }
 

@@ -23,7 +23,9 @@
       padding: 18px 20px; user-select: none;
     }
     .ptitle { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
-    .psearch { display: flex; gap: 8px; margin-bottom: 10px; }
+    .psearch { display: flex; gap: 8px; margin-bottom: 8px; }
+    .pcats { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .pcats .pbtn.active { border-color: var(--blue); color: var(--blue); }
     .pinput {
       flex: 1; background: #26262f; border: 1px solid var(--line); border-radius: 8px;
       padding: 7px 10px; color: var(--text); font-size: 13px; outline: none;
@@ -76,6 +78,12 @@
     <div class="psearch">
       <input id="p-query" class="pinput" type="search" placeholder="" data-i18n-placeholder="pluginSearchHint" autocomplete="off" spellcheck="false" />
       <button id="p-search" class="pbtn primary" data-i18n="pluginSearch">搜索</button>
+    </div>
+    <div class="pcats">
+      <button type="button" class="pbtn small" data-cat="" data-i18n="pluginCatAll">全部</button>
+      <button type="button" class="pbtn small" data-cat="skin" data-i18n="pluginCatSkin">皮肤/主题</button>
+      <button type="button" class="pbtn small" data-cat="tool" data-i18n="pluginCatTool">工具</button>
+      <button type="button" class="pbtn small" data-cat="workflow" data-i18n="pluginCatWorkflow">工作流</button>
     </div>
     <div id="p-status" class="pstatus" role="status" aria-live="polite"></div>
     <section>
