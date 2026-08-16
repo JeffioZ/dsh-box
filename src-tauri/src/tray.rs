@@ -196,7 +196,7 @@ fn change_language(app: &AppHandle, language: &str) {
 }
 
 /// 把语言应用到外壳（页面、注入脚本、原生托盘菜单）。
-fn apply_language(app: &AppHandle, language: &str) {
+pub(crate) fn apply_language(app: &AppHandle, language: &str) {
     crate::locale::set_preference(Some(language));
     let encoded = serde_json::to_string(language).unwrap_or_else(|_| "\"en\"".into());
     let script = format!(
@@ -228,7 +228,7 @@ fn apply_language(app: &AppHandle, language: &str) {
 /// system 恢复跟随系统。set_theme 后各窗口背景色同步对齐——主窗口用导航
 /// 底色，弹窗/托盘菜单用卡片底色（窗口边距与淡出中性帧必须与卡片同色，
 /// 否则露出旧主题的色环）。
-fn apply_theme(app: &AppHandle, theme: &str) {
+pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
     let resolved = match theme {
         "light" => Some(tauri::Theme::Light),
         "dark" => Some(tauri::Theme::Dark),

@@ -56,6 +56,29 @@ pub fn open_logs(app: AppHandle, webview: tauri::Webview) -> Result<(), String> 
     Ok(())
 }
 
+// ---------- 首次使用配置（启动页调用） ----------
+
+/// 拉取首次配置状态（needs_onboarding 等）。
+#[tauri::command]
+pub fn get_onboarding_state(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::onboarding::OnboardingState, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::onboarding::state(&app))
+}
+
+/// 保存首次配置（“开始使用”或“跳过”）。
+#[tauri::command]
+pub fn save_onboarding(
+    app: AppHandle,
+    webview: tauri::Webview,
+    payload: crate::onboarding::OnboardingPayload,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::onboarding::save(&app, payload)
+}
+
 #[tauri::command]
 pub async fn check_updates(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
@@ -285,6 +308,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         open_logs,
         check_updates,
         apply_updates,
+        get_onboarding_state,
+        save_onboarding,
         crate::balance::api_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,

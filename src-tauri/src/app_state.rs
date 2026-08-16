@@ -332,6 +332,64 @@ impl Config {
         atomic_write(&path, &out)
     }
 
+    /// 把主题偏好写入 dsh 的 settings.yaml（`ui-theme.preference: light|dark|system`）。
+    /// 与 save_dsh_locale 同规格：行级合并、原子写；dsh 的文件监视器会热发布。
+    pub fn save_dsh_theme(&self, theme: &str) -> Result<(), String> {
+        if !matches!(theme, "light" | "dark" | "system") {
+            return Err("Unsupported theme".into());
+        }
+        let path = self.dsh_home().join("settings.yaml");
+        let new_line = format!("  preference: {theme}");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut out = String::new();
+        let mut in_theme = false;
+        let mut wrote = false;
+        for line in text.lines() {
+            if line.starts_with("ui-theme:") && !line.starts_with(' ') {
+                in_theme = true;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if in_theme {
+                if let Some(rest) = line.trim_start().strip_prefix("preference") {
+                    if rest.trim_start().starts_with(':') {
+                        if !wrote {
+                            out.push_str(&new_line);
+                            out.push('\n');
+                            wrote = true;
+                        }
+                        continue;
+                    }
+                }
+                if !line.starts_with(' ') && !line.is_empty() {
+                    if !wrote {
+                        out.push_str(&new_line);
+                        out.push('\n');
+                        wrote = true;
+                    }
+                    in_theme = false;
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !wrote {
+            if in_theme {
+                out.push_str(&new_line);
+                out.push('\n');
+            } else {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("ui-theme:\n");
+                out.push_str(&new_line);
+                out.push('\n');
+            }
+        }
+        atomic_write(&path, &out)
+    }
+
     /// 读取 config.json 中持久化的窗口矩形（逻辑坐标 lx/ly/lw/lh：与 DPI 无关，
     /// 跨不同缩放显示器切换时观感尺寸一致）。旧格式（物理 x/y/w/h）读不到即返回 None。
     pub fn load_window_rect(&self) -> Option<(f64, f64, f64, f64)> {
@@ -375,7 +433,7 @@ pub(crate) fn default_app_root() -> PathBuf {
 
 static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-fn save_config_value(root: &Path, key: &str, value: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_config_value(root: &Path, key: &str, value: serde_json::Value) -> Result<(), String> {
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = root.join("config.json");
     let mut json = match std::fs::read_to_string(&path) {
@@ -392,7 +450,7 @@ fn save_config_value(root: &Path, key: &str, value: serde_json::Value) -> Result
     atomic_write(&path, &text)
 }
 
-fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -607,6 +665,17 @@ impl AppState {
         save_config_value(&config.root, "hide_tool_calls", serde_json::Value::Bool(next))?;
         self.lock_inner().config.hide_tool_calls = next;
         Ok(next)
+    }
+
+    /// 首次使用配置是否尚未完成（config.json 无 `onboarded: true` 标记）。
+    /// boot 就绪后据此停留启动页等待确认，避免配置界面被导航盖掉。
+    pub(crate) fn onboarding_pending(&self) -> bool {
+        let config = self.config();
+        let text = std::fs::read_to_string(config.root.join("config.json")).unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|json| json.get("onboarded").and_then(|v| v.as_bool()))
+            != Some(true)
     }
 
     pub fn snapshot(&self) -> StatusPayload {

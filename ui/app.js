@@ -99,8 +99,45 @@ function renderStatus(payload) {
   else hideError();
 }
 
-function renderUpdate(result) {
-  lastUpdateResult = result;
+// —— 首次使用配置 ——
+
+async function initOnboarding() {
+  try {
+    const st = await window.__TAURI__.core.invoke('get_onboarding_state');
+    if (!st || !st.needs_onboarding) return;
+    document.querySelectorAll('input[name="ob-lang"]').forEach((r) => {
+      r.checked = r.value === (st.language === 'en' ? 'en' : 'zh-CN');
+    });
+    document.querySelectorAll('input[name="ob-theme"]').forEach((r) => {
+      r.checked = r.value === (st.theme || 'system');
+    });
+    $('ob-autostart').checked = !!st.autostart;
+    $('ob-box').classList.remove('hidden');
+  } catch (e) { /* 后端未就绪时忽略 */ }
+}
+
+async function submitOnboarding(skip) {
+  const payload = {
+    skip,
+    language: (document.querySelector('input[name="ob-lang"]:checked') || {}).value,
+    theme: (document.querySelector('input[name="ob-theme"]:checked') || {}).value,
+    autostart: $('ob-autostart').checked,
+  };
+  if (!skip) {
+    const key = $('ob-apikey').value.trim();
+    if (key) payload.api_key = key;
+  }
+  try {
+    await window.__TAURI__.core.invoke('save_onboarding', { payload });
+    $('ob-box').classList.add('hidden');
+    $('ob-error').classList.add('hidden');
+  } catch (e) {
+    $('ob-error').textContent = dshdT('saveFailed') + ': ' + e;
+    $('ob-error').classList.remove('hidden');
+  }
+}
+
+function renderUpdate(result) {  lastUpdateResult = result;
   const box = $('update-box');
   const line = $('update-text');
   const applyBtn = $('btn-update-apply');
@@ -176,11 +213,14 @@ function bind() {
       button.disabled = false;
     }
   });
+  $('ob-start').addEventListener('click', () => submitOnboarding(false));
+  $('ob-skip').addEventListener('click', () => submitOnboarding(true));
 }
 
 async function init() {
   dshdApplyI18n();
   bind();
+  initOnboarding();
   window.addEventListener('dshd-language-changed', () => {
     if (lastStatusPayload) renderStatus(lastStatusPayload);
     if (lastUpdateResult) renderUpdate(lastUpdateResult);

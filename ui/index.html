@@ -84,6 +84,25 @@ body.fade-out { opacity: 0; }
 .footer { position: fixed; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); }
 .versions { opacity: .75; }
 
+/* 首次使用配置 */
+.ob-box { width: 100%; margin-top: 22px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.ob-title { font-size: 16px; font-weight: 600; }
+.ob-sub { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.ob-field { display: flex; flex-direction: column; gap: 6px; }
+.ob-label { font-size: 12px; color: var(--muted); }
+.ob-input { background: #1c1c24; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; }
+.ob-input:focus { border-color: var(--blue); }
+.ob-hint { font-size: 11px; color: var(--muted); }
+.ob-group { border: none; padding: 0; margin: 0; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.ob-opt { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none; }
+.ob-opt input { accent-color: var(--blue); }
+.ob-actions { display: flex; gap: 8px; margin-top: 2px; }
+.ob-error { font-size: 12px; color: var(--red); word-break: break-all; }
+@media (prefers-color-scheme: light) {
+  .ob-box { background: rgba(0,0,0,.025); }
+  .ob-input { background: #fff; }
+}
+
 /* 浅色系统主题适配（--bg 与 dsh 浅色主题纯白一致，切换无缝） */
 @media (prefers-color-scheme: light) {
   :root {
@@ -121,6 +140,36 @@ body.fade-out { opacity: 0; }
         <img class="logo" src="assets/favicon.svg" alt="" />
       </div>
       <h1 class="title">DeepSeek Harness Desktop</h1>
+
+      <div id="ob-box" class="ob-box hidden">
+        <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
+        <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后可在托盘菜单中随时调整。</p>
+        <label class="ob-field">
+          <span class="ob-label" data-i18n="apiKey">API Key</span>
+          <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+          <span class="ob-hint" data-i18n="apiKeyHint">留空则之后在 dsh 设置页配置</span>
+        </label>
+        <fieldset class="ob-group">
+          <legend class="ob-label" data-i18n="language">语言</legend>
+          <label class="ob-opt"><input type="radio" name="ob-lang" value="zh-CN" checked /> 中文</label>
+          <label class="ob-opt"><input type="radio" name="ob-lang" value="en" /> English</label>
+        </fieldset>
+        <fieldset class="ob-group">
+          <legend class="ob-label" data-i18n="theme">主题</legend>
+          <label class="ob-opt"><input type="radio" name="ob-theme" value="system" checked /> <span data-i18n="themeSystem">跟随系统</span></label>
+          <label class="ob-opt"><input type="radio" name="ob-theme" value="light" /> <span data-i18n="themeLight">浅色</span></label>
+          <label class="ob-opt"><input type="radio" name="ob-theme" value="dark" /> <span data-i18n="themeDark">深色</span></label>
+        </fieldset>
+        <label class="ob-opt">
+          <input id="ob-autostart" type="checkbox" />
+          <span data-i18n="autostart">开机自启动</span>
+        </label>
+        <div class="ob-actions">
+          <button type="button" id="ob-start" class="btn primary" data-i18n="startUsing">开始使用</button>
+          <button type="button" id="ob-skip" class="btn" data-i18n="skip">跳过</button>
+        </div>
+        <div id="ob-error" class="ob-error hidden"></div>
+      </div>
 
       <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
         <div class="status-line">

@@ -59,10 +59,19 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     );
 }
 
+/// 首次使用配置未完成时停留启动页等待确认（save_onboarding 完成后补跳转）。
+/// 返回 true 表示已停留：调用方应直接返回，不再 navigate。
+fn wait_onboarding(state: &AppState) -> bool {
+    if !state.onboarding_pending() {
+        return false;
+    }
+    crate::logging::log("boot: 首次使用配置未完成，停留启动页等待确认");
+    true
+}
+
 /// 一轮完整引导；成功返回 Ok(())，失败返回错误信息。
 /// 全程持有生命周期锁，与托盘“重启服务”/更新流程互斥，杜绝双服务并发。
-fn boot_once(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
+fn boot_once(app: &AppHandle) -> Result<(), String> {    let state = app.state::<AppState>();
     let _guard = state.lifecycle_guard();
 
     // 并发路径（更新/手动重启）可能刚把服务拉起：直接复用，避免双实例——
@@ -78,6 +87,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         state.set_phase(BootPhase::Ready, ready, "");
         emit_status(app, BootPhase::Ready, ready, "");
         std::thread::sleep(Duration::from_millis(320));
+        if wait_onboarding(&state) {
+            return Ok(());
+        }
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
@@ -115,6 +127,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         state.set_phase(BootPhase::Ready, ready, "");
         emit_status(app, BootPhase::Ready, ready, "");
         std::thread::sleep(Duration::from_millis(320));
+        if wait_onboarding(&state) {
+            return Ok(());
+        }
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
@@ -243,6 +258,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     ));
     // 给启动页 300ms 淡出动画留余量，再跳转 dsh 界面（配合 WebView 背景色，无白闪）
     std::thread::sleep(Duration::from_millis(320));
+    if wait_onboarding(&state) {
+        return Ok(());
+    }
     navigate(app, &config.web_url());
     // 启动后静默检查 dsh 更新（后台线程，不阻塞；有新版才提示）
     crate::updater::silent_check(app);
