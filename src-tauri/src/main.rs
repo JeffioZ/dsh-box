@@ -132,12 +132,11 @@ mod webview2_check {
     const MIN_WEBVIEW2_MAJOR: u32 = 100;
 
     fn version_too_old(version: &str) -> bool {
-        let major = version
-            .split('.')
-            .next()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-        major < MIN_WEBVIEW2_MAJOR
+        match version.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+            Some(major) => major < MIN_WEBVIEW2_MAJOR,
+            // 无法解析的版本串视为未知：不误判为过旧（避免误导用户重复修复）
+            None => false,
+        }
     }
 
     #[cfg(test)]
@@ -370,8 +369,9 @@ mod webview2_check {
         #[test]
         fn webview2_version_floor() {
             assert!(version_too_old("99.0.0.0"));
-            assert!(version_too_old(""));
-            assert!(version_too_old("abc"));
+            // 无法解析的版本串：不误判为过旧
+            assert!(!version_too_old(""));
+            assert!(!version_too_old("abc"));
             assert!(!version_too_old("100.0.0.0"));
             assert!(!version_too_old("118.0.2088.69"));
         }

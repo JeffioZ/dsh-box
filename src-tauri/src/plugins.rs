@@ -153,7 +153,8 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     }
     // 输出重定向到临时文件：npm 输出可能远超管道缓冲（64KB），
     // 若不持续读取会让子进程写阻塞，误触 5 分钟超时。
-    // 文件名做安全化：scope 包名含 @ / 等字符，Windows 文件名不允许
+    // 文件名做安全化 + 唯一随机后缀：scope 包名含 @ / 等字符（Windows 文件名
+    // 不允许），同 pid 并发调用不共文件
     let safe_args: String = args
         .join("_")
         .chars()
@@ -165,17 +166,25 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
             }
         })
         .collect();
+    let mut nonce = [0u8; 6];
+    let _ = getrandom::fill(&mut nonce);
+    let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
     let out_path = std::env::temp_dir().join(format!(
-        "dshd-plugin-{}-{}.log",
+        "dshd-plugin-{}-{}-{}.log",
         std::process::id(),
-        safe_args
+        safe_args,
+        nonce_hex
     ));
     let out_file = std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
     cmd.stdout(out_file.try_clone().map_err(|e| format!("复制输出句柄失败：{e}"))?)
         .stderr(out_file);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 dsh 插件命令失败：{e}"))?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&out_path);
+            return Err(format!("启动 dsh 插件命令失败：{e}"));
+        }
+    };
     // 5 分钟超时（npm 安装可能较慢）；超时杀掉避免线程悬挂
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     let status = loop {
@@ -185,6 +194,7 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
                 if std::time::Instant::now() > deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = std::fs::remove_file(&out_path);
                     return Err(crate::locale::text(
                         "插件操作超时（超过 5 分钟），已中止。",
                         "The plugin operation timed out after 5 minutes and was aborted.",
@@ -193,7 +203,10 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            Err(e) => return Err(format!("等待插件命令失败：{e}")),
+            Err(e) => {
+                let _ = std::fs::remove_file(&out_path);
+                return Err(format!("等待插件命令失败：{e}"));
+            }
         }
     };
     // 输出（含 stderr 尾部）作为错误详情返回（stdout/stderr 已重定向到临时文件）

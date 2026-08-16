@@ -16,7 +16,7 @@
     /* 左侧导航 + 右侧内容 */
     #shell { flex: 1; min-height: 0; display: flex; }
     #nav {
-      width: 152px; flex: none; display: flex; flex-direction: column; gap: 6px;
+      width: 152px; flex: none; display: flex; flex-direction: column; gap: 8px;
       padding: 12px 8px 8px; border-right: 1px solid var(--dshd-border); overflow-y: auto;
     }
     .nav-item {
@@ -124,7 +124,7 @@
     }
     .pinput:focus { border-color: var(--dshd-accent); }
     .pinput:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
-    .pcats { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .pcats { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
     .pcat-btn {
       background: transparent; color: var(--dshd-text-dim); border: 1px solid var(--dshd-border);
       border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer;
@@ -143,7 +143,7 @@
     .psection { margin-top: 10px; }
     .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
     .pcount { font-weight: 400; color: var(--dshd-text-dim); font-size: 11px; }
-    .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
+    .plist { list-style: none; display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
     .pitem {
       display: flex; align-items: center; gap: 10px;
       border: 1px solid var(--dshd-border); border-radius: 10px; padding: 8px 12px;
@@ -189,7 +189,7 @@
     .sditem-tag.ok { color: var(--dshd-success-text); background: rgba(63, 185, 80, .12); }
     .sditem-tag.no { color: var(--dshd-text-dim); background: var(--dshd-hover); }
     @media (prefers-color-scheme: light) { .sditem-tag.ok { color: var(--dshd-success-text); } }
-    .sddiff { display: none; border-top: 1px solid var(--dshd-border); padding: 8px 12px; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
+    .sddiff { display: none; border-top: 1px solid var(--dshd-border); padding: 10px 12px; flex-direction: column; gap: 10px; max-height: 280px; overflow: auto; }
     .sditem.open .sddiff { display: flex; }
     .dop { font-size: 12px; }
     .dop-label { color: var(--dshd-text-dim); font-size: 11px; margin-bottom: 2px; }

@@ -253,7 +253,11 @@ pub fn open_check(app: &AppHandle) {
 }
 
 /// 触发一次更新检查（导航切到"检查更新"页时调用；弹窗内不重复 show）。
+/// 更新执行中不重置状态、不并发检查（与 open_check 行为一致）。
 pub fn run_check(app: &AppHandle) {
+    if app.state::<AppState>().is_updating() {
+        return;
+    }
     let handle = app.clone();
     handle.state::<AppState>().set_last_check(None);
     handle.state::<AppState>().set_update_done(false, None);

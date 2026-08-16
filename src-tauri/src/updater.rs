@@ -732,19 +732,46 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
         let dir = config.root.join("exe-update");
         std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败：{e}"))?;
         let target = dir.join("DSHDesktop.exe");
-        // 已后台预下载（app_update_ready 有值或文件已就绪）→ 跳过下载
+        // 预下载判定：仅当内存标记存在且文件通过 MZ 校验才算"已就绪"。
+        // 残留的截断文件/上一轮已应用的旧文件（无标记或校验失败）一律
+        // 清除并重新下载——否则会把旧版 exe 当"更新"应用（降级）或损坏文件直接应用。
         let preloaded = app.state::<AppState>().app_update_ready().is_some()
-            || (target.exists() && target.metadata().map(|m| m.len() >= 1024 * 1024).unwrap_or(false));
+            && valid_downloaded_exe(&target);
         if !preloaded {
+            let _ = std::fs::remove_file(&target);
             download_app_exe(app, &target)?;
         }
         apply_downloaded_exe(app, &target)
     }
 }
 
-/// 下载并基础校验应用更新包（流式写盘 + 大小上限 + MZ 头）。
+/// 预下载文件是否可应用：存在 + 体积下限 + MZ 头。
+#[cfg(windows)]
+fn valid_downloaded_exe(target: &std::path::Path) -> bool {
+    let Ok(meta) = target.metadata() else {
+        return false;
+    };
+    if meta.len() < 1024 * 1024 {
+        return false;
+    }
+    std::fs::read(target)
+        .ok()
+        .is_some_and(|b| b.get(0..2) == Some(b"MZ"))
+}
+
+/// 下载并基础校验应用更新包；失败时清理半截文件。
 #[cfg(windows)]
 fn download_app_exe(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
+    let result = download_app_exe_inner(app, target);
+    if result.is_err() {
+        let _ = std::fs::remove_file(target); // 失败不留半截文件，避免下次误判为已就绪
+    }
+    result
+}
+
+/// 下载并基础校验应用更新包（流式写盘 + 大小上限 + MZ 头）。
+#[cfg(windows)]
+fn download_app_exe_inner(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
     const ASSET_URL: &str =
         "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop.exe";
     // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
