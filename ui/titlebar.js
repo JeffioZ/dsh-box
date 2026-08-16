@@ -140,17 +140,19 @@ function renderChip(data) {
   const chip = $('balance-chip');
   const text = $('balance-text');
   const dot = chip.querySelector('.dot');
+  // 状态点不能只靠颜色（skill: Color Only 规则）——同步设置 title 文字语义
+  const setDot = (cls, label) => { dot.className = cls; dot.title = label; };
   if (!data || !data.ok) {
     chip.classList.remove('hidden');
     const kind = data && data.error_kind;
     if (kind === 'no_key') {
-      dot.className = 'dot warn';
+      setDot('dot warn', dshdT('noApiKey'));
       text.textContent = dshdT('noApiKey');
     } else if (kind === 'invalid_key') {
-      dot.className = 'dot err';
+      setDot('dot err', dshdT('invalidApiKey'));
       text.textContent = dshdT('invalidApiKey');
     } else {
-      dot.className = 'dot warn';
+      setDot('dot warn', dshdT('balanceQueryFailed'));
       text.textContent = dshdT('balanceQueryFailed');
     }
     updateChipAccessibility();
@@ -160,11 +162,12 @@ function renderChip(data) {
     const balance = data.balances[0];
     const currency = dshdCurrency(balance.currency);
     chip.classList.remove('hidden');
-    dot.className = 'dot' + (data.is_available ? '' : ' warn');
+    const statusLabel = data.is_available ? dshdT('accountStatusAvailable') : dshdT('accountStatusUnavailable');
+    setDot('dot' + (data.is_available ? '' : ' warn'), statusLabel);
     text.textContent = currency + (balance.currency === 'CNY' ? '' : ' ') + dshdBalanceValue(balance.total_balance);
   } else {
     chip.classList.remove('hidden');
-    dot.className = 'dot err';
+    setDot('dot err', dshdT('noBalance'));
     text.textContent = dshdT('noBalance');
   }
   updateChipAccessibility();
