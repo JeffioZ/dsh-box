@@ -492,7 +492,13 @@
     }
     function renderCurrent(opts) {
       const k = openKind;
-      if (k === 'balance') renderBalance(lastBalanceData);
+      if (k === 'balance') {
+        renderBalance(lastBalanceData);
+        // 导航进入余额页：后台触发一次刷新——打开即显示缓存（有则），
+        // 新数据就绪后由轮询替换；避免"切换到余额一直查询中"（此前仅
+        // 直接打开才触发查询，导航切换不触发）
+        if (opts && opts.triggerBalance) invoke('app_dialog_refresh_balance').catch(() => {});
+      }
       else if (k === 'check') {
         if (lastCheckResult) renderCheckResult(lastCheckResult);
         else {
@@ -512,7 +518,7 @@
       renderNav(kind);
       $('title').textContent = NAV_TITLE_KEY[kind] ? dshdT(NAV_TITLE_KEY[kind]) : '';
       $('btn-refresh').classList.toggle('hidden', kind !== 'balance');
-      renderCurrent({ triggerCheck: true });
+      renderCurrent({ triggerCheck: true, triggerBalance: true });
       document.body.classList.remove('dshd-pop-in');
       void document.body.offsetWidth;
       document.body.classList.add('dshd-pop-in');
