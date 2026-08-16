@@ -93,36 +93,9 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     )?;
     let quit_item = MenuItem::with_id(app, "quit", &item("quit").label, true, None::<&str>)?;
     let about_item = MenuItem::with_id(app, "about", &item("about").label, true, None::<&str>)?;
-    let language_model = item("language");
-    let zh_model = &language_model.children[0];
-    let en_model = &language_model.children[1];
-    let zh_item = CheckMenuItem::with_id(
-        app,
-        zh_model.id.as_str(),
-        &zh_model.label,
-        true,
-        zh_model.checked.unwrap_or(false),
-        None::<&str>,
-    )?;
-    let en_item = CheckMenuItem::with_id(
-        app,
-        en_model.id.as_str(),
-        &en_model.label,
-        true,
-        en_model.checked.unwrap_or(false),
-        None::<&str>,
-    )?;
-    let language_menu = Submenu::with_id_and_items(
-        app,
-        language_model.id.as_str(),
-        &language_model.label,
-        true,
-        &[&zh_item, &en_item],
-    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    let sep4 = PredefinedMenuItem::separator(app)?;
     Menu::with_items(
         app,
         &[
@@ -135,8 +108,6 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
             &sep2,
             &auto_item,
             &sep3,
-            &language_menu,
-            &sep4,
             &about_item,
             &quit_item,
         ],
@@ -172,30 +143,11 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "session_diff" => crate::app_dialog::open_session_diff(app),
         "autostart" => toggle_autostart(app),
         "hide_tool_calls" => toggle_hide_tool_calls(app),
-        "language_zh" => change_language(app, "zh-CN"),
-        "language_en" => change_language(app, "en"),
         _ if id.starts_with("profile_") => switch_profile(app, id.trim_start_matches("profile_")),
         "about" => crate::app_dialog::open_about(app),
         "quit" => quit(app),
         _ => {}
     }
-}
-
-fn change_language(app: &AppHandle, language: &str) {
-    if let Err(error) = app.state::<AppState>().set_ui_language(language) {
-        crate::logging::log(&format!("language: 保存失败：{error}"));
-        return;
-    }
-    // 同步 dsh 界面的语言：写入 $DSH_HOME/settings.yaml 的 locale.preference
-    // （dsh 语言 id 为 zh/en）。dsh 的 settings-file 有文件监视器，外部编辑
-    // 会被热发布，界面无需重载即切换
-    let dsh_locale = if language == "zh-CN" { "zh" } else { "en" };
-    let config = app.state::<AppState>().config();
-    match config.save_dsh_locale(dsh_locale) {
-        Ok(()) => crate::logging::log(&format!("language: 已同步 dsh 语言 {dsh_locale}")),
-        Err(e) => crate::logging::log(&format!("language: 同步 dsh 语言失败：{e}")),
-    }
-    apply_language(app, language);
 }
 
 /// 把语言应用到外壳（页面、注入脚本、原生托盘菜单）。

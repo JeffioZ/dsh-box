@@ -87,7 +87,7 @@ const DSHD_MESSAGES = {
   navCheck: ['检查更新', 'Updates'],
   navLabel: ['功能导航', 'Feature navigation'],
   navPlugins: ['插件管理', 'Plugins'],
-  navSessionDiff: ['会话文件变更', 'Session files'],
+  navSessionDiff: ['文件变更', 'Session files'],
   onboardingSub: ['配置 API Key、语言与主题，之后可在托盘菜单中随时调整。', 'Set up your API key, language and theme. You can change these later from the tray menu.'],
   onboardingTitle: ['首次使用配置', 'First-run setup'],
   openLogs: ['打开日志', 'Open logs'],

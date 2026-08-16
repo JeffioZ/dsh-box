@@ -121,14 +121,6 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             ),
         ),
         TrayMenuItem::sep(),
-        TrayMenuItem::parent(
-            "language",
-            crate::locale::text("语言", "Language"),
-            vec![
-                TrayMenuItem::choice("language_zh", "中文", crate::locale::is_chinese()),
-                TrayMenuItem::choice("language_en", "English", !crate::locale::is_chinese()),
-            ],
-        ),
     ];
     // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）
     if let Some(profile_item) = profile_menu_item() {
