@@ -14,19 +14,10 @@ use crate::app_state::AppState;
 /// 弹窗窗口 label。
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
-/// 弹窗内容宽度（不含阴影边距）；窗口实际尺寸在 dialog_size 中加边距。
-const DIALOG_WIDTH: f64 = 380.0;
 
-/// 普通内容保持无滚动；长错误文案使用受限的滚动区域。
-/// plugins / session-diff 为宽内容（列表/表格），按 kind 定尺寸。
-fn dialog_size(kind: &str) -> (f64, f64) {
-    match kind {
-        "plugins" => (560.0, 640.0),
-        "session-diff" => (720.0, 640.0),
-        "balance" => (DIALOG_WIDTH, 280.0),
-        "check" => (DIALOG_WIDTH, 350.0),
-        _ => (DIALOG_WIDTH, 320.0),
-    }
+/// 弹窗统一为"左侧导航 + 右侧内容"布局：固定宽度容纳导航栏与内容区。
+fn dialog_size(_kind: &str) -> (f64, f64) {
+    (720.0, 640.0)
 }
 
 fn main_is_presented(main: &tauri::Window) -> bool {
@@ -53,7 +44,7 @@ pub fn precreate(app: &AppHandle) {
         WebviewUrl::App("dialog.html".into()),
     )
     .title(crate::APP_TITLE)
-    .inner_size(DIALOG_WIDTH, 320.0)
+    .inner_size(720.0, 640.0)
     .initialization_script(crate::locale::init_script())
     .resizable(false)
     .decorations(false)
@@ -247,9 +238,13 @@ pub fn open_check(app: &AppHandle) {
         "check",
         serde_json::json!({ "updating": updating }),
     );
-    if updating {
-        return;
+    if !updating {
+        run_check(app);
     }
+}
+
+/// 触发一次更新检查（导航切到"检查更新"页时调用；弹窗内不重复 show）。
+pub fn run_check(app: &AppHandle) {
     let handle = app.clone();
     handle.state::<AppState>().set_last_check(None);
     handle.state::<AppState>().set_update_done(false, None);

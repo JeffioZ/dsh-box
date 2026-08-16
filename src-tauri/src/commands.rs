@@ -354,6 +354,14 @@ pub fn app_dialog_pwsh_confirm(app: AppHandle, webview: tauri::Webview) -> Resul
     Ok(())
 }
 
+/// 弹窗内导航切到"检查更新"时触发一次检查（不重复 show）。
+#[tauri::command]
+pub fn app_dialog_run_check(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::app_dialog::run_check(&app);
+    Ok(())
+}
+
 /// 弹窗关闭（✕/Esc/关闭按钮）。
 #[tauri::command]
 pub fn app_dialog_close(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
@@ -407,6 +415,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         app_dialog_get,
         app_dialog_balance_get,
         app_dialog_check_get,
+        app_dialog_run_check,
         app_dialog_pwsh_confirm,
         app_dialog_close,
         app_dialog_update,
