@@ -13,6 +13,7 @@ mod commands;
 mod dialog;
 mod dsh;
 mod file_actions;
+mod heartbeat;
 mod icons;
 pub mod locale;
 mod logging;
@@ -103,7 +104,7 @@ pub(crate) fn app_dev_origin(app: &AppHandle) -> Option<url::Url> {
 }
 
 /// 当前配置对应的 dsh 页面来源；端口必须与应用实际持有的服务一致。
-fn is_dsh_url(url: &url::Url, config: &app_state::Config) -> bool {
+pub(crate) fn is_dsh_url(url: &url::Url, config: &app_state::Config) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port_or_known_default() == Some(config.port)
@@ -169,8 +170,7 @@ var styleEl = document.createElement('style');
 styleEl.textContent = css;
 document.documentElement.appendChild(styleEl);
 
-var menuEl = null;
-var items = [];
+var menuEl = null;var items = [];
 var subEl = null;
 var subItems = [];
 var subTimer = null;
@@ -1040,6 +1040,19 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// 页面心跳注入：dsh 页面每 10s 上报一次存活标记。
+/// 页面主线程挂起/崩溃时 setInterval 停摆，Rust 侧据此重载自愈（见 heartbeat.rs）。
+const HEARTBEAT_INJECT: &str = r#"
+if (!window.__dshdHeartbeat) {
+  window.__dshdHeartbeat = true;
+  setInterval(function () {
+    try {
+      window.__TAURI__.core.invoke('page_heartbeat').catch(function () {});
+    } catch (e) {}
+  }, 10000);
+}
+"#;
+
 /// 让 WebView 跳到 dsh 界面（或返回本地启动页）。
 pub fn navigate(app: &AppHandle, url: &str) {
     let Some(wv) = main_webview(app) else {
@@ -1082,8 +1095,9 @@ pub fn navigate(app: &AppHandle, url: &str) {
                      fix(); \
                      const el = document.querySelector('head > title'); \
                      if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-                     {menu} }})();",
+                     {menu} {heartbeat} }})();",
                     menu = MENU_INJECT,
+                    heartbeat = HEARTBEAT_INJECT,
                     protocol_token = protocol_token,
                 ));
             }
@@ -1327,6 +1341,8 @@ pub fn run() {
             updater::start_periodic_check(app.handle().clone());
             // 任务完成系统通知（主窗口不可见时；只读轮询 dsh 会话日志）
             notify::start_task_watch(app.handle().clone());
+            // dsh 页面心跳监控：页面挂起/崩溃时重载自愈（指数退避）
+            heartbeat::start_page_watch(app.handle().clone());
             // 跟随 dsh 的设置（语言/主题）：后台每 15s 读取 settings.yaml
             tray::start_follow_dsh_settings(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标

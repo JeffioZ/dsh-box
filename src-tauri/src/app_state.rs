@@ -470,6 +470,10 @@ pub(crate) struct Inner {
     /// PowerShell 更新的 UAC 预告在弹窗内等待确认；点击“继续”后置位。
     pwsh_pending: bool,
     pwsh_confirmed: bool,
+    /// 最近一次 dsh 页面心跳（页面主线程存活标记）。
+    last_heartbeat: Option<std::time::Instant>,
+    /// 连续页面重载次数（指数退避）。
+    heartbeat_failures: u32,
 }
 
 /// 全局状态（跨线程共享）。
@@ -532,6 +536,8 @@ impl AppState {
             dialog_gen: 0,
             pwsh_pending: false,
             pwsh_confirmed: false,
+            last_heartbeat: None,
+            heartbeat_failures: 0,
         };
         AppState {
             inner: Arc::new(Mutex::new(inner)),
@@ -547,6 +553,26 @@ impl AppState {
     /// 获取生命周期锁（引导/重启/更新串行化）。
     pub(crate) fn lifecycle_guard(&self) -> std::sync::MutexGuard<'_, ()> {
         self.lifecycle.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 读取页面心跳状态：(最近心跳时刻, 连续重载次数)。
+    pub(crate) fn heartbeat_state(&self) -> (Option<std::time::Instant>, u32) {
+        let inner = self.lock_inner();
+        (inner.last_heartbeat, inner.heartbeat_failures)
+    }
+
+    /// 记录一次页面心跳（页面注入脚本调用；同时清零连续重载计数）。
+    pub(crate) fn set_heartbeat(&self) {
+        let mut inner = self.lock_inner();
+        inner.last_heartbeat = Some(std::time::Instant::now());
+        inner.heartbeat_failures = 0;
+    }
+
+    /// 连续重载计数 +1，返回新值（指数退避用）。
+    pub(crate) fn bump_heartbeat_failures(&self) -> u32 {
+        let mut inner = self.lock_inner();
+        inner.heartbeat_failures = inner.heartbeat_failures.saturating_add(1);
+        inner.heartbeat_failures
     }
 
     pub(crate) fn protocol_token(&self) -> &str {

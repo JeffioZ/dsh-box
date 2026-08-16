@@ -291,6 +291,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         titlebar_close,
         titlebar_is_maximized,
         titlebar_ready,
+        crate::heartbeat::page_heartbeat,
         titlebar_expand,
         menu_get,
         menu_choose,
