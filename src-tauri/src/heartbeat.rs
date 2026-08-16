@@ -88,10 +88,10 @@ mod tests {
     use super::MAX_BACKOFF_POWER;
 
     #[test]
-    fn backoff_never_underflows() {
-        // 退避幂次封顶，不会溢出
-        let p = u32::MAX.min(MAX_BACKOFF_POWER);
-        assert!(p <= 5);
-        assert_eq!(2u32.pow(p), 32);
+    fn backoff_power_is_capped() {
+        // 退避幂次封顶在 MAX_BACKOFF_POWER（5），2^p 最大为 32，不会溢出；
+        // 实际封顶逻辑见 backoff() 中的 failures.min(MAX_BACKOFF_POWER)
+        assert_eq!(MAX_BACKOFF_POWER, 5);
+        assert_eq!(2u32.pow(MAX_BACKOFF_POWER), 32);
     }
 }

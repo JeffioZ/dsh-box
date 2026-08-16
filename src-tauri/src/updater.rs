@@ -717,11 +717,11 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
     #[cfg(not(windows))]
     {
         let _ = (app, config);
-        return Err(crate::locale::text(
+        Err(crate::locale::text(
             "当前平台请从官网下载新版安装包。",
             "Please download the new version from the official website on this platform.",
         )
-        .into());
+        .into())
     }
     #[cfg(windows)]
     {
