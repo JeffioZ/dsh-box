@@ -603,6 +603,8 @@ pub(crate) struct Inner {
     last_heartbeat: Option<std::time::Instant>,
     /// 连续页面重载次数（指数退避）。
     heartbeat_failures: u32,
+    /// 已后台预下载的应用更新版本（exe 更新用）。
+    app_update_ready: Option<String>,
 }
 
 /// 全局状态（跨线程共享）。
@@ -667,6 +669,7 @@ impl AppState {
             pwsh_confirmed: false,
             last_heartbeat: None,
             heartbeat_failures: 0,
+            app_update_ready: None,
         };
         AppState {
             inner: Arc::new(Mutex::new(inner)),
@@ -702,6 +705,16 @@ impl AppState {
         let mut inner = self.lock_inner();
         inner.heartbeat_failures = inner.heartbeat_failures.saturating_add(1);
         inner.heartbeat_failures
+    }
+
+    /// 已后台预下载的应用更新版本（无则为 None）。
+    pub(crate) fn app_update_ready(&self) -> Option<String> {
+        self.lock_inner().app_update_ready.clone()
+    }
+
+    /// 记录/清除已预下载的应用更新版本。
+    pub(crate) fn set_app_update_ready(&self, version: Option<String>) {
+        self.lock_inner().app_update_ready = version;
     }
 
     pub(crate) fn protocol_token(&self) -> &str {

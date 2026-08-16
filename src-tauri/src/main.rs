@@ -141,6 +141,7 @@ mod webview2_check {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // 仅测试模块经别名使用
     fn version_too_old_pub(version: &str) -> bool {
         version_too_old(version)
     }

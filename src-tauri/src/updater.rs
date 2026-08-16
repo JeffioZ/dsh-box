@@ -146,6 +146,12 @@ pub fn start_periodic_check(app: AppHandle) {
                 }
             }
         }
+        // 应用自身新版：后台预下载（下载完成后再提示重启）
+        if let Some(app_info) = &result.app {
+            if app_info.update_available {
+                prefetch_app_update(&app);
+            }
+        }
     });
 }
 
@@ -709,9 +715,7 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
 
 // ---------- 应用自身更新（Windows：下载 → 替换 → 重启） ----------
 
-/// 更新应用本体 exe：下载 GitHub Releases 的 DSHDesktop.exe → 基础校验 →
-/// 用户确认 → 写替换脚本并退出（脚本在进程退出后替换并重启新版本）。
-///
+/// 更新应用本体 exe：已预下载则直接应用，否则先下载再应用。
 /// 仅 Windows 支持（单文件分发场景）；macOS/Linux 提示从官网下载。
 fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), String> {
     #[cfg(not(windows))]
@@ -725,67 +729,85 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
     }
     #[cfg(windows)]
     {
-        const ASSET_URL: &str =
-            "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop.exe";
         let dir = config.root.join("exe-update");
         std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败：{e}"))?;
         let target = dir.join("DSHDesktop.exe");
+        // 已后台预下载（app_update_ready 有值或文件已就绪）→ 跳过下载
+        let preloaded = app.state::<AppState>().app_update_ready().is_some()
+            || (target.exists() && target.metadata().map(|m| m.len() >= 1024 * 1024).unwrap_or(false));
+        if !preloaded {
+            download_app_exe(app, &target)?;
+        }
+        apply_downloaded_exe(app, &target)
+    }
+}
 
-        // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
-        emit_progress(
-            app,
-            crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
-        );
-        let resp = runtime::download_client()
-            .get(ASSET_URL)
-            .header("User-Agent", "DSHDesktop")
-            .call()
-            .map_err(|e| format!("下载失败：{e}"))?;
-        // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
-        const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
-        let mut reader = resp.into_body().into_reader().take(MAX_APP_EXE_BYTES + 1);
-        let mut file = std::fs::File::create(&target).map_err(|e| format!("写入失败：{e}"))?;
-        let copied = std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
-        if copied > MAX_APP_EXE_BYTES {
-            return Err(crate::locale::text(
-                "下载内容超出预期大小，已取消更新。",
-                "The downloaded content exceeds the expected size. Update cancelled.",
-            )
-            .into());
-        }
+/// 下载并基础校验应用更新包（流式写盘 + 大小上限 + MZ 头）。
+#[cfg(windows)]
+fn download_app_exe(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
+    const ASSET_URL: &str =
+        "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop.exe";
+    // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
+    emit_progress(
+        app,
+        crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
+    );
+    let resp = runtime::download_client()
+        .get(ASSET_URL)
+        .header("User-Agent", "DSHDesktop")
+        .call()
+        .map_err(|e| format!("下载失败：{e}"))?;
+    // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
+    const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
+    let mut reader = resp.into_body().into_reader().take(MAX_APP_EXE_BYTES + 1);
+    let mut file = std::fs::File::create(target).map_err(|e| format!("写入失败：{e}"))?;
+    let copied = std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
+    if copied > MAX_APP_EXE_BYTES {
+        return Err(crate::locale::text(
+            "下载内容超出预期大小，已取消更新。",
+            "The downloaded content exceeds the expected size. Update cancelled.",
+        )
+        .into());
+    }
+    // 2) 基础校验：PE 头（MZ）+ 合理体积。HTML 错误页/截断文件在此被拦截
+    let bytes = std::fs::read(target).map_err(|e| format!("读取下载文件失败：{e}"))?;
+    if bytes.len() < 1024 * 1024 {
+        return Err(crate::locale::text(
+            "下载的文件大小异常，已取消更新。",
+            "The downloaded file size looks wrong. Update cancelled.",
+        )
+        .into());
+    }
+    if bytes.get(0..2) != Some(b"MZ") {
+        return Err(crate::locale::text(
+            "下载的文件不是有效的程序，已取消更新。",
+            "The downloaded file is not a valid program. Update cancelled.",
+        )
+        .into());
+    }
+    Ok(())
+}
 
-        // 2) 基础校验：PE 头（MZ）+ 合理体积。HTML 错误页/截断文件在此被拦截
-        let bytes = std::fs::read(&target).map_err(|e| format!("读取下载文件失败：{e}"))?;
-        if bytes.len() < 1024 * 1024 {
-            return Err(crate::locale::text(
-                "下载的文件大小异常，已取消更新。",
-                "The downloaded file size looks wrong. Update cancelled.",
-            )
-            .into());
-        }
-        if bytes.get(0..2) != Some(b"MZ") {
-            return Err(crate::locale::text(
-                "下载的文件不是有效的程序，已取消更新。",
-                "The downloaded file is not a valid program. Update cancelled.",
-            )
-            .into());
-        }
-        // 3) 确认：更新需要退出并自动重启
-        use tauri_plugin_dialog::MessageDialogKind;
-        if !crate::dialog::ask(
-            app,
-            crate::locale::text(
-                "应用将退出并自动重启以完成更新。是否继续？",
-                "The app will exit and restart automatically to finish the update. Continue?",
-            )
-            .to_string(),
-            crate::locale::text("更新应用", "Update app"),
-            MessageDialogKind::Info,
-            crate::locale::text("更新并重启", "Update and restart"),
-            crate::locale::text("取消", "Cancel"),
-        ) {
-            return Ok(());
-        }
+/// 应用已下载的更新包：确认 → 写替换脚本 → 退出（脚本替换并重启新版本）。
+#[cfg(windows)]
+fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
+    let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // 3) 确认：更新需要退出并自动重启
+    use tauri_plugin_dialog::MessageDialogKind;
+    if !crate::dialog::ask(
+        app,
+        crate::locale::text(
+            "应用将退出并自动重启以完成更新。是否继续？",
+            "The app will exit and restart automatically to finish the update. Continue?",
+        )
+        .to_string(),
+        crate::locale::text("更新应用", "Update app"),
+        MessageDialogKind::Info,
+        crate::locale::text("更新并重启", "Update and restart"),
+        crate::locale::text("取消", "Cancel"),
+    ) {
+        return Ok(());
+    }
 
         // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动；
         //    复制失败自动把备份移回，避免 exe 被移走留下损坏安装）
@@ -807,7 +829,7 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
              while ($i -lt 60) {{ try {{ Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop; $copied = $true; break }} catch {{ Start-Sleep -Milliseconds 500; $i++ }} }}\n\
              if (-not $copied) {{ $j = 0; while ($j -lt 60) {{ try {{ Move-Item -LiteralPath $old -Destination $dst -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500; $j++ }} }} }}\n\
              Start-Process -FilePath $dst\n",
-            ps_quote(&target),
+            ps_quote(target),
             ps_quote(&exe),
             ps_quote(&backup),
         );
@@ -838,6 +860,85 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
         crate::dsh::shutdown(app);
         app.exit(0);
         Ok(())
+}
+
+/// 后台预下载应用更新（无需用户确认）：发现新版且未下载时自动下载，
+/// 完成后弹提示"重启应用以更新"。仅 Windows；下载失败静默记日志。
+pub fn prefetch_app_update(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PREFETCHING: AtomicBool = AtomicBool::new(false);
+    if PREFETCHING.swap(true, Ordering::SeqCst) {
+        return; // 已有预下载在进行
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        // 作用域内复位标记（提前返回/正常结束都复位）
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                PREFETCHING.store(false, Ordering::Release);
+            }
+        }
+        let _reset = Reset;
+        #[cfg(not(windows))]
+        {
+            let _ = &handle;
+        }
+        #[cfg(windows)]
+        {
+            let Some(info) = check_app_update() else {
+                return;
+            };
+            if !info.update_available {
+                return;
+            }
+            if handle.state::<AppState>().app_update_ready().is_some() {
+                return; // 已下载过
+            }
+            let config = handle.state::<AppState>().config();
+            let dir = config.root.join("exe-update");
+            if std::fs::create_dir_all(&dir).is_err() {
+                return;
+            }
+            let target = dir.join("DSHDesktop.exe");
+            crate::logging::log(&format!(
+                "updater: 后台预下载应用更新 {}（当前 {}）",
+                info.latest, info.installed
+            ));
+            if let Err(e) = download_app_exe(&handle, &target) {
+                crate::logging::log(&format!("updater: 应用更新预下载失败：{e}"));
+                return;
+            }
+            handle
+                .state::<AppState>()
+                .set_app_update_ready(Some(info.latest.clone()));
+            crate::logging::log("updater: 应用更新已预下载，提示用户重启应用");
+            prompt_apply_prefetched(&handle, &target, &info.latest);
+        }
+    });
+}
+
+/// 提示用户应用已下载的更新（"重启应用以完成更新"）。
+#[cfg(windows)]
+fn prompt_apply_prefetched(app: &AppHandle, target: &std::path::Path, version: &str) {
+    use tauri_plugin_dialog::MessageDialogKind;
+    let msg = crate::locale::owned(
+        format!("新版本 {version} 已下载完成。\n是否立即重启应用以完成更新？"),
+        format!(
+            "Version {version} has been downloaded.\nRestart the app now to finish the update?"
+        ),
+    );
+    if crate::dialog::ask(
+        app,
+        msg,
+        crate::locale::text("应用更新已就绪", "App update ready"),
+        MessageDialogKind::Info,
+        crate::locale::text("重启并更新", "Restart and update"),
+        crate::locale::text("稍后", "Later"),
+    ) {
+        if let Err(e) = apply_downloaded_exe(app, target) {
+            crate::logging::log(&format!("updater: 应用更新应用失败：{e}"));
+        }
     }
 }
 
