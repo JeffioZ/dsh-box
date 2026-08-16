@@ -163,6 +163,16 @@ desktop/
 
 核心逻辑按职责拆分：`runtime` 负责运行环境，`dsh` 负责服务生命周期，`updater`/`update_txn` 负责更新与恢复，命令层只做 IPC 校验与转发。
 
+## 边界与规划
+
+DSHDesktop 是 dsh 的**薄外壳**：不 fork、不 patch 官方 dsh，与 dsh 只通过注入页面脚本、读写 `$DSH_HOME` 配置、调用 dsh CLI 三条通道交互，因此始终跟随官方升级。我们刻意不重做 dsh 的 Web UI、不把应用做成 IDE、不复制会话数据到第二套数据库。更完整的设计取舍见 [docs/why-desktop.md](docs/why-desktop.md)。
+
+规划中的能力（尚未交付，不在本期功能内）：
+
+- 手机远程控制（在手机浏览器/App 中继续本机会话）
+- IM 通道（在微信/飞书等聊天工具中向 Agent 发起任务）
+- 会话文件变更追踪与还原、插件市场等桌面增强（按版本逐步发布）
+
 ## 开发约定
 
 - 提交信息使用 Conventional Commits 风格
@@ -173,3 +183,7 @@ desktop/
 ## 许可
 
 [MIT](LICENSE)。第三方依赖遵循其各自许可；dsh 本体使用官方 npm 包原样安装，不影响其官方升级。
+
+## 致谢
+
+感谢 DeepSeek Harness 团队与开源社区，以及同类桌面端项目带来的启发；感谢每一位参与测试与反馈的用户。
