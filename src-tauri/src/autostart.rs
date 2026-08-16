@@ -252,15 +252,15 @@ mod imp {
                 )),
             };
         }
+        let exec = format!("{} --minimized", desktop_exec_arg(&exe_path()));
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name=DeepSeek Harness Desktop\n\
              Comment=DeepSeek Harness Desktop\n\
-             Exec={}\n\
+             Exec={exec}\n\
              Terminal=false\n\
-             X-GNOME-Autostart-enabled=true\n",
-            format!("{} --minimized", desktop_exec_arg(&exe_path()))
+             X-GNOME-Autostart-enabled=true\n"
         );
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| {
