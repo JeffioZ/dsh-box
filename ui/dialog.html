@@ -120,7 +120,7 @@
       .pstatus.ok { color: #1a7f37; }
     }
     .psection { margin-top: 10px; }
-    .psection h3 { font-size: 11px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; }
+    .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
     .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
     .pitem {
       display: flex; align-items: center; gap: 10px;
@@ -623,6 +623,8 @@
         '<div class="pstatus" id="sd-status" role="status" aria-live="polite"></div>' +
         '<ul class="plist" id="sd-list"></ul>';
       foot(dshdT('close'));
+      // 解析会话日志可能较慢：先给加载反馈
+      sdStatus(dshdT('sessionDiffLoading'));
       refreshSessionDiff();
     }
     function sdStatus(text, kind) {
@@ -643,7 +645,10 @@
       if (!list) return;
       list.textContent = '';
       const sub = $('sd-sub');
-      if (sub && data.session_id) sub.textContent = dshdT('sessionDiffSession', { id: data.session_id });
+      if (sub && data.session_id) {
+        // 完整会话 id 过长，展示前 8 位便于识别
+        sub.textContent = dshdT('sessionDiffSession', { id: data.session_id.slice(0, 8) });
+      }
       if (!data.files || !data.files.length) {
         const e = document.createElement('li');
         e.className = 'pempty';
