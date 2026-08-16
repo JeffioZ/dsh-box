@@ -2,6 +2,13 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、托盘、一键更新与本地文件菜单。
 
+<p align="center">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-4d6bfe" />
+  <img alt="Platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-4d6bfe" />
+  <img alt="Runtime" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4d6bfe" />
+  <img alt="Stack" src="https://img.shields.io/badge/Tauri%20v2%20%7C%20Rust-4d6bfe" />
+</p>
+
 ## 目录
 
 - [功能](#功能)
@@ -15,19 +22,19 @@
 
 ## 功能
 
-**核心能力**
-
-- Windows 单文件分发：单个 exe，无控制台窗口，双击即用
-- 自动准备运行环境：Windows 缺少 WebView2 时引导安装；各平台按需安装 Node.js 与 dsh
-- 一键更新 dsh 与 Node.js（失败自动回滚；更新被打断时，下次启动自动还原）
-- 单实例、服务自动恢复、端口冲突自动回退
-
-**桌面体验**
-
-- 托盘常驻；标题栏共用主菜单与实时余额（官方 `/user/balance` 接口，每 5 分钟自动刷新，可手动刷新）
-- 窗口位置记忆、深浅色自适应、Win11 系统圆角
-- 中英文界面：英文系统显示英文，其他系统显示中文（与 dsh 的产品默认语言一致）；可从标题栏/托盘菜单切换并记住选择
-- 自绘右键菜单（dsh 页面内）、托盘菜单与弹窗，风格与 dsh 界面统一
+| 能力 | 说明 |
+|---|---|
+| **单文件分发** | Windows 单个 exe、无控制台窗口，双击即用；macOS/Linux 解压即用 |
+| **零依赖准备** | 自动检测并安装 Node.js 与 dsh；Windows 缺少 WebView2 时引导安装 |
+| **一键更新** | dsh 与 Node.js 事务化更新（失败自动回滚，被打断下次启动自动还原）；应用本体自更新（Windows） |
+| **服务自愈** | 单实例、看门狗自动恢复、端口冲突自动回退、页面挂起自动重载 |
+| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 实时余额）、统一弹窗（左侧导航：余额/更新/插件/文件变更/关于） |
+| **插件管理** | 内置插件市场：搜索 npm 上的 dsh 插件，一键安装/卸载（走官方 `dsh plugin`） |
+| **会话文件变更** | 只读解析最近会话对文件的所有改动（行级 diff），纯 edit 改动可一键还原 |
+| **多 profile** | 托盘菜单切换启动配置（`dsh --profile`），切换后重启生效 |
+| **便携模式** | exe 旁放 `portable.txt`，数据跟随 exe，拷 U 盘即用 |
+| **通知与提醒** | 任务完成系统通知（点击回窗口）、运行期每 6 小时自动检查更新 |
+| **双语界面** | 界面语言跟随 dsh 设置（中/英），深浅色随系统/主题自动切换 |
 
 ## 平台支持
 
@@ -55,6 +62,12 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 各平台产物以最新 Release 附件为准，GitHub Actions 也会产出各平台的构建产物。所有产物均未签名，系统安全策略可能要求手动允许。
 
 首次运行会自动补齐运行环境——按需安装 Node.js 与 dsh 包——随后启动 `dsh web`（默认端口 3080）。Linux 还需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
+
+**第一次启动的旅程**：
+
+1. **Loading 界面**：自动检测/安装运行时（进度 + 步骤指示，多步流程一目了然）
+2. **首次使用配置**（全新安装时出现）：引导设置 API Key、语言、主题与开机自启（可跳过，之后在 dsh 设置页配置）
+3. **主界面**：就绪后自动进入 dsh 官方 Web 界面；标题栏显示实时余额，托盘常驻
 
 ## 配置
 
@@ -151,7 +164,7 @@ desktop/
     lib.rs              # run() 组装、状态广播、导航、右键菜单注入脚本、自定义协议
     app_state.rs        # 共享状态：配置、引导阶段、生命周期锁、弹窗轮询数据
     commands.rs         # Tauri 命令层（IPC 转发，无业务实现）
-    app_dialog.rs       # 统一自绘弹窗（余额 / 检查更新 / 关于）
+    app_dialog.rs       # 统一自绘弹窗（左侧导航：余额/检查更新/插件/文件变更/关于）
     dialog.rs           # 原生消息框封装（模态、互斥）
     file_actions.rs     # 本地文件动作（默认程序打开 / 定位 / 打开方式）
     icons.rs            # 图标提取（SHGetFileInfo → PNG，含缓存）
