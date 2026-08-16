@@ -41,6 +41,13 @@ jobs:
             target: x86_64-unknown-linux-gnu
             cross: ""
             timeout: 45
+          # GitHub 免费 ARM runner（dsh 官方亦支持 linux-arm64）
+          - os: ubuntu-24.04-arm
+            name: linux-arm64
+            asset: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            cross: ""
+            timeout: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -86,18 +93,25 @@ jobs:
         if: matrix.cross != '' && github.event_name != 'pull_request'
         run: cargo build --locked --release --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml
 
-      # artifact 上传不会保留 Unix 可执行位；先打 tar.gz，下载解压后可直接运行。
-      # 产物用面向用户的 asset 名（windows-x64/macos-arm64/linux-x64），
+      # 打包为 zip：一步解压得到可执行本体，macOS 双击解压无 .tar.gz 的两层中间态；
+      # zip 在 Unix 上记录可执行位，下载解压后可直接运行。
+      # 产物用面向用户的 asset 名（如 windows-x64 / macos-arm64 / linux-arm64），
       # 而非 Rust target triple。
       - name: Package artifact (native Unix)
         if: runner.os != 'Windows' && github.event_name != 'pull_request'
         shell: bash
-        run: tar -C "src-tauri/target/${{ matrix.target }}/release" -czf "DSHDesktop-${{ matrix.asset }}.tar.gz" DSHDesktop
+        run: |
+          cd "src-tauri/target/${{ matrix.target }}/release"
+          zip -q "DSHDesktop-${{ matrix.asset }}.zip" DSHDesktop
+          mv "DSHDesktop-${{ matrix.asset }}.zip" "$GITHUB_WORKSPACE/"
 
       - name: Package artifact (cross Unix)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         shell: bash
-        run: tar -C "src-tauri/target/${{ matrix.cross }}/release" -czf "DSHDesktop-${{ matrix.cross-asset }}.tar.gz" DSHDesktop
+        run: |
+          cd "src-tauri/target/${{ matrix.cross }}/release"
+          zip -q "DSHDesktop-${{ matrix.cross-asset }}.zip" DSHDesktop
+          mv "DSHDesktop-${{ matrix.cross-asset }}.zip" "$GITHUB_WORKSPACE/"
 
       - name: Rename Windows asset
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
@@ -111,7 +125,7 @@ jobs:
           name: DSHDesktop-${{ matrix.asset }}
           path: |
             DSHDesktop-${{ matrix.asset }}.exe
-            DSHDesktop-${{ matrix.asset }}.tar.gz
+            DSHDesktop-${{ matrix.asset }}.zip
           if-no-files-found: warn
 
       - name: Upload artifact (cross)
@@ -120,5 +134,5 @@ jobs:
         with:
           name: DSHDesktop-${{ matrix.cross-asset }}
           path: |
-            DSHDesktop-${{ matrix.cross-asset }}.tar.gz
+            DSHDesktop-${{ matrix.cross-asset }}.zip
           if-no-files-found: warn

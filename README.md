@@ -31,20 +31,28 @@
 
 ## 平台支持
 
-| 平台 | 架构 | 状态 |
-|---|---|---|
-| Windows 10/11 | x64 | 支持；主要测试平台 |
-| macOS | arm64 / x64 | 支持；CI 产物未签名 |
-| Linux | x64 | 支持；需系统已安装 WebKitGTK 等依赖 |
+| 平台 | 架构 | 最低系统版本 | 状态 |
+|---|---|---|---|
+| Windows | x64 | Windows 10 及以上 | 支持；主要测试平台 |
+| macOS | arm64 / x64 | macOS 11.0 (Big Sur) 及以上 | 支持；CI 产物未签名 |
+| Linux | x64 / arm64 | Ubuntu 22.04 / Debian 12 及等价发行版（WebKitGTK 4.1） | 支持 |
+
+最低版本由底层依赖的上限决定（dsh 本身是纯 Node.js 工具，三平台通用）：
+
+- **Windows 10**：Node.js 22 的最低支持版本；WebView2 支持 1803+（Win11 预装，较老系统由外壳引导安装 Runtime）
+- **macOS 11.0**：Node.js 22 的 Tier 1 支持下限（高于 Tauri v2 的 10.15）
+- **Ubuntu 22.04 / Debian 12**：Tauri v2 依赖 WebKitGTK 4.1（高于 Node 的 glibc 2.28 要求）
+
+Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；不满足时 dsh 自动降级，不影响 Web 主界面运行。
 
 ## 快速开始
 
 从 [Releases](https://github.com/JeffioZ/dsh-desktop/releases) 下载对应平台的产物：
 
 - Windows：直接运行 `DSHDesktop.exe`
-- macOS / Linux：解压 `.tar.gz` 后运行 `DSHDesktop`
+- macOS / Linux：解压 `.zip` 后运行 `DSHDesktop`
 
-各平台产物的提供情况以最新 Release 附件为准；仓库的 GitHub Actions 也会产出三平台构建 artifacts。所有产物均未签名，系统安全策略可能要求手动允许。
+各平台产物的提供情况以最新 Release 附件为准；仓库的 GitHub Actions 也会产出各平台构建 artifacts。所有产物均未签名，系统安全策略可能要求手动允许。
 
 首次运行会自动安装 Node.js（缺失或版本不满足要求时）与 dsh 包，随后启动 `dsh web`（默认端口 3080）。Linux 仍需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
 
