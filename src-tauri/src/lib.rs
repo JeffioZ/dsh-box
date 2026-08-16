@@ -1456,9 +1456,15 @@ pub fn run() {
         .expect("failed to build tauri application");
 
     app.run(|app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { .. } = event {
-            window::save_window_state_now(app_handle);
-            dsh::shutdown(app_handle);
+        match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                window::save_window_state_now(app_handle);
+                dsh::shutdown(app_handle);
+            }
+            // macOS：点击系统通知/从后台恢复时恢复隐藏窗口（Windows 的通知
+            // 点击走系统激活 + 单实例回调 show_main，此处兜底 macOS/Linux）
+            tauri::RunEvent::Resumed => show_main(app_handle),
+            _ => {}
         }
     });
 }
