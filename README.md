@@ -87,6 +87,10 @@
 | `DSH_DESKTOP_API_BASE` | 覆盖 API 基地址 |
 | `DSHD_LANG` | 固定界面语言（`zh-CN` / `en`，重启后生效，优先级最高） |
 
+### 便携模式
+
+把 `DSHDesktop.exe` 所在目录放一个空的 `portable.txt` 文件，数据目录（`node/`、`dsh/`、`logs/`、`config.json`）即跟随 exe 存放在旁边的 `data/` 目录，拷贝到 U 盘即可随身携带。删除 `portable.txt` 即恢复常规模式。`DSH_DESKTOP_ROOT` 环境变量仍优先于便携模式。
+
 ### API Key
 
 解析顺序：`DSH_DESKTOP_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，未设置 `DSH_HOME` 时为 `~/.dsh/.credentials.yaml`）。

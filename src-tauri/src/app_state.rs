@@ -123,7 +123,7 @@ impl Config {
     pub fn load() -> Config {
         let root = std::env::var("DSH_DESKTOP_ROOT")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| default_app_root());
+            .unwrap_or_else(|_| portable_root().unwrap_or_else(default_app_root));
         let port = std::env::var("DSH_DESKTOP_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
@@ -478,6 +478,18 @@ pub(crate) fn default_app_root() -> PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(std::env::temp_dir)
         .join(APP_DIR_NAME)
+}
+
+/// 便携模式：exe 同级存在 `portable.txt` 时，数据目录跟随 exe（exe 旁 `data/`）。
+/// 显式标记避免误判；删除标记即恢复常规模式。环境变量 `DSH_DESKTOP_ROOT` 优先。
+fn portable_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    if dir.join("portable.txt").is_file() {
+        Some(dir.join("data"))
+    } else {
+        None
+    }
 }
 
 static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
