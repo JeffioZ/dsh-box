@@ -121,11 +121,7 @@ pub fn changes(app: &AppHandle) -> SessionChanges {
 pub fn revert(app: &AppHandle, path: &str) -> Result<(), String> {
     let config = app.state::<AppState>().config();
     let Some((_, log_path)) = latest_session(&config.dsh_home().join("sessions")) else {
-        return Err(crate::locale::text(
-            "未找到会话日志。",
-            "No session log found.",
-        )
-        .into());
+        return Err(crate::locale::text("未找到会话日志。", "No session log found.").into());
     };
     let ops = parse_edits(&log_path);
     let mut edits: Vec<EditOp> = ops
@@ -152,8 +148,12 @@ pub fn revert(app: &AppHandle, path: &str) -> Result<(), String> {
         .into());
     }
     let target = PathBuf::from(path);
-    let mut content = std::fs::read_to_string(&target)
-        .map_err(|e| format!("{}: {e}", crate::locale::text("读取文件失败", "Failed to read the file")))?;
+    let mut content = std::fs::read_to_string(&target).map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("读取文件失败", "Failed to read the file")
+        )
+    })?;
     // 逆序反向应用（从最后一次改动往前），避免前面的替换破坏后续匹配
     edits.sort_by_key(|e| std::cmp::Reverse(e.seq));
     for e in &edits {
@@ -203,7 +203,9 @@ fn parse_edits(log_path: &Path) -> Vec<ParsedEdit> {
         let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        let Some(data) = obj.get("data") else { continue };
+        let Some(data) = obj.get("data") else {
+            continue;
+        };
         let Some(name) = data.get("name").and_then(|v| v.as_str()) else {
             continue;
         };

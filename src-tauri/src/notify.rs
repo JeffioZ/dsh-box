@@ -48,11 +48,7 @@ fn poll_once(
     app: &AppHandle,
     watched: &mut HashMap<PathBuf, WatchedSession>,
 ) -> Result<(), String> {
-    let sessions_root = app
-        .state::<AppState>()
-        .config()
-        .dsh_home()
-        .join("sessions");
+    let sessions_root = app.state::<AppState>().config().dsh_home().join("sessions");
     if !sessions_root.is_dir() {
         return Ok(()); // dsh 尚未产生会话目录，静默等待
     }
@@ -75,9 +71,7 @@ fn poll_once(
         let Some(seq) = latest_turn_end_seq(&path)? else {
             continue; // 没有 turn/end（空会话/异常文件），等待下次变化
         };
-        let is_new = entry
-            .notified_seq
-            .is_some_and(|notified| seq > notified);
+        let is_new = entry.notified_seq.is_some_and(|notified| seq > notified);
         entry.last_turn_end_seq = Some(seq);
         entry.notified_seq = Some(seq);
         if !is_new {
@@ -99,10 +93,7 @@ fn poll_once(
 }
 
 /// 递归收集所有 `session.jsonl.zstd` 及其 mtime。
-fn collect_sessions(
-    root: &Path,
-    out: &mut HashMap<PathBuf, SystemTime>,
-) -> Result<(), String> {
+fn collect_sessions(root: &Path, out: &mut HashMap<PathBuf, SystemTime>) -> Result<(), String> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取会话目录失败：{e}"))?;

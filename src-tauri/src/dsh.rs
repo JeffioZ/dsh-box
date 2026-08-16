@@ -71,7 +71,8 @@ fn wait_onboarding(state: &AppState) -> bool {
 
 /// 一轮完整引导；成功返回 Ok(())，失败返回错误信息。
 /// 全程持有生命周期锁，与托盘“重启服务”/更新流程互斥，杜绝双服务并发。
-fn boot_once(app: &AppHandle) -> Result<(), String> {    let state = app.state::<AppState>();
+fn boot_once(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
     let _guard = state.lifecycle_guard();
 
     // 并发路径（更新/手动重启）可能刚把服务拉起：直接复用，避免双实例——

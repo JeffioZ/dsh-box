@@ -494,7 +494,11 @@ fn portable_root() -> Option<PathBuf> {
 
 static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-pub(crate) fn save_config_value(root: &Path, key: &str, value: serde_json::Value) -> Result<(), String> {
+pub(crate) fn save_config_value(
+    root: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = root.join("config.json");
     let mut json = match std::fs::read_to_string(&path) {
@@ -723,7 +727,11 @@ impl AppState {
     pub fn toggle_hide_tool_calls(&self) -> Result<bool, String> {
         let config = self.config();
         let next = !config.hide_tool_calls;
-        save_config_value(&config.root, "hide_tool_calls", serde_json::Value::Bool(next))?;
+        save_config_value(
+            &config.root,
+            "hide_tool_calls",
+            serde_json::Value::Bool(next),
+        )?;
         self.lock_inner().config.hide_tool_calls = next;
         Ok(next)
     }
@@ -732,11 +740,9 @@ impl AppState {
     /// 调用方负责重启服务使新 profile 生效。
     pub fn set_profile(&self, name: &str) -> Result<(), String> {
         if !is_valid_profile_name(name) {
-            return Err(crate::locale::text(
-                "非法的 profile 名称。",
-                "Invalid profile name.",
-            )
-            .into());
+            return Err(
+                crate::locale::text("非法的 profile 名称。", "Invalid profile name.").into(),
+            );
         }
         save_config_value(
             &self.config().root,

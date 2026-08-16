@@ -120,7 +120,8 @@ pub fn silent_check(app: &AppHandle) {
 /// 运行期周期检查（每 6 小时）：发现 dsh 新版时弹提示，不自动安装。
 /// 与启动静默检查相互独立（不共享其一次性 CHECKED 标记）；退出中不再检查。
 pub fn start_periodic_check(app: AppHandle) {
-    const PERIODIC_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+    const PERIODIC_CHECK_INTERVAL: std::time::Duration =
+        std::time::Duration::from_secs(6 * 60 * 60);
     std::thread::spawn(move || loop {
         std::thread::sleep(PERIODIC_CHECK_INTERVAL);
         if app.state::<AppState>().is_quitting() {
@@ -149,7 +150,8 @@ pub fn start_periodic_check(app: AppHandle) {
 }
 
 /// 有新版时的启动提示（不自动安装，用户确认才更新）。
-fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {    use tauri_plugin_dialog::MessageDialogKind;
+fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
+    use tauri_plugin_dialog::MessageDialogKind;
     let msg = if crate::locale::is_chinese() {
         format!(
             "dsh 有新版本可用：\n{}（当前 {}）\n\n是否立即更新？",
@@ -336,8 +338,8 @@ fn check_app_update() -> Option<VersionInfo> {
         .and_then(|v| v.as_str())
         .map(|t| t.trim_start_matches('v').to_string())?;
     let installed = env!("CARGO_PKG_VERSION").to_string();
-    let update_available = versions::compare_versions(&latest, &installed)
-        == std::cmp::Ordering::Greater;
+    let update_available =
+        versions::compare_versions(&latest, &installed) == std::cmp::Ordering::Greater;
     Some(VersionInfo {
         installed,
         latest,
@@ -778,8 +780,7 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
         }
 
         // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动）
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+        let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
         let backup = dir.join("DSHDesktop.exe.old");
         let script = dir.join("replace.ps1");
         let script_text = format!(

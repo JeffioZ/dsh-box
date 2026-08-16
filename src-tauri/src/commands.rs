@@ -116,7 +116,10 @@ pub async fn apply_updates(
 
 /// 已安装插件列表。
 #[tauri::command]
-pub fn plugin_list(app: AppHandle, webview: tauri::Webview) -> Result<Vec<crate::plugins::PluginInfo>, String> {
+pub fn plugin_list(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::PluginInfo>, String> {
     ensure_local_origin(&webview)?;
     Ok(crate::plugins::list(&app))
 }
@@ -178,11 +181,7 @@ pub fn session_changes(
 
 /// 还原指定文件到会话前状态（反向应用会话内全部 edit）。
 #[tauri::command]
-pub fn session_revert(
-    app: AppHandle,
-    webview: tauri::Webview,
-    path: String,
-) -> Result<(), String> {
+pub fn session_revert(app: AppHandle, webview: tauri::Webview, path: String) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     crate::session_diff::revert(&app, &path)
 }

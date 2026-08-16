@@ -135,8 +135,14 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         rows.push(profile_item);
     }
     rows.push(TrayMenuItem::sep());
-    rows.push(TrayMenuItem::row("about", crate::locale::text("关于", "About")));
-    rows.push(TrayMenuItem::row("quit", crate::locale::text("退出", "Quit")));
+    rows.push(TrayMenuItem::row(
+        "about",
+        crate::locale::text("关于", "About"),
+    ));
+    rows.push(TrayMenuItem::row(
+        "quit",
+        crate::locale::text("退出", "Quit"),
+    ));
     if tray_surface {
         rows.insert(
             1,
@@ -164,11 +170,7 @@ fn profile_menu_item() -> Option<TrayMenuItem> {
         profiles
             .into_iter()
             .map(|name| {
-                TrayMenuItem::choice(
-                    &format!("profile_{name}"),
-                    &name,
-                    name == config.profile,
-                )
+                TrayMenuItem::choice(&format!("profile_{name}"), &name, name == config.profile)
             })
             .collect(),
     ))

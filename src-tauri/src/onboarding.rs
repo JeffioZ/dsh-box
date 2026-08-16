@@ -65,11 +65,7 @@ pub fn state(app: &AppHandle) -> OnboardingState {
 pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     let config = app.state::<AppState>().config();
     // 先落标记：即使后续某一步失败，下次启动也不再重复引导（避免死循环）
-    app_state::save_config_value(
-        &config.root,
-        "onboarded",
-        serde_json::Value::Bool(true),
-    )?;
+    app_state::save_config_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
     if payload.skip {
         return Ok(());
     }
@@ -231,7 +227,10 @@ mod tests {
         cfg.save_dsh_theme("light").unwrap();
         let text = std::fs::read_to_string(home.join("settings.yaml")).unwrap();
         assert!(text.contains("ui-theme:\n  preference: light"));
-        assert!(text.contains("locale:\n  preference: zh"), "其他段落不得被触碰");
+        assert!(
+            text.contains("locale:\n  preference: zh"),
+            "其他段落不得被触碰"
+        );
         assert!(text.contains("other:\n  x: 1"));
         assert!(!text.contains("preference: dark"));
         // 无 ui-theme 段时追加

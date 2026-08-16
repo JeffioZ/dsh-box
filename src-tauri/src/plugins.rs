@@ -89,9 +89,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
         return Ok(vec![]);
     }
     let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let url = format!(
-        "https://registry.npmjs.org/-/v1/search?text={encoded}&size=24"
-    );
+    let url = format!("https://registry.npmjs.org/-/v1/search?text={encoded}&size=24");
     let resp = crate::runtime::client()
         .get(&url)
         .header("User-Agent", "DSHDesktop")
@@ -133,11 +131,9 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
 pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(crate::locale::text(
-            "插件名不能为空。",
-            "The package name must not be empty.",
-        )
-        .into());
+        return Err(
+            crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
+        );
     }
     run_dsh_plugin(app, &["add", name])?;
     crate::logging::log(&format!("plugins: 已安装 {name}，重启服务生效"));
@@ -149,11 +145,9 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
 pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(crate::locale::text(
-            "插件名不能为空。",
-            "The package name must not be empty.",
-        )
-        .into());
+        return Err(
+            crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
+        );
     }
     run_dsh_plugin(app, &["remove", name])?;
     crate::logging::log(&format!("plugins: 已卸载 {name}，重启服务生效"));
@@ -230,11 +224,7 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     if !status.success() {
         let tail = format!("{stdout}\n{stderr}").trim().to_string();
         return Err(if tail.is_empty() {
-            crate::locale::text(
-                "dsh 插件命令执行失败。",
-                "The dsh plugin command failed.",
-            )
-            .into()
+            crate::locale::text("dsh 插件命令执行失败。", "The dsh plugin command failed.").into()
         } else {
             tail
         });
