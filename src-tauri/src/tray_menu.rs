@@ -5,9 +5,11 @@
 //! 关键实现约束：窗口在启动时预创建一次、此后只 定位/显示/隐藏——
 //! 绝不在事件回调里新建或销毁 WebView 窗口（否则主线程卡死）。
 
-use tauri::WebviewUrl;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
+#[cfg(windows)]
+use tauri::{Emitter, WebviewUrl};
 
+#[cfg(windows)]
 use crate::app_state::AppState;
 use crate::autostart;
 

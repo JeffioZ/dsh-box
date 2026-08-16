@@ -204,6 +204,7 @@ fn crc32(data: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use super::icon_png_16;
 
     /// 用系统 notepad.exe 验证 SHGetFileInfo → GetDIBits → PNG 编码全链路。
