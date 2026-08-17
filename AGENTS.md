@@ -34,7 +34,7 @@ cargo test --manifest-path src-tauri/Cargo.toml # 单测
 ## 关键架构事实（改代码前必读）
 
 - **配置**：数据目录（默认 `%LOCALAPPDATA%\DSHDesktop`，可用 `DSH_DESKTOP_ROOT` 覆盖）下 `config.json`：`port` / `api_key` / `api_base` / `language`。环境变量（`DSH_DESKTOP_*`、`DSHD_LANG`）优先于 config.json。见 `app_state.rs::Config::load`。
-- **语言与主题**：优先读 dsh 的 `$DSH_HOME/settings.yaml`（`locale.preference`、`ui-theme.preference`），写操作只做行级合并且**必须走 `atomic_write`**（崩溃不截断；dsh 有文件监视器会热发布）。`tray::start_follow_dsh_settings` 每 15s 跟随一次。
+- **语言与主题**：优先读 dsh 的 `$DSH_HOME/settings.yaml`（`locale.preference`、`ui-theme.preference`），写操作只做行级合并且**必须走 `atomic_write`**（崩溃不截断；dsh 有文件监视器会热发布）。`tray::start_follow_dsh_settings` 每 3s 检查一次该文件 mtime，文件变化才跟随（无变化零解析开销）。
 - **注入脚本**：`PAGE_INIT_SCRIPT`（深色主题首帧预设）+ `locale::init_script()` 在窗口创建时作为 `initialization_script`；`MENU_INJECT` 是导航到 dsh 页面后 `eval` 的右键菜单注入（**对外部 URL 导航，initialization_script 不可靠，必须走 navigate 后的 eval**——见 `lib.rs` 的 `on_navigation` 观察器）。
 - **更新事务**：`update_txn.rs` 提供"备份 + 标记 + 中断恢复"原语；`updater.rs` 的 dsh/Node 更新与回滚都基于它。新增任何"替换文件"类操作（如 exe 自更新）必须复用该事务模式。
 - **进程树**：`processes.rs` 用 Windows Job / Unix 进程组守卫，退出时清理全部子进程，不留孤儿。
