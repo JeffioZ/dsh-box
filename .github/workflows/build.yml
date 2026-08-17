@@ -17,7 +17,7 @@ jobs:
   version-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Check version consistency
         run: |
           cargo_ver=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
@@ -67,7 +67,7 @@ jobs:
             cross: ""
             timeout: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -138,7 +138,7 @@ jobs:
 
       - name: Upload artifact (native)
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: DSHDesktop-${{ matrix.asset }}
           path: |
@@ -148,7 +148,7 @@ jobs:
 
       - name: Upload artifact (cross)
         if: matrix.cross != '' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: DSHDesktop-${{ matrix.cross-asset }}
           path: |
@@ -164,7 +164,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -172,7 +172,7 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
