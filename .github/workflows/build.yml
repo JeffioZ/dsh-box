@@ -159,7 +159,7 @@ jobs:
   # 产物永远来自 CI、永远全平台、永远正确命名，杜绝手动传本地产物。
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, version-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write

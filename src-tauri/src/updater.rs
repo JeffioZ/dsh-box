@@ -773,7 +773,7 @@ fn download_app_exe(app: &AppHandle, target: &std::path::Path) -> Result<(), Str
 #[cfg(windows)]
 fn download_app_exe_inner(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
     const ASSET_URL: &str =
-        "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop.exe";
+        "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop-windows-x64.exe";
     // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
     emit_progress(
         app,
