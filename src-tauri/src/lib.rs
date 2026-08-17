@@ -1073,8 +1073,6 @@ if (!window.__dshdHeartbeat) {
 }
 "#;
 
-
-
 /// 让 WebView 跳到 dsh 界面（或返回本地启动页）。
 pub fn navigate(app: &AppHandle, url: &str) {
     let Some(wv) = main_webview(app) else {

@@ -14,7 +14,6 @@ use crate::app_state::AppState;
 /// 弹窗窗口 label。
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
-
 /// 弹窗统一为"左侧导航 + 右侧内容"布局：固定尺寸容纳导航栏与内容区。
 /// 680 宽（导航 152 + 内容 528）、560 高——紧凑不空旷。
 fn dialog_size(_kind: &str) -> (f64, f64) {

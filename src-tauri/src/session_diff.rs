@@ -305,7 +305,8 @@ fn is_within_workdir(target: &Path, cwd: &Path) -> bool {
 }
 
 /// 最新会话：sessions/ 下 mtime 最新的 session.jsonl.zstd（排除备份）。
-fn latest_session(sessions_root: &Path) -> Option<(String, PathBuf)> {    if !sessions_root.is_dir() {
+fn latest_session(sessions_root: &Path) -> Option<(String, PathBuf)> {
+    if !sessions_root.is_dir() {
         return None;
     }
     let mut best: Option<(u64, String, PathBuf)> = None;
@@ -398,7 +399,10 @@ mod tests {
         // 越界：拒绝
         assert!(!is_within_workdir(Path::new("D:/other/a.rs"), cwd));
         assert!(!is_within_workdir(Path::new("D:/repo2/a.rs"), cwd));
-        assert!(!is_within_workdir(Path::new("D:/repo/../outside/a.rs"), cwd));
+        assert!(!is_within_workdir(
+            Path::new("D:/repo/../outside/a.rs"),
+            cwd
+        ));
         assert!(!is_within_workdir(Path::new("C:/Windows/system32/x"), cwd));
         // 大小写不敏感（Windows 语义）：同目录不同大小写放行
         assert!(is_within_workdir(Path::new("d:/REPO/src/a.rs"), cwd));

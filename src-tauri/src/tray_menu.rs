@@ -78,7 +78,8 @@ impl TrayMenuItem {
 pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     let mut rows = vec![
         TrayMenuItem::row_icon(
-            "open", "window",
+            "open",
+            "window",
             &format!(
                 "{} {}",
                 crate::locale::text("打开", "Open"),
@@ -86,29 +87,35 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             ),
         ),
         TrayMenuItem::row_icon(
-            "open_browser", "globe",
+            "open_browser",
+            "globe",
             crate::locale::text("在浏览器中打开", "Open in browser"),
         ),
         TrayMenuItem::sep(),
         TrayMenuItem::row_icon(
-            "restart", "restart",
+            "restart",
+            "restart",
             crate::locale::text("重启服务", "Restart service"),
         ),
         TrayMenuItem::row_icon(
-            "check_update", "download",
+            "check_update",
+            "download",
             crate::locale::text("检查更新…", "Check for updates…"),
         ),
         TrayMenuItem::row_icon(
-            "plugins", "puzzle",
+            "plugins",
+            "puzzle",
             crate::locale::text("插件管理…", "Plugin manager…"),
         ),
         TrayMenuItem::row_icon(
-            "session_diff", "file",
+            "session_diff",
+            "file",
             crate::locale::text("会话文件变更…", "Session file changes…"),
         ),
         TrayMenuItem::sep(),
         TrayMenuItem::row_icon(
-            "autostart", "power",
+            "autostart",
+            "power",
             &format!(
                 "{}: {}",
                 crate::locale::text("开机自启动", "Launch at startup"),
@@ -120,7 +127,8 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             ),
         ),
         TrayMenuItem::row_icon(
-            "hide_tool_calls", "eye",
+            "hide_tool_calls",
+            "eye",
             &format!(
                 "{}: {}",
                 crate::locale::text("隐藏工具调用", "Hide tool calls"),
@@ -140,11 +148,13 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     }
     rows.push(TrayMenuItem::sep());
     rows.push(TrayMenuItem::row_icon(
-        "about", "info",
+        "about",
+        "info",
         crate::locale::text("关于", "About"),
     ));
     rows.push(TrayMenuItem::row_icon(
-        "quit", "exit",
+        "quit",
+        "exit",
         crate::locale::text("退出", "Quit"),
     ));
     if tray_surface {

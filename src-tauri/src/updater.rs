@@ -735,8 +735,8 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
         // 预下载判定：仅当内存标记存在且文件通过 MZ 校验才算"已就绪"。
         // 残留的截断文件/上一轮已应用的旧文件（无标记或校验失败）一律
         // 清除并重新下载——否则会把旧版 exe 当"更新"应用（降级）或损坏文件直接应用。
-        let preloaded = app.state::<AppState>().app_update_ready().is_some()
-            && valid_downloaded_exe(&target);
+        let preloaded =
+            app.state::<AppState>().app_update_ready().is_some() && valid_downloaded_exe(&target);
         if !preloaded {
             let _ = std::fs::remove_file(&target);
             download_app_exe(app, &target)?;
@@ -836,14 +836,14 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
         return Ok(());
     }
 
-        // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动；
-        //    复制失败自动把备份移回，避免 exe 被移走留下损坏安装）
-        let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
-        let backup = dir.join("DSHDesktop.exe.old");
-        let script = dir.join("replace.ps1");
-        // PowerShell 单引号字符串内转义：' → ''
-        let ps_quote = |s: &std::path::Path| s.to_string_lossy().replace('\'', "''");
-        let script_text = format!(
+    // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动；
+    //    复制失败自动把备份移回，避免 exe 被移走留下损坏安装）
+    let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+    let backup = dir.join("DSHDesktop.exe.old");
+    let script = dir.join("replace.ps1");
+    // PowerShell 单引号字符串内转义：' → ''
+    let ps_quote = |s: &std::path::Path| s.to_string_lossy().replace('\'', "''");
+    let script_text = format!(
             "$ErrorActionPreference = 'Continue'\n\
              Start-Sleep -Seconds 2\n\
              $src = '{}'\n\
@@ -860,33 +860,33 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
             ps_quote(&exe),
             ps_quote(&backup),
         );
-        std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
+    std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
 
-        // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
-        let spawn = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-WindowStyle",
-                "Hidden",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(&script)
-            .spawn();
-        if spawn.is_err() {
-            return Err(crate::locale::text(
-                "无法启动更新脚本。",
-                "Failed to start the update script.",
-            )
-            .into());
-        }
-        crate::logging::log(&format!("updater: 应用更新已就绪，退出并重启（{exe:?}）"));
-        // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）
-        crate::window::save_window_state_now(app);
-        crate::dsh::shutdown(app);
-        app.exit(0);
-        Ok(())
+    // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
+    let spawn = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-WindowStyle",
+            "Hidden",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&script)
+        .spawn();
+    if spawn.is_err() {
+        return Err(crate::locale::text(
+            "无法启动更新脚本。",
+            "Failed to start the update script.",
+        )
+        .into());
+    }
+    crate::logging::log(&format!("updater: 应用更新已就绪，退出并重启（{exe:?}）"));
+    // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）
+    crate::window::save_window_state_now(app);
+    crate::dsh::shutdown(app);
+    app.exit(0);
+    Ok(())
 }
 
 /// 后台预下载应用更新（无需用户确认）：发现新版且未下载时自动下载，

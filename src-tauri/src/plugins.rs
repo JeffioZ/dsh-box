@@ -175,9 +175,14 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
         safe_args,
         nonce_hex
     ));
-    let out_file = std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
-    cmd.stdout(out_file.try_clone().map_err(|e| format!("复制输出句柄失败：{e}"))?)
-        .stderr(out_file);
+    let out_file =
+        std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
+    cmd.stdout(
+        out_file
+            .try_clone()
+            .map_err(|e| format!("复制输出句柄失败：{e}"))?,
+    )
+    .stderr(out_file);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
