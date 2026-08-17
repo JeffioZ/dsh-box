@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
 
 # 同一分支/PR 的并发构建自动取消旧的，避免排队浪费
@@ -11,6 +12,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 版本号一致性：Cargo.toml / package.json / tauri.conf.json 三处必须同步，
+  # 漏改任何一处都会在构建前拦下。
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check version consistency
+        run: |
+          cargo_ver=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          pkg_ver=$(node -p "require('./package.json').version")
+          tauri_ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "Cargo.toml=$cargo_ver  package.json=$pkg_ver  tauri.conf.json=$tauri_ver"
+          if [ -z "$cargo_ver" ] || [ "$cargo_ver" != "$pkg_ver" ] || [ "$pkg_ver" != "$tauri_ver" ]; then
+            echo "::error::三处版本号不一致，请同步后再提交"
+            exit 1
+          fi
+
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -136,3 +154,25 @@ jobs:
           path: |
             DSHDesktop-${{ matrix.cross-asset }}.zip
           if-no-files-found: warn
+
+  # tag 触发（push v*）时：汇总五平台产物并自动发布 release。
+  # 产物永远来自 CI、永远全平台、永远正确命名，杜绝手动传本地产物。
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
