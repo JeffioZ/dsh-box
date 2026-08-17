@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # GitHub Actions 自动升级：major 版本变化会提 PR（CI 全绿后再合并）。
+  # minor/patch 由浮动 tag（如 @v7）自动跟随，无需 PR。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 5
