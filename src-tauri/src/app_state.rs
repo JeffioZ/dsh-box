@@ -74,6 +74,10 @@ pub struct Config {
     pub ui_language: Option<String>,
     /// 隐藏 dsh 对话中的工具调用卡片（仅保留文本消息与最终输出）。
     pub hide_tool_calls: bool,
+    /// 隐藏 dsh 输入区上方的会话统计行（统计迁移到自绘状态栏，默认隐藏）。
+    pub hide_stats_line: bool,
+    /// 隐藏窗口底部自绘状态栏（会话统计与余额一并隐藏，默认显示）。
+    pub hide_statusbar: bool,
     /// 启动的 dsh profile 名（默认 web）。
     pub profile: String,
 }
@@ -143,6 +147,8 @@ impl Config {
             api_base,
             ui_language: None,
             hide_tool_calls: false,
+            hide_stats_line: true,
+            hide_statusbar: false,
             profile: "web".into(),
         };
         let cfg_file = cfg.root.join("config.json");
@@ -173,6 +179,12 @@ impl Config {
                 }
                 if let Some(hide) = json.get("hide_tool_calls").and_then(|v| v.as_bool()) {
                     cfg.hide_tool_calls = hide;
+                }
+                if let Some(hide) = json.get("hide_stats_line").and_then(|v| v.as_bool()) {
+                    cfg.hide_stats_line = hide;
+                }
+                if let Some(hide) = json.get("hide_statusbar").and_then(|v| v.as_bool()) {
+                    cfg.hide_statusbar = hide;
                 }
                 if let Some(profile) = json.get("profile").and_then(|v| v.as_str()) {
                     if is_valid_profile_name(profile) {
@@ -569,6 +581,44 @@ fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(temp, target)
 }
 
+/// dev 构建标记（setup 时按 bake 的 devUrl 判定一次）。dev 构建下
+/// onboarding 每次启动都引导（便于测试），正式构建不受影响。
+static DEV_BUILD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn mark_dev_build() {
+    DEV_BUILD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn dev_build() -> bool {
+    DEV_BUILD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 首次配置是否已由用户完成（保存/跳过）。boot 等待用：
+/// dev 构建下 onboarding_pending 恒 true，等待判定必须以用户动作为准，
+/// 否则保存后仍等满 60 秒兜底超时才继续。
+static ONBOARDING_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn mark_onboarding_done() {
+    ONBOARDING_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn onboarding_done() -> bool {
+    ONBOARDING_DONE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 首次配置面板是否已在启动页显示（前端显示后回报）。
+/// boot 等待据此区分：面板已显示则无限等待用户操作（有跳过按钮，
+/// 无需兜底）；未显示（启动页异常）60 秒后自动放行防卡死。
+static ONBOARDING_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn mark_onboarding_shown() {
+    ONBOARDING_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn onboarding_shown() -> bool {
+    ONBOARDING_SHOWN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) struct Inner {
     config: Config,
     phase: BootPhase,
@@ -576,6 +626,8 @@ pub(crate) struct Inner {
     detail: String,
     /// dsh 子进程树守卫（关闭即回收：Windows Job / Unix 进程组）。
     job: Option<TreeGuard>,
+    /// 开发模式 UI 静态服务器守卫；正式版始终为 None。
+    dev_ui_job: Option<TreeGuard>,
     dsh_pid: Option<u32>,
     quitting: bool,
     /// 更新进行中（看门狗跳过自动重启）。
@@ -653,6 +705,7 @@ impl AppState {
             message: String::new(),
             detail: String::new(),
             job: None,
+            dev_ui_job: None,
             dsh_pid: None,
             quitting: false,
             updating: false,
@@ -753,6 +806,32 @@ impl AppState {
         Ok(next)
     }
 
+    /// 切换“隐藏会话统计行”开关，持久化到 config.json，返回新值。
+    pub fn toggle_hide_stats_line(&self) -> Result<bool, String> {
+        let config = self.config();
+        let next = !config.hide_stats_line;
+        save_config_value(
+            &config.root,
+            "hide_stats_line",
+            serde_json::Value::Bool(next),
+        )?;
+        self.lock_inner().config.hide_stats_line = next;
+        Ok(next)
+    }
+
+    /// 切换“隐藏状态栏”开关，持久化到 config.json，返回新值。
+    pub fn toggle_hide_statusbar(&self) -> Result<bool, String> {
+        let config = self.config();
+        let next = !config.hide_statusbar;
+        save_config_value(
+            &config.root,
+            "hide_statusbar",
+            serde_json::Value::Bool(next),
+        )?;
+        self.lock_inner().config.hide_statusbar = next;
+        Ok(next)
+    }
+
     /// 切换启动 profile，持久化到 config.json 并更新内存配置。
     /// 调用方负责重启服务使新 profile 生效。
     pub fn set_profile(&self, name: &str) -> Result<(), String> {
@@ -773,9 +852,10 @@ impl AppState {
     /// 首次使用配置是否尚未完成：仅当数据目录完全没有 config.json（全新安装）
     /// 时才需要引导。老用户升级（config.json 已存在，含窗口记忆/语言等）一律
     /// 跳过——此前按 onboarded 标记判断会把升级用户误判为首次，导致 boot
-    /// 永久等待配置而无法进入 dsh 界面。
+    /// 永久等待配置而无法进入 dsh 界面。dev 构建恒为 true（每次启动展示
+    /// 首次配置界面，便于测试；正式构建不受影响）。
     pub(crate) fn onboarding_pending(&self) -> bool {
-        !self.config().root.join("config.json").is_file()
+        dev_build() || !self.config().root.join("config.json").is_file()
     }
 
     pub fn snapshot(&self) -> StatusPayload {
@@ -856,6 +936,10 @@ impl AppState {
         let mut g = self.lock_inner();
         g.dsh_pid = Some(pid);
         g.job = job;
+    }
+
+    pub(crate) fn set_dev_ui_job(&self, job: Option<TreeGuard>) {
+        self.lock_inner().dev_ui_job = job;
     }
 
     /// 是否持有由本应用启动的 dsh 进程。

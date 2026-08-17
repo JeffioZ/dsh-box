@@ -1,0 +1,232 @@
+// 底部状态栏：会话统计（session-stats-updated）+ 余额 chip（balance-updated）。
+// 悬停说明使用系统默认 title；WebView 始终固定高度，避免透明层扩缩重绘残影。
+
+const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+const listen = (event, handler) => window.__TAURI__.event.listen(event, handler);
+const $ = (id) => document.getElementById(id);
+
+// 统计组图标（装饰性：旁边有可见文本，aria-hidden；单族 outline stroke）
+// 12px 渲染下控制细节密度：气泡去三点、圆柱去中间弧，保证剪影清晰
+const GROUP_ICONS = {
+  counts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"></path></svg>',
+  durations: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>',
+  speeds: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>',
+  cache: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z"></path><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path></svg>',
+  tokens: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3 21 7 17 11"></path><path d="M21 7H9"></path><path d="M7 13 3 17 7 21"></path><path d="M3 17h12"></path></svg>',
+};
+const WALLET_ICON = '<svg class="c-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h13"></path><path d="M3 5v14a2 2 0 0 0 2 2h16V7"></path><path d="M16 13h3"></path></svg>';
+
+let statsGroups = [];
+let avgTps = null; // stats 载荷的平均解码速率（tok/s）
+let liveTps = null; // 实时速率（流式期间有值，空闲为 null）
+let detailsMap = {}; // key → 额外明细行（状态栏未显示的补充数据）
+let lastBalance = null;
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// ---------- 会话统计 ----------
+
+function renderStats() {
+  const el = $('stats');
+  if (!statsGroups.length) {
+    el.innerHTML = '';
+    el.dataset.truncated = '0';
+    el.title = '';
+    el.setAttribute('aria-label', dshdT('statsRegion'));
+    return;
+  }
+  // tok/s 实时优先、平均回退（speeds 组的 Rust 文本只含首 token）
+  const tps = liveTps != null ? liveTps : avgTps;
+  const tpsText = tps != null ? formatTps(tps) : '';
+  el.innerHTML = statsGroups.map((g, i) => {
+    const text = g.key === 'speeds' && tpsText
+      ? esc(g.text) + ' · ' + tpsText
+      : esc(g.text);
+    return (
+      '<span class="g' + (g.key === 'cache' ? ' cache' : '') + '" data-key="' + esc(g.key) + '">' +
+      (GROUP_ICONS[g.key] ? '<span class="g-ic">' + GROUP_ICONS[g.key] + '</span>' : '') +
+      '<span class="g-t">' + text + '</span>' +
+      '</span>' + (i < statsGroups.length - 1 ? '<span class="vsep" aria-hidden="true"></span>' : '')
+    );
+  }).join('');
+  fitGroups();
+}
+
+function formatTps(v) {
+  return (Math.round(v * 10) / 10) + ' tok/s';
+}
+
+/// 窄窗口降级：从尾到首隐藏次要组（首组保底），隐藏组的完整信息经
+/// 系统默认 tooltip 可获。
+function fitGroups() {
+  const el = $('stats');
+  const groups = [...el.querySelectorAll('.g')];
+  if (!groups.length) {
+    el.dataset.truncated = '0';
+    return;
+  }
+  // 先恢复全部再按需隐藏：窗口变宽后信息逐步回来
+  groups.forEach((g) => { g.style.display = ''; });
+  el.querySelectorAll('.vsep').forEach((s) => { s.style.display = ''; });
+  let hidden = 0;
+  for (let i = groups.length - 1; i >= 1; i--) {
+    if (el.scrollWidth <= el.clientWidth) break;
+    groups[i].style.display = 'none';
+    const sepBefore = groups[i].previousElementSibling;
+    if (sepBefore && sepBefore.classList.contains('vsep')) sepBefore.style.display = 'none';
+    hidden += 1;
+  }
+  // 截断 = 有隐藏组 或 首组仍溢出（首组保底显示，溢出部分被裁切）；
+  // tooltip 始终提供组含义；发生截断时改为提供全部组的完整信息。
+  const truncated = hidden > 0 || el.scrollWidth > el.clientWidth + 1;
+  el.dataset.truncated = truncated ? '1' : '0';
+  applyNativeTips();
+}
+
+function onStats(payload) {
+  // show_stats=false：设置里已关闭隐藏——dsh 页面自己显示统计，
+  // 状态栏统计区互斥隐藏（余额 chip 保留）
+  const show = !payload || payload.show_stats !== false;
+  statsGroups = show && payload && Array.isArray(payload.groups) ? payload.groups : [];
+  avgTps = payload && typeof payload.avg_tps === 'number' ? payload.avg_tps : null;
+  detailsMap = {};
+  if (payload && Array.isArray(payload.details)) {
+    payload.details.forEach((d) => {
+      if (d && d.key && Array.isArray(d.lines)) detailsMap[d.key] = d.lines;
+    });
+  }
+  const edgeSep = $('edge-sep');
+  if (edgeSep) edgeSep.style.display = show ? '' : 'none';
+  renderStats();
+}
+
+function onLiveRate(payload) {
+  // 实时速率：流式期间有值（替换平均显示），空闲 null（回落平均）
+  liveTps = payload && typeof payload.tps === 'number' ? payload.tps : null;
+  // 仅当 speeds 组存在且显示值变化时重渲染（2s 周期，全量重建开销可忽略）
+  if (statsGroups.some((g) => g.key === 'speeds')) renderStats();
+}
+
+// ---------- 余额 chip（点击入口 + 系统默认悬停提示） ----------
+
+function balanceChipState() {
+  const b = lastBalance;
+  if (!b || !b.ok) return { text: '--', dot: 'err' };
+  if (b.error) return { text: '--', dot: 'warn' };
+  if (!b.balances || !b.balances.length) return { text: '--', dot: 'warn' };
+  const first = b.balances[0];
+  const cur = dshdCurrency(first.currency);
+  // chip 只显示金额（币种符号足够，currency 代码与拆分明细留给详情弹窗）；
+  // stale：保留上次金额但状态点转 warn，悬停提示刷新失败
+  return {
+    text: cur + dshdBalanceValue(first.total_balance),
+    dot: b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
+  };
+}
+
+function renderBalance() {
+  const chip = $('balance-chip');
+  const state = balanceChipState();
+  const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
+  chip.innerHTML =
+    WALLET_ICON +
+    '<span class="' + dotClass + '" aria-hidden="true"></span>' +
+    '<span id="balance-text">' + esc(state.text) + '</span>';
+  const hints = [dshdT('balanceChipHint')];
+  if (lastBalance && lastBalance.stale) hints.push(dshdT('staleBalance'));
+  chip.title = hints.join('\n');
+  chip.setAttribute('aria-label', state.text + ' — ' + dshdT('balanceDetailsAria'));
+}
+
+function onBalance(payload) {
+  // stale 保留：刷新失败但已有成功数据时保留上次金额（标记过期），
+  // 而非丢弃旧值显示 --（借鉴 dsh-api-balance 的 stale-while-revalidate）
+  if (payload && !payload.ok && lastBalance && lastBalance.ok) {
+    lastBalance = Object.assign({}, lastBalance, { stale: true });
+    renderBalance();
+    return;
+  }
+  lastBalance = payload;
+  renderBalance();
+}
+
+// ---------- 系统默认悬停提示 ----------
+
+// 组含义文案 key（悬停各分组时作为 tooltip 标题）
+const GROUP_HINTS = {
+  counts: 'statsCountsHint',
+  durations: 'statsDurationsHint',
+  speeds: 'statsSpeedsHint',
+  cache: 'statsCacheHint',
+  tokens: 'statsTokensHint',
+  balance: 'balanceChipHint',
+};
+function groupTipText(key) {
+  const lines = [dshdT(GROUP_HINTS[key] || 'statsCountsHint')];
+  const extra = (detailsMap[key] || []).map((t) => String(t));
+  if (key === 'speeds') {
+    const tps = liveTps != null ? liveTps : avgTps;
+    if (tps != null) extra.push(formatTps(tps));
+  }
+  lines.push(...extra);
+  return lines.join('\n');
+}
+
+function applyNativeTips() {
+  const el = $('stats');
+  const fullTip = statsGroups.map((group) => (
+    group.text + '\n' + groupTipText(group.key)
+  )).join('\n\n');
+  const truncated = el.dataset.truncated === '1';
+  el.querySelectorAll('.g').forEach((group) => {
+    group.title = truncated ? fullTip : groupTipText(group.dataset.key);
+  });
+  el.title = truncated ? fullTip : '';
+  el.setAttribute('aria-label', statsGroups.map((group) => group.text).join(' · ') || dshdT('statsRegion'));
+}
+
+// ---------- 其他 ----------
+
+// 语言热切换：静态文案经 common.js 的 dshdSetLanguage 重渲染；
+// stats 文案由 Rust 侧下一次轮询刷新（≤5s），余额 chip 即时重渲染
+function onLanguageChanged() {
+  renderStats();
+  renderBalance();
+}
+
+// WebView2 合成层重绘脉冲（Rust repaint_pulse 调用）
+window.__dshdRepaint = () => {};
+
+// 失焦样式跟随主窗口焦点（Rust Focused 事件广播）
+window.__dshdSetWindowActive = (focused) => {
+  document.body.classList.toggle('window-inactive', !focused);
+};
+
+function init() {
+  const statsEl = $('stats');
+  const chip = $('balance-chip');
+  chip.addEventListener('click', () => {
+    invoke('app_dialog_open_balance').catch(() => {});
+  });
+  // 屏蔽 WebView 默认右键菜单（与标题栏一致）
+  document.addEventListener('contextmenu', (event) => event.preventDefault());
+  // 宽度变化重排分组并重判截断（fitGroups 内未截断时自动收起 tooltip）
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => fitGroups()).observe(statsEl);
+  }
+  window.addEventListener('dshd-language-changed', onLanguageChanged);
+  listen('session-stats-updated', (e) => onStats(e.payload)).catch(() => {});
+  listen('live-rate-updated', (e) => onLiveRate(e.payload)).catch(() => {});
+  listen('balance-updated', (e) => onBalance(e.payload)).catch(() => {});
+  dshdApplyI18n();
+  renderStats();
+  renderBalance();
+  // 打开时主动拉一次余额（事件通道对隐藏窗口不可靠，与 dialog 同策略）
+  invoke('api_balance').then(onBalance).catch(() => {});
+}
+
+document.addEventListener('DOMContentLoaded', init);

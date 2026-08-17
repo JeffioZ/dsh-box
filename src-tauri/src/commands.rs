@@ -79,6 +79,34 @@ pub fn save_onboarding(
     crate::onboarding::save(&app, payload)
 }
 
+/// 启动页回报首次配置面板已显示：boot 等待据此切换为无限等待
+/// （有跳过按钮无需兜底；未显示时保留 60 秒防卡死兜底）。
+#[tauri::command]
+pub fn onboarding_shown(_app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::logging::log("boot: 首次配置面板已显示（无限等待用户操作）");
+    crate::app_state::mark_onboarding_shown();
+    Ok(())
+}
+
+/// 首次配置界面的主题实时预览：只切换窗口主题（不写 settings，
+/// 不持久化）——保存时由 onboarding::save 正式应用。
+#[tauri::command]
+pub fn preview_theme(app: AppHandle, webview: tauri::Webview, theme: String) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    let theme = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        // 跟随系统：清除强制主题，窗口回到系统深浅色
+        "system" => None,
+        _ => return Err(crate::locale::text("未知主题。", "Unknown theme.").into()),
+    };
+    if let Some(win) = crate::main_window(&app) {
+        let _ = win.set_theme(theme);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn check_updates(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
@@ -283,6 +311,75 @@ pub fn tray_menu_set_submenu_expanded(
     Ok(())
 }
 
+// ---------- 设置页（统一弹窗内三开关） ----------
+
+/// 设置页开关状态快照。
+#[derive(serde::Serialize)]
+pub struct SettingsState {
+    pub autostart: bool,
+    pub hide_tool_calls: bool,
+    pub hide_stats_line: bool,
+    pub hide_statusbar: bool,
+}
+
+fn settings_state(app: &AppHandle) -> SettingsState {
+    let config = app.state::<AppState>().config();
+    SettingsState {
+        autostart: crate::autostart::is_enabled(),
+        hide_tool_calls: config.hide_tool_calls,
+        hide_stats_line: config.hide_stats_line,
+        hide_statusbar: config.hide_statusbar,
+    }
+}
+
+#[tauri::command]
+pub fn settings_get(app: AppHandle, webview: tauri::Webview) -> Result<SettingsState, String> {
+    ensure_local_origin(&webview)?;
+    Ok(settings_state(&app))
+}
+
+/// 设置页开关切换：应用 + 持久化 + 即时下发到 dsh 页面，返回最新状态。
+/// autostart 失败（注册表/文件写入）原样上报，前端就地显示错误。
+#[tauri::command]
+pub fn settings_set(
+    app: AppHandle,
+    webview: tauri::Webview,
+    key: String,
+    value: bool,
+) -> Result<SettingsState, String> {
+    ensure_local_origin(&webview)?;
+    let state = app.state::<AppState>();
+    match key.as_str() {
+        "autostart" => {
+            crate::autostart::set_enabled(value)?;
+        }
+        "hide_tool_calls" => {
+            if state.config().hide_tool_calls != value {
+                state.toggle_hide_tool_calls()?;
+            }
+            crate::apply_hide_tools(&app);
+        }
+        "hide_stats_line" => {
+            if state.config().hide_stats_line != value {
+                state.toggle_hide_stats_line()?;
+            }
+            crate::apply_hide_stats(&app);
+            // 互斥：状态栏统计区随开关即时显示/隐藏（不等下一个轮询周期）
+            crate::stats::refresh_once(app.clone());
+        }
+        "hide_statusbar" => {
+            if state.config().hide_statusbar != value {
+                state.toggle_hide_statusbar()?;
+            }
+            // 即时生效：重新同步三区块边界（隐藏时状态区 0 高、主区到底）。
+            crate::titlebar::sync_bounds(&app);
+        }
+        _ => return Err(crate::locale::text("未知设置项。", "Unknown setting.").into()),
+    }
+    crate::logging::log(&format!("settings: {key}={value}"));
+    Ok(settings_state(&app))
+}
+
 // ---------- 统一自绘弹窗（dialog 窗口调用；内容预渲染+轮询为主，事件兜底） ----------
 
 /// 标题栏余额 chip 点击：打开余额弹窗。
@@ -290,6 +387,14 @@ pub fn tray_menu_set_submenu_expanded(
 pub fn app_dialog_open_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     crate::app_dialog::open_balance(&app);
+    Ok(())
+}
+
+/// 打开设置页（统一弹窗）。
+#[tauri::command]
+pub fn app_dialog_open_settings(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::app_dialog::open_settings(&app);
     Ok(())
 }
 
@@ -393,6 +498,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         apply_updates,
         get_onboarding_state,
         save_onboarding,
+        onboarding_shown,
+        preview_theme,
         plugin_list,
         plugin_search,
         plugin_install,
@@ -419,5 +526,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         app_dialog_pwsh_confirm,
         app_dialog_close,
         app_dialog_update,
+        app_dialog_open_settings,
+        settings_get,
+        settings_set,
     ]
 }

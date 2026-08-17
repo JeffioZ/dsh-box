@@ -15,9 +15,11 @@ use crate::app_state::AppState;
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
 /// 弹窗统一为"左侧导航 + 右侧内容"布局：固定尺寸容纳导航栏与内容区。
-/// 680 宽（导航 152 + 内容 528）、560 高——紧凑不空旷。
+/// 680 宽（导航 152 + 内容 528）、480 高——列表页（插件/会话文件）内容在
+/// 内容区滚动浏览，轻量页（余额/设置/关于）不再因统一高度而大片留空。
+/// 高度不做按 kind 切换（切换时窗口跳变观感差），统一折中。
 fn dialog_size(_kind: &str) -> (f64, f64) {
-    (680.0, 560.0)
+    (680.0, 480.0)
 }
 
 fn main_is_presented(main: &tauri::Window) -> bool {
@@ -44,7 +46,7 @@ pub fn precreate(app: &AppHandle) {
         WebviewUrl::App("dialog.html".into()),
     )
     .title(crate::APP_TITLE)
-    .inner_size(680.0, 560.0)
+    .inner_size(680.0, 480.0)
     .initialization_script(crate::locale::init_script())
     .resizable(false)
     .decorations(false)
@@ -141,14 +143,23 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
             let _ = win.center();
         }
     }
-    // 统一注入应用版本号：导航栏底部显示（任何 kind 打开都可用）
-    let mut initial = initial;
-    if let Some(obj) = initial.as_object_mut() {
-        obj.insert(
-            "app_version".into(),
-            serde_json::json!(env!("CARGO_PKG_VERSION")),
-        );
-    }
+    // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。
+    let mut initial = if initial.is_object() {
+        initial
+    } else {
+        serde_json::json!({})
+    };
+    let obj = initial
+        .as_object_mut()
+        .expect("dialog initial must be an object");
+    obj.insert(
+        "app_version".into(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    let config = app.state::<AppState>().config();
+    let dsh_version = crate::runtime::installed_dsh_version(&config)
+        .unwrap_or_else(|| crate::locale::text("未知", "Unknown").into());
+    obj.insert("dsh_version".into(), serde_json::json!(dsh_version));
     let payload = AppDialogOpen {
         title: title.to_string(),
         kind: kind.to_string(),
@@ -179,7 +190,7 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
 /// 隐藏弹窗（关闭按钮/动作完成后）：恢复主窗口可用状态。
 ///
 /// 页面已先把内容淡出（内容不可见），这里清空内容后再等一帧绘制：
-/// 隐藏窗口不再绘制，淡出+清空后的中性表面会成为下次 show 的第一帧，
+/// 淡出+清空后的中性表面会成为下次 show 的第一帧，
 /// 否则下次打开会先闪出上一弹窗的残影。
 pub fn close(app: &AppHandle) {
     // 代次 +1：令挂起的延迟隐藏失效（关闭后立刻重开不会被误藏）
@@ -196,8 +207,8 @@ pub fn close(app: &AppHandle) {
         let _ = w.eval("window.__dshdReset && window.__dshdReset()");
         let handle = app.clone();
         std::thread::spawn(move || {
-            // 等 50ms（≥2 帧）确保清空后的空卡片已绘制，再隐藏
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            // 仅等一帧确保清空已提交；此前等待 50ms 会让空卡片明显停顿。
+            std::thread::sleep(std::time::Duration::from_millis(16));
             let h2 = handle.clone();
             let _ = handle.run_on_main_thread(move || {
                 if h2.state::<AppState>().dialog_gen() == gen {
@@ -217,7 +228,7 @@ pub fn close(app: &AppHandle) {
 pub fn open_balance(app: &AppHandle) {
     show(
         app,
-        crate::locale::text("DeepSeek API 余额", "DeepSeek API balance"),
+        crate::locale::text("API 余额", "API balance"),
         "balance",
         serde_json::json!(null),
     );
@@ -299,14 +310,12 @@ pub fn apply_update(app: &AppHandle, which: &str) {
 
 /// 打开关于弹窗。
 pub fn open_about(app: &AppHandle) {
-    let config = app.state::<AppState>().config();
-    let dsh_version = crate::runtime::installed_dsh_version(&config)
-        .unwrap_or_else(|| crate::locale::text("未知", "Unknown").into());
-    let initial = serde_json::json!({
-        "app_version": env!("CARGO_PKG_VERSION"),
-        "dsh_version": dsh_version,
-    });
-    show(app, crate::locale::text("关于", "About"), "about", initial);
+    show(
+        app,
+        crate::locale::text("关于", "About"),
+        "about",
+        serde_json::json!({}),
+    );
 }
 
 /// 插件管理（统一弹窗内）：内容由前端拉取，无需初始载荷。
@@ -315,6 +324,17 @@ pub fn open_plugins(app: &AppHandle) {
         app,
         crate::locale::text("插件管理", "Plugin manager"),
         "plugins",
+        serde_json::json!({}),
+    );
+}
+
+/// 设置（统一弹窗内）：四个开关（开机自启 / 隐藏工具调用 / 隐藏统计行 /
+/// 隐藏状态栏），状态与切换由前端经 settings_get / settings_set 完成。
+pub fn open_settings(app: &AppHandle) {
+    show(
+        app,
+        crate::locale::text("桌面端设置", "Desktop settings"),
+        "settings",
         serde_json::json!({}),
     );
 }

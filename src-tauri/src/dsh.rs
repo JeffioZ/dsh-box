@@ -63,26 +63,34 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
 /// 返回 true 表示已停留：调用方应直接返回，不再 navigate。
 /// 防御：等待上限 60 秒——若启动页因任何原因未显示配置面板（如 IPC 时序），
 /// 自动落 onboarded 标记并放行，避免永久卡在启动页。
+/// 等待解除条件：用户已保存/跳过（onboarding_done）——dev 构建下
+/// onboarding_pending 恒 true，必须以用户动作为准。
 fn wait_onboarding(state: &AppState) -> bool {
     if !state.onboarding_pending() {
         return false;
     }
     crate::logging::log("boot: 首次使用配置未完成，停留启动页等待确认");
-    for _ in 0..60 {
+    // 面板已显示：无限等待用户操作（有跳过按钮，随时可退出，无需兜底）；
+    // 面板未显示（启动页 IPC 异常等）：60 秒兜底自动放行，避免卡死
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         std::thread::sleep(Duration::from_secs(1));
-        if !state.onboarding_pending() {
-            return false; // 用户已保存/跳过（config.json 已生成）
+        if crate::app_state::onboarding_done() {
+            crate::logging::log("boot: 用户已完成首次配置，继续启动");
+            return false;
+        }
+        if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
+            // 超时兜底：自动落标记并继续，避免启动页卡死
+            let config = state.config();
+            let _ = crate::app_state::save_config_value(
+                &config.root,
+                "onboarded",
+                serde_json::Value::Bool(true),
+            );
+            crate::logging::log("boot: 首次配置面板未显示，60 秒兜底放行");
+            return false;
         }
     }
-    // 超时兜底：自动落标记并继续，避免启动页卡死
-    let config = state.config();
-    let _ = crate::app_state::save_config_value(
-        &config.root,
-        "onboarded",
-        serde_json::Value::Bool(true),
-    );
-    crate::logging::log("boot: 首次配置等待超时，自动跳过并进入界面");
-    false
 }
 
 /// 一轮完整引导；成功返回 Ok(())，失败返回错误信息。
@@ -102,11 +110,14 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         crate::logging::log("boot: 服务已由并发路径就绪，直接复用");
         let ready = crate::locale::text("已就绪", "Ready");
         state.set_phase(BootPhase::Ready, ready, "");
-        emit_status(app, BootPhase::Ready, ready, "");
-        std::thread::sleep(Duration::from_millis(320));
+        // 先等首次配置完成，再 emit Ready：前端收到 ready 会整体淡出
+        // 启动页（含首次配置面板）——若先 emit 后等待，面板会视觉消失
+        // 而 boot 仍在等待用户操作
         if wait_onboarding(&state) {
             return Ok(());
         }
+        emit_status(app, BootPhase::Ready, ready, "");
+        std::thread::sleep(Duration::from_millis(320));
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
@@ -142,11 +153,12 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         ));
         let ready = crate::locale::text("已就绪", "Ready");
         state.set_phase(BootPhase::Ready, ready, "");
-        emit_status(app, BootPhase::Ready, ready, "");
-        std::thread::sleep(Duration::from_millis(320));
+        // 先等首次配置完成再 emit Ready（同并发路径：ready 会触发启动页淡出）
         if wait_onboarding(&state) {
             return Ok(());
         }
+        emit_status(app, BootPhase::Ready, ready, "");
+        std::thread::sleep(Duration::from_millis(320));
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
@@ -266,18 +278,20 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     // 5) 就绪，进入界面
     let ready = crate::locale::text("已就绪", "Ready");
     state.set_phase(BootPhase::Ready, ready, "");
-    emit_status(app, BootPhase::Ready, ready, "");
     crate::logging::log(&format!(
         "boot: 就绪 dsh={} node={} port={}",
         runtime::installed_dsh_version(&config).unwrap_or_default(),
         runtime::current_node_version(&config).unwrap_or_default(),
         config.port
     ));
-    // 给启动页 300ms 淡出动画留余量，再跳转 dsh 界面（配合 WebView 背景色，无白闪）
-    std::thread::sleep(Duration::from_millis(320));
+    // 先等首次配置完成再 emit Ready：ready 会触发启动页整体淡出（含面板），
+    // 若先 emit 后等待，面板会视觉消失而 boot 仍在等待用户操作
     if wait_onboarding(&state) {
         return Ok(());
     }
+    emit_status(app, BootPhase::Ready, ready, "");
+    // 给启动页 300ms 淡出动画留余量，再跳转 dsh 界面（配合 WebView 背景色，无白闪）
+    std::thread::sleep(Duration::from_millis(320));
     navigate(app, &config.web_url());
     // 启动后静默检查 dsh 更新（后台线程，不阻塞；有新版才提示）
     crate::updater::silent_check(app);

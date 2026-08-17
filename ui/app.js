@@ -108,6 +108,8 @@ function renderStatus(payload) {
 
 // —— 首次使用配置 ——
 
+let onboardingSaving = false;
+
 async function initOnboarding() {
   try {
     const st = await window.__TAURI__.core.invoke('get_onboarding_state');
@@ -120,10 +122,38 @@ async function initOnboarding() {
     });
     $('ob-autostart').checked = !!st.autostart;
     $('ob-box').classList.remove('hidden');
+    // onboarding 模式下聚焦配置面板：隐藏启动状态区
+    $('status').classList.add('hidden');
+    // 回报面板已显示：boot 等待切换为无限等待（无 60 秒兜底）
+    window.__TAURI__.core.invoke('onboarding_shown').catch(() => {});
+    // 语言/主题实时预览：选中即生效（自然过渡由分段控件的选中动画承接；
+    // 保存时才持久化——主题只切窗口不写 settings）
+    document.querySelectorAll('input[name="ob-lang"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        const lang = r.value === 'en' ? 'en' : 'zh-CN';
+        window.dshdSetLanguage && window.dshdSetLanguage(lang);
+      });
+    });
+    document.querySelectorAll('input[name="ob-theme"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        // 跟随系统：清除强制主题回系统深浅色（preview_theme 处理）
+        window.__TAURI__.core.invoke('preview_theme', { theme: r.value }).catch(() => {});
+      });
+    });
   } catch (e) { /* 后端未就绪时忽略 */ }
 }
 
 async function submitOnboarding(skip) {
+  if (onboardingSaving) return;
+  onboardingSaving = true;
+  const box = $('ob-box');
+  const start = $('ob-start');
+  const skipButton = $('ob-skip');
+  start.disabled = true;
+  skipButton.disabled = true;
+  box.setAttribute('aria-busy', 'true');
   const payload = {
     skip,
     language: (document.querySelector('input[name="ob-lang"]:checked') || {}).value,
@@ -138,9 +168,16 @@ async function submitOnboarding(skip) {
     await window.__TAURI__.core.invoke('save_onboarding', { payload });
     $('ob-box').classList.add('hidden');
     $('ob-error').classList.add('hidden');
+    // boot 将立即继续：恢复启动状态区显示（保存前为聚焦面板而隐藏）
+    $('status').classList.remove('hidden');
   } catch (e) {
     $('ob-error').textContent = dshdT('saveFailed') + ': ' + e;
     $('ob-error').classList.remove('hidden');
+  } finally {
+    onboardingSaving = false;
+    start.disabled = false;
+    skipButton.disabled = false;
+    box.removeAttribute('aria-busy');
   }
 }
 

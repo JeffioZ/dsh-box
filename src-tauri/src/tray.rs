@@ -55,7 +55,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg(not(windows))]
 fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     let model = crate::tray_menu::items(true);
     let item = |id: &str| {
@@ -84,34 +84,82 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         true,
         None::<&str>,
     )?;
-    let auto_item = MenuItem::with_id(
+    let plugins_item =
+        MenuItem::with_id(app, "plugins", &item("plugins").label, true, None::<&str>)?;
+    let session_diff_item = MenuItem::with_id(
         app,
-        "autostart",
-        &item("autostart").label,
+        "session_diff",
+        &item("session_diff").label,
         true,
         None::<&str>,
     )?;
+    let settings_item =
+        MenuItem::with_id(app, "settings", &item("settings").label, true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", &item("quit").label, true, None::<&str>)?;
     let about_item = MenuItem::with_id(app, "about", &item("about").label, true, None::<&str>)?;
+    let profile_menu = if let Some(profile_model) = model.iter().find(|entry| entry.id == "profile")
+    {
+        let submenu = Submenu::with_id(app, profile_model.id.as_str(), &profile_model.label, true)?;
+        for child in &profile_model.children {
+            let child_item = CheckMenuItem::with_id(
+                app,
+                child.id.as_str(),
+                &child.label,
+                true,
+                child.checked.unwrap_or(false),
+                None::<&str>,
+            )?;
+            submenu.append(&child_item)?;
+        }
+        Some(submenu)
+    } else {
+        None
+    };
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    Menu::with_items(
-        app,
-        &[
-            &open_item,
-            &balance_item,
-            &browser_item,
-            &sep1,
-            &restart_item,
-            &check_item,
-            &sep2,
-            &auto_item,
-            &sep3,
-            &about_item,
-            &quit_item,
-        ],
-    )
+    let sep4 = PredefinedMenuItem::separator(app)?;
+    if let Some(profile_menu) = profile_menu.as_ref() {
+        Menu::with_items(
+            app,
+            &[
+                &open_item,
+                &balance_item,
+                &browser_item,
+                &sep1,
+                &restart_item,
+                &check_item,
+                &plugins_item,
+                &session_diff_item,
+                &sep2,
+                &settings_item,
+                &sep3,
+                profile_menu,
+                &sep4,
+                &about_item,
+                &quit_item,
+            ],
+        )
+    } else {
+        Menu::with_items(
+            app,
+            &[
+                &open_item,
+                &balance_item,
+                &browser_item,
+                &sep1,
+                &restart_item,
+                &check_item,
+                &plugins_item,
+                &session_diff_item,
+                &sep2,
+                &settings_item,
+                &sep3,
+                &about_item,
+                &quit_item,
+            ],
+        )
+    }
 }
 
 #[cfg(not(windows))]
@@ -141,8 +189,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "check_update" => crate::app_dialog::open_check(app),
         "plugins" => crate::app_dialog::open_plugins(app),
         "session_diff" => crate::app_dialog::open_session_diff(app),
-        "autostart" => toggle_autostart(app),
-        "hide_tool_calls" => toggle_hide_tool_calls(app),
+        "settings" => crate::app_dialog::open_settings(app),
         _ if id.starts_with("profile_") => switch_profile(app, id.trim_start_matches("profile_")),
         "about" => crate::app_dialog::open_about(app),
         "quit" => quit(app),
@@ -439,77 +486,6 @@ fn switch_profile(app: &AppHandle, name: &str) {
     std::thread::spawn(move || {
         if let Err(e) = crate::updater::restart_service(&handle) {
             crate::logging::log(&format!("profile: 重启服务失败（已保存配置）：{e}"));
-        }
-    });
-}
-
-fn toggle_hide_tool_calls(app: &AppHandle) {
-    match app.state::<AppState>().toggle_hide_tool_calls() {
-        Ok(on) => {
-            crate::logging::log(&format!(
-                "hide-tools: 已{}隐藏工具调用",
-                if on { "开启" } else { "关闭" }
-            ));
-            crate::apply_hide_tools(app);
-        }
-        Err(e) => crate::logging::log(&format!("hide-tools: 保存失败：{e}")),
-    }
-}
-
-fn toggle_autostart(app: &AppHandle) {
-    // 消息框必须挪到工作线程：blocking_show 在主线程会冻结整个事件循环
-    // （插件文档明确禁止）。本函数可能从托盘菜单动作触发——macOS/Linux
-    // 的原生托盘回调在主线程，Windows 的托盘点击事件同样在主线程
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        use tauri_plugin_dialog::MessageDialogKind;
-        // 已有切换在处理中时忽略新点击：连续快速点击不会排队弹多个结果框
-        static TOGGLE_PENDING: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if TOGGLE_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return;
-        }
-        // 本函数此后无提前返回，直接复位即可；若将来增加分支请改用 RAII 守卫
-        let result = {
-            // 串行化读-改-写：连续快速触发时，避免两个线程读到相同的旧状态、
-            // 执行相同方向的切换（结果状态未变但提示已切换）
-            static TOGGLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            let _guard = TOGGLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let cur = crate::autostart::is_enabled();
-            crate::autostart::set_enabled(!cur).map(|()| cur)
-        };
-        TOGGLE_PENDING.store(false, std::sync::atomic::Ordering::Release);
-        match result {
-            Ok(cur) => {
-                let msg = if cur {
-                    crate::locale::text(
-                        "已关闭开机自启动。",
-                        "Launch at startup has been turned off.",
-                    )
-                } else {
-                    crate::locale::text(
-                        "已开启开机自启动：下次开机将静默启动并驻留托盘。",
-                        "Launch at startup is on. The app will start silently in the tray next time.",
-                    )
-                };
-                crate::dialog::show_message(
-                    &handle,
-                    msg.into(),
-                    crate::locale::text("开机自启动", "Launch at startup"),
-                    MessageDialogKind::Info,
-                );
-            }
-            Err(e) => {
-                crate::dialog::show_message(
-                    &handle,
-                    format!(
-                        "{}: {e}",
-                        crate::locale::text("设置失败", "Could not change the setting")
-                    ),
-                    crate::locale::text("开机自启动", "Launch at startup"),
-                    MessageDialogKind::Warning,
-                );
-            }
         }
     });
 }

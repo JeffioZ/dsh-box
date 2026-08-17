@@ -1,11 +1,11 @@
 # DSHDesktop
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、托盘、一键更新与本地文件菜单。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、状态栏、托盘、一键更新与本地文件菜单。
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-4d6bfe" />
   <img alt="Platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-4d6bfe" />
-  <img alt="Runtime" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4d6bfe" />
+  <img alt="Runtime" src="https://img.shields.io/badge/dsh-latest-4d6bfe" />
   <img alt="Stack" src="https://img.shields.io/badge/Tauri%20v2%20%7C%20Rust-4d6bfe" />
 </p>
 
@@ -19,6 +19,7 @@
 - [项目结构](#项目结构)
 - [边界与规划](#边界与规划)
 - [许可](#许可)
+- [内置插件市场](#内置插件市场)
 
 ## 功能
 
@@ -28,10 +29,10 @@
 | **零依赖准备** | 自动检测并安装 Node.js 与 dsh；Windows 缺少 WebView2 时引导安装 |
 | **一键更新** | dsh 与 Node.js 事务化更新（失败自动回滚，被打断下次启动自动还原）；应用本体自更新（Windows） |
 | **服务自愈** | 单实例、看门狗自动恢复、端口冲突自动回退、页面挂起自动重载 |
-| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 实时余额）、统一弹窗（左侧导航：余额/更新/插件/文件变更/关于） |
+| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 窗口控制）、底部状态栏（会话统计 + API 余额）、统一弹窗（余额/更新/插件/文件变更/设置/关于） |
 | **插件管理** | 内置插件市场：搜索 npm 上的 dsh 插件，一键安装/卸载（走官方 `dsh plugin`） |
 | **会话文件变更** | 只读解析最近会话对文件的所有改动（行级 diff），纯 edit 改动可一键还原 |
-| **多 profile** | 托盘菜单切换启动配置（`dsh --profile`），切换后重启生效 |
+| **多 profile** | 主菜单或托盘菜单切换启动配置（`dsh --profile`），切换后重启生效 |
 | **便携模式** | exe 旁放 `portable.txt`，数据跟随 exe，拷 U 盘即用 |
 | **通知与提醒** | 任务完成系统通知（点击回窗口）、运行期每 6 小时自动检查更新 |
 | **双语界面** | 界面语言跟随 dsh 设置（中/英），深浅色随系统/主题自动切换 |
@@ -66,8 +67,8 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 **第一次启动的旅程**：
 
 1. **Loading 界面**：自动检测/安装运行时（进度 + 步骤指示，多步流程一目了然）
-2. **首次使用配置**（全新安装时出现）：引导设置 API Key、语言、主题与开机自启（可跳过，之后在 dsh 设置页配置）
-3. **主界面**：就绪后自动进入 dsh 官方 Web 界面；标题栏显示实时余额，托盘常驻
+2. **首次使用配置**（全新安装时出现）：引导设置 API Key、语言、主题与开机自启（可跳过，之后仍可在 dsh 设置或桌面端设置中调整）
+3. **主界面**：就绪后自动进入 dsh 官方 Web 界面；底部状态栏显示会话统计与 API 余额，托盘常驻
 
 ## 配置
 
@@ -91,9 +92,14 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
   "api_key": "sk-...",
   "api_base": "https://api.deepseek.com",
   "language": "zh-CN",
-  "hide_tool_calls": false
+  "hide_tool_calls": false,
+  "hide_stats_line": true,
+  "hide_statusbar": false,
+  "profile": "web"
 }
 ```
+
+语言与主题会优先跟随 dsh 的 `settings.yaml`；主题不重复写入 `config.json`。开机自启动由各平台的系统机制管理。
 
 ### 环境变量
 
@@ -164,12 +170,16 @@ desktop/
     lib.rs              # run() 组装、状态广播、导航、右键菜单注入脚本、自定义协议
     app_state.rs        # 共享状态：配置、引导阶段、生命周期锁、弹窗轮询数据
     commands.rs         # Tauri 命令层（IPC 转发，无业务实现）
-    app_dialog.rs       # 统一自绘弹窗（左侧导航：余额/检查更新/插件/文件变更/关于）
+    app_dialog.rs       # 统一自绘弹窗（余额/检查更新/插件/文件变更/设置/关于）
     dialog.rs           # 原生消息框封装（模态、互斥）
     file_actions.rs     # 本地文件动作（默认程序打开 / 定位 / 打开方式）
     icons.rs            # 图标提取（SHGetFileInfo → PNG，含缓存）
     logging.rs          # 日志（轮转）
     locale.rs           # 系统语言检测与中英文选择
+    onboarding.rs       # 首次使用配置与持久化
+    plugins.rs          # 插件搜索、安装/卸载与内置插件后台维护
+    session_diff.rs     # 最近会话的文件变更解析与安全还原
+    stats.rs            # 会话统计读取、格式化与实时速率估算
     titlebar.rs         # 自绘标题栏（子 webview）
     tray_menu.rs        # 标题栏/托盘共用菜单模型；Windows 自绘托盘菜单窗口
     runtime.rs          # Node 检测/安装、dsh 包安装、服务启动
@@ -208,6 +218,18 @@ DSHDesktop 是 dsh 的**桌面封装**，而不是另一套实现：
 
 [MIT](LICENSE)。第三方依赖遵循其各自许可；dsh 本体使用官方 npm 包原样安装，不影响其官方升级。
 
+## 内置插件市场
+
+DSHDesktop 默认预装两个社区插件（均 MIT，经 `dsh plugin` CLI 安装）：
+
+- [dsh-market](https://github.com/dsh-market/dsh-market)（npm 包 `dshmarket`）——dsh 内的可视化插件市场：社区插件目录浏览、搜索、一键安装、主题切换与备份恢复。
+- [dsh-file-drop](https://github.com/dannyvan/dsh-file-drop)（npm 包 `dsh-file-drop`）——拖拽/点击文件插入对话：Linux 经 uri-list 直取原始路径，Windows/macOS 走插件自带的工作区上传兜底。
+
+**自动安装**：dsh 服务就绪后自动安装未装的内置包并重启服务生效；仅首次引导执行（`market_bootstrapped` 标记）。
+**自动更新**：每 24 小时检查一次 npm 最新版本，落后则后台升级并重启服务；检查与升级均静默失败重试，不阻塞使用。
+**移除**：卸载任一内置包后（`dsh plugin --profile web remove <pkg>`），DSHDesktop 不会自动重装；更新检查也仅作用于仍已安装的包。
+市场内的插件均为第三方代码，安装前请确认来源可信；列表收录不等于安全背书（见上游 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的免责声明）。
+
 ## 致谢
 
-感谢 DeepSeek Harness 团队与开源社区，以及同类桌面端项目带来的启发；感谢每一位参与测试与反馈的用户。
+感谢 DeepSeek Harness 团队与开源社区，以及同类桌面端项目带来的启发；感谢 [dsh-market](https://github.com/dsh-market/dsh-market) 提供的插件市场与 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 维护的社区插件目录；感谢每一位参与测试与反馈的用户。

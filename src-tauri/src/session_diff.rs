@@ -38,6 +38,9 @@ pub struct FileChange {
 #[derive(Serialize)]
 pub struct SessionChanges {
     pub session_id: String,
+    /// 会话工作目录（前端展示用，帮助识别"这是哪次会话改的文件"）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
     pub files: Vec<FileChange>,
 }
 
@@ -47,6 +50,7 @@ pub fn changes(app: &AppHandle) -> SessionChanges {
     let Some((session_id, path)) = latest_session(&config.dsh_home().join("sessions")) else {
         return SessionChanges {
             session_id: String::new(),
+            workdir: None,
             files: vec![],
         };
     };
@@ -76,7 +80,12 @@ pub fn changes(app: &AppHandle) -> SessionChanges {
         })
         .collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    SessionChanges { session_id, files }
+    let workdir = session_workdir(&path).map(|p| p.to_string_lossy().into_owned());
+    SessionChanges {
+        session_id,
+        workdir,
+        files,
+    }
 }
 
 /// 还原某个文件到会话前状态（反向应用全部 edit）。

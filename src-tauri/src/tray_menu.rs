@@ -11,7 +11,6 @@ use tauri::{Emitter, WebviewUrl};
 
 #[cfg(windows)]
 use crate::app_state::AppState;
-use crate::autostart;
 
 /// 托盘菜单窗口 label。
 pub const TRAY_MENU_WINDOW: &str = "tray-menu";
@@ -114,34 +113,13 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         ),
         TrayMenuItem::sep(),
         TrayMenuItem::row_icon(
-            "autostart",
-            "power",
-            &format!(
-                "{}: {}",
-                crate::locale::text("开机自启动", "Launch at startup"),
-                if autostart::is_enabled() {
-                    crate::locale::text("已开启", "On")
-                } else {
-                    crate::locale::text("已关闭", "Off")
-                }
-            ),
-        ),
-        TrayMenuItem::row_icon(
-            "hide_tool_calls",
-            "eye",
-            &format!(
-                "{}: {}",
-                crate::locale::text("隐藏工具调用", "Hide tool calls"),
-                if crate::app_state::Config::load().hide_tool_calls {
-                    crate::locale::text("已开启", "On")
-                } else {
-                    crate::locale::text("已关闭", "Off")
-                }
-            ),
+            "settings",
+            "gear",
+            crate::locale::text("桌面端设置…", "Desktop settings…"),
         ),
     ];
     // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）；
-    // 分隔线按需添加，避免无 profile 时 hide_tool_calls 与 about 之间出现双分隔线
+    // 分隔线按需添加，避免无 profile 时 settings 与 about 之间出现双分隔线
     if let Some(profile_item) = profile_menu_item() {
         rows.push(TrayMenuItem::sep());
         rows.push(profile_item);
@@ -202,14 +180,13 @@ const SHADOW_PAD: f64 = 0.0;
 /// 卡片无描边（透明窗口模型，边界由圆角/底色/阴影承担），高度不含边框；
 /// body 为 border-box，高度必须包含内边距，否则末行 hover 会被裁掉。
 #[cfg(windows)]
-fn menu_size(language_expanded: bool) -> (f64, f64) {
+fn menu_size() -> (f64, f64) {
     let rows = items(true);
     let height = 8.0
         + rows
             .iter()
             .map(|r| if r.sep { 9.0 } else { 40.0 })
-            .sum::<f64>()
-        + if language_expanded { 80.0 } else { 0.0 };
+            .sum::<f64>();
     (264.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
 }
 
@@ -228,7 +205,7 @@ static GEOMETRY: std::sync::Mutex<Option<Geometry>> = std::sync::Mutex::new(None
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
 #[cfg(windows)]
 pub fn precreate(app: &AppHandle) {
-    let (w, h) = menu_size(false);
+    let (w, h) = menu_size();
     // 导航白名单与主窗口一致：菜单内容只允许加载内置页面
     let navigation_app = app.clone();
     match tauri::WebviewWindowBuilder::new(
@@ -293,7 +270,7 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
         crate::logging::log("tray-menu: 窗口不存在（预创建失败？）");
         return;
     };
-    let (width, height) = menu_size(false);
+    let (width, height) = menu_size();
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
     // 记录本次设置后的实际外尺寸基线，供展开/收起锚定（见 GEOMETRY 说明）
     if let Ok(size) = win.outer_size() {
@@ -367,7 +344,7 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
 }
 
 /// 子菜单展开/收起时调整托盘窗口高度，底缘始终锚定托盘点击点。
-/// `id` 为父菜单项 id（language / profile）；未展开时精确还原基线高。
+/// `id` 为父菜单项 id（当前仅 profile）；未展开时精确还原基线高。
 pub fn set_submenu_expanded(app: &AppHandle, id: &str, expanded: bool) {
     let Some(win) = app.get_webview_window(TRAY_MENU_WINDOW) else {
         return;
@@ -376,14 +353,12 @@ pub fn set_submenu_expanded(app: &AppHandle, id: &str, expanded: bool) {
         return;
     };
     let scale = win.scale_factor().unwrap_or(1.0);
-    // 子菜单展开高度增量（逻辑像素）：语言 2 行；profile 每项一行
-    let expand_rows: i32 = match id {
-        "language" => 2,
-        "profile" => {
-            let config = crate::app_state::Config::load();
-            crate::app_state::list_profiles(&config).len() as i32
-        }
-        _ => 0,
+    // 子菜单展开高度增量（逻辑像素）：profile 每项一行。
+    let expand_rows: i32 = if id == "profile" {
+        let config = crate::app_state::Config::load();
+        crate::app_state::list_profiles(&config).len() as i32
+    } else {
+        0
     };
     // 以基线几何为准：宽度恒定、高度只加减子菜单的物理增量，
     // 收起时精确还原基线高（消除残余裁切与宽度漂移）
@@ -469,7 +444,8 @@ pub fn set_submenu_expanded(app: &AppHandle, id: &str, expanded: bool) {
     );
 }
 
-/// 隐藏菜单窗口（失焦/选中后）。
+/// 隐藏菜单窗口（失焦/选中后）。无动效（此前尝试淡出，托盘窗口
+/// show/hide 时机与动画交互不理想，保持原生即时隐藏）。
 pub fn hide_menu(app: &AppHandle) {
     bump_popup_gen();
     if let Some(w) = app.get_webview_window(TRAY_MENU_WINDOW) {

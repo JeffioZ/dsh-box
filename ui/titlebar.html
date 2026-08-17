@@ -8,10 +8,10 @@
    body 透明（子 webview transparent）：浮层展开加高时透出下层的 dsh 界面。 */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
-  /* 浮层定位规则（余额浮层与主菜单统一）：
+  /* 浮层定位规则（主菜单）：
      - 垂直：标题栏底边（分层线）下方，间距 0——紧贴分层线，不重叠；
-     - 水平：右缘与各自入口（余额 chip / 主菜单按钮）右缘对齐，向左展开；
-     - 卡片：圆角 12、上缘不画边框（分隔交给分层线）。
+     - 水平：右缘与入口按钮右缘对齐，向左展开；
+     - 卡片：四角均使用 12px 圆角，与其他浮层保持一致。
      阴影统一用轻量双层：近距细影 + 远距柔影（blur 12px），
      与标题栏展开高度预留的 24px 阴影余量匹配 */
   --tb-overlay-top: 36px;
@@ -28,7 +28,6 @@ body {
    class 由 Rust 侧 WindowEvent::Focused 广播驱动 */
 body.window-inactive .brand { color: #5f6068; }
 body.window-inactive .tb-btn { color: #5b5c66; }
-body.window-inactive .balance-chip { opacity: .55; }
 .titlebar {
   position: relative;
   height: 36px; display: flex; align-items: center; gap: 8px;
@@ -45,87 +44,6 @@ body.window-inactive .balance-chip { opacity: .55; }
 .brand-icon { width: 16px; height: 16px; -webkit-user-drag: none; user-drag: none; }
 .drag-space { flex: 1; height: 100%; }
 
-/* ---------- 余额 chip 与 hover 浮层 ---------- */
-/* 负 margin 抵消 padding：视觉高度=chip（垂直居中），hover 命中区向下扩展覆盖浮层过渡区 */
-.balance-wrap {
-  position: relative; display: inline-flex; align-items: center;
-  padding-bottom: 18px; margin: 0 8px -18px 0;
-}
-.balance-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  color: inherit; font: inherit;
-  background: #101014; border: 1px solid var(--dshd-border-strong); border-radius: 999px;
-  padding: 3px 10px; font-size: 11.5px; line-height: 1; cursor: pointer;
-  transition: background-color var(--dshd-m-base) ease, border-color var(--dshd-m-base) ease;
-}
-.balance-wrap:hover .balance-chip,
-.balance-chip:focus-visible { border-color: var(--dshd-border-strong); }
-.balance-chip:focus-visible,
-.tb-btn:focus-visible {
-  /* 焦点环与全局强调色一致（dshd-accent） */
-  outline: 2px solid var(--dshd-accent); outline-offset: -2px;
-}
-.balance-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dshd-success); }
-.balance-chip .dot.warn { background: var(--dshd-warning); }
-.balance-chip .dot.err { background: var(--dshd-error); }
-
-.balance-pop {
-  /* 定位规则见 :root 注释：入口下方 0 间距、右缘对齐 */
-  position: absolute; top: var(--tb-overlay-top); right: 0;
-  /* 宽度自适应内容：常规余额紧凑（min 180px），大额撑开但封顶 320px（超长值省略号+悬停看全） */
-  width: max-content; min-width: 180px; max-width: 320px;
-  /* 卡片色与 dsh 菜单面一致（bluish-800）；上缘不画边框，
-     分隔交给标题栏的分层线，避免两条亮线叠出“发亮接缝” */
-  background: var(--dshd-card); border: 1px solid var(--dshd-border); border-top: none; border-radius: var(--dshd-r-lg);
-  /* 双层阴影：近距细影+远距柔影；blur/offset 控制在展开高度内，避免底缘被视口裁切 */
-  box-shadow: var(--tb-overlay-shadow);
-  padding: 12px 14px;
-  opacity: 0; transform: translateY(-4px);
-  transition: opacity var(--dshd-m-base) ease, transform var(--dshd-m-base) ease;
-  pointer-events: none;
-}
-/* JS 统一控制 hover/focus 状态，避免主菜单打开时两个浮层重叠。 */
-.balance-wrap.open .balance-pop {
-  opacity: 1; transform: translateY(0); pointer-events: auto;
-}
-.pop-head { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dshd-text-dim); margin-bottom: 6px; letter-spacing: .3px; }
-.pop-head-label { flex: 1; min-width: 0; }
-.pop-refresh {
-  flex: none; width: 24px; height: 24px; border: none; border-radius: 7px;
-  background: transparent; color: var(--dshd-text-dim); cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0; outline: none;
-}
-.pop-refresh:hover { background: rgba(255, 255, 255, .08); color: var(--dshd-text); }
-.pop-refresh { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
-.pop-refresh:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
-.pop-refresh:disabled { cursor: default; opacity: .5; }
-.refresh-glyph { display: block; width: 14px; height: 14px; }
-.refresh-glyph svg {
-  display: block; width: 100%; height: 100%; fill: none; stroke: currentColor;
-  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
-}
-.pop-refresh.refreshing .refresh-glyph { animation: refresh-spin .8s linear infinite; }
-@keyframes refresh-spin { to { transform: rotate(360deg); } }
-.pop-error-title { margin-bottom: 4px; color: var(--dshd-text); font-size: 12px; font-weight: 500; }
-.pop-total {
-  font-size: 24px; font-weight: 600; display: flex; align-items: baseline; gap: 6px;
-  letter-spacing: -.2px; padding: 2px 0 10px; border-bottom: 1px solid var(--dshd-border);
-}
-.pop-total .cur { font-size: 11px; color: var(--dshd-text-dim); font-weight: 400; }
-.pop-parts { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.pop-part { min-width: 0; padding: 7px 9px; border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-md); background: var(--dshd-hover); }
-.pop-part span { display: block; font-size: 11px; color: var(--dshd-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pop-part b { display: block; margin-top: 1px; color: var(--dshd-text); font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pop-status {
-  margin-top: 10px; padding-top: 10px;
-  display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dshd-text-dim);
-}
-.pop-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dshd-success); }
-.pop-status .dot.warn { background: var(--dshd-warning); }
-.pop-status .dot.err { background: var(--dshd-error); }
-.pop-upd { margin-left: auto; font-size: 11px; white-space: nowrap; }
-.pop-error { font-size: 12px; line-height: 1.6; color: var(--dshd-text-dim); white-space: pre-wrap; word-break: break-all; }
 
 /* ---------- 标题栏主菜单（与托盘菜单共用 menu.js / common.css） ---------- */
 .main-menu-wrap { position: relative; height: 100%; display: inline-flex; align-items: center; }
@@ -136,10 +54,11 @@ body.window-inactive .balance-chip { opacity: .55; }
   /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px）：标题栏页面无基础字号，
      不显式设置会落到浏览器默认 16px，与托盘菜单产生字号差 */
   font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  background: var(--dshd-card); border: 1px solid var(--dshd-border); border-top: none; border-radius: var(--dshd-r-lg);
+  background: var(--dshd-card); border: 1px solid var(--dshd-border);
+  border-radius: var(--dshd-r-lg);
   box-shadow: var(--tb-overlay-shadow);
-  opacity: 0; transform: translateY(-4px); pointer-events: none;
-  transition: opacity var(--dshd-m-base) ease, transform var(--dshd-m-base) ease;
+  opacity: 0; transform: translateY(-3px); pointer-events: none;
+  transition: opacity var(--dshd-m-fast) ease, transform var(--dshd-m-fast) ease;
 }
 .main-menu-wrap.open .main-menu-panel { opacity: 1; transform: translateY(0); pointer-events: auto; }
 #main-menu-list { display: flex; flex-direction: column; }
@@ -151,9 +70,11 @@ body.window-inactive .balance-chip { opacity: .55; }
   width: 46px; height: 100%; border: none; background: transparent;
   color: var(--dshd-text-dim); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
+  outline: none;
   transition: background-color var(--dshd-m-base) ease, color var(--dshd-m-base) ease;
 }
 .tb-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+.tb-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .tb-btn:active,
 .main-menu-wrap.open .tb-btn.menu { background: var(--dshd-pressed); color: var(--dshd-text); }
 .tb-btn.close:hover { background: var(--dshd-danger); color: #fff; }
@@ -213,14 +134,13 @@ body.macos .titlebar { padding-left: 82px; }
   /* 浅色标题栏底色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
   .titlebar { background: #fcfcfd; }
   .titlebar::after { background: rgba(0, 0, 0, .04); }
-  .balance-chip { background: #f4f5f8; border-color: #e2e4ea; }
   body.window-inactive .brand { color: #a6a6b2; }
   body.window-inactive .tb-btn { color: #9c9ca8; }
 }
 
 /* 系统“减弱动态效果”：关闭动画 */
 @media (prefers-reduced-motion: reduce) {
-  .balance-pop, .balance-chip, .tb-btn, .main-menu-panel, .pop-refresh { transition: none; }
+  .tb-btn, .main-menu-panel { transition: none; }
   .pop-refresh.refreshing .refresh-glyph { animation: none; }
 }
 </style>
@@ -232,12 +152,6 @@ body.macos .titlebar { padding-left: 82px; }
       <span data-tauri-drag-region>DeepSeek Harness Desktop</span>
     </div>
     <div class="drag-space" data-tauri-drag-region></div>
-    <div id="balance-wrap" class="balance-wrap">
-      <button type="button" id="balance-chip" class="balance-chip hidden" data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint" aria-expanded="false" aria-controls="balance-pop">
-        <span class="dot" aria-hidden="true"></span><span id="balance-text">…</span>
-      </button>
-      <div id="balance-pop" class="balance-pop" role="region" data-i18n-aria-label="balanceDetailsAria" aria-hidden="true" inert></div>
-    </div>
     <div id="main-menu-wrap" class="main-menu-wrap">
       <button type="button" id="btn-menu" class="tb-btn menu" data-i18n-title="mainMenu" data-i18n-aria-label="mainMenu" aria-expanded="false" aria-controls="main-menu-panel">
         <span class="menu-glyph" aria-hidden="true"></span>

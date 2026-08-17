@@ -20,21 +20,27 @@
       padding: 12px 8px 8px; border-right: 1px solid var(--dshd-border); overflow-y: auto;
     }
     .nav-item {
-      display: flex; align-items: center; gap: 9px; width: 100%;
+      display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px;
       padding: 7px 10px; border: none; border-radius: 9px; background: transparent;
-      color: var(--dshd-text-dim); font-size: 13px; cursor: pointer; text-align: left;
+      color: var(--dshd-text-dim); font: inherit; font-size: 13px; line-height: 20px;
+      cursor: pointer; text-align: left;
       transition: background-color var(--dshd-m-fast), color var(--dshd-m-fast);
     }
     .nav-item:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+    .nav-item:active { background: var(--dshd-pressed); }
     .nav-item:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
-    .nav-item.active { background: var(--dshd-accent); color: #fff; font-weight: 500; }
-    .nav-item.active:hover { background: var(--dshd-accent); color: #fff; }
+    .nav-item.active { background: var(--dshd-accent-surface); color: #fff; font-weight: 500; }
+    .nav-item.active:hover { background: var(--dshd-accent-surface-hover); color: #fff; }
+    .nav-item.active:active { background: var(--dshd-accent-surface-pressed); }
     .nav-item .nic {
       width: 24px; height: 24px; flex: none; display: inline-flex; align-items: center;
       justify-content: center; border-radius: 7px;
     }
+    .nav-item .nav-label {
+      min-width: 0; height: 24px; display: inline-flex; align-items: center; line-height: 20px;
+    }
     .nav-item.active .nic { background: rgba(255, 255, 255, .16); }
-    .nav-item svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-item svg { display: block; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: 11px; color: var(--dshd-text-dim); opacity: .6; }
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     /* 内容居中容器：余额/关于等轻内容不撑满右侧，避免空旷 */
@@ -48,8 +54,8 @@
       to { opacity: 1; transform: translateY(0); }
     }
     .dshd-pop-in { animation: dlg-pop-in var(--dshd-m-fast) ease-out; }
-    /* 关闭：内容先淡出并微微下沉（视觉上“直接消失”），随后由 Rust 清空并隐藏 */
-    body.fade-out { opacity: 0; transform: translateY(3px); transition: opacity var(--dshd-m-fast) ease, transform var(--dshd-m-fast) ease; }
+    /* 关闭比进入更快，仅做淡出；不下沉，避免窗口停住而内容位移的割裂感。 */
+    body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 
     /* 余额刷新按钮（与标题栏浮层同款字形与节奏） */
     .dshd-refresh {
@@ -72,6 +78,10 @@
     .hidden { display: none !important; }
 
     .body { flex: 1; min-height: 0; padding: 14px 18px; overflow-y: auto; }
+    .bal-api {
+      font-size: 11px; color: var(--dshd-text-dim); letter-spacing: .3px;
+      margin-bottom: 6px; text-transform: uppercase;
+    }
     .big {
       font-size: 24px; font-weight: 600; display: flex; align-items: baseline; gap: 6px;
       letter-spacing: -.2px; padding: 2px 0 10px; border-bottom: 1px solid var(--dshd-border);
@@ -121,7 +131,9 @@
     .pinput {
       flex: 1; background: var(--dshd-hover); border: 1px solid var(--dshd-border);
       border-radius: 8px; padding: 7px 10px 7px 32px; color: var(--dshd-text); font-size: 13px; outline: none;
+      transition: border-color var(--dshd-m-fast) ease;
     }
+    .pinput:hover { border-color: var(--dshd-border-strong); }
     .pinput:focus { border-color: var(--dshd-accent); }
     .pinput:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
     .pcats { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -131,8 +143,11 @@
       transition: background-color var(--dshd-m-fast), color var(--dshd-m-fast), border-color var(--dshd-m-fast);
     }
     .pcat-btn:hover { color: var(--dshd-text); border-color: var(--dshd-text-dim); }
+    .pcat-btn:active { background: var(--dshd-pressed); }
     .pcat-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
-    .pcat-btn.active { background: var(--dshd-accent); border-color: var(--dshd-accent); color: #fff; font-weight: 500; }
+    .pcat-btn.active { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; font-weight: 500; }
+    .pcat-btn.active:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
+    .pcat-btn.active:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
     .pstatus { min-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
     .pstatus.err { color: var(--dshd-error-text); }
     .pstatus.ok { color: var(--dshd-success-text); }
@@ -142,6 +157,46 @@
     }
     .psection { margin-top: 10px; }
     .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
+    /* —— 设置页开关行：整行可点、原生 checkbox+role=switch 语义、可见焦点环 —— */
+    .srow {
+      display: flex; align-items: center; gap: 12px;
+      border: 1px solid var(--dshd-border); border-radius: 10px;
+      padding: 10px 12px; background: var(--dshd-hover);
+      cursor: pointer; min-height: 56px;
+    }
+    .srow + .srow { margin-top: 8px; }
+    .srow:hover { border-color: var(--dshd-border-strong); }
+    .srow-txt { flex: 1; min-width: 0; }
+    .srow-name { display: block; font-size: 13px; font-weight: 500; }
+    .srow-desc { display: block; margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dshd-text-dim); }
+    .sswitch {
+      appearance: none; -webkit-appearance: none; flex: none;
+      width: 40px; height: 22px; border-radius: 999px; margin: 0;
+      background: var(--dshd-pressed); border: 1px solid var(--dshd-border-strong);
+      position: relative; cursor: pointer; outline: none;
+      transition: background-color var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease;
+    }
+    .sswitch::before {
+      content: ""; position: absolute; left: 2px; top: 50%;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--dshd-text-dim);
+      transform: translateY(-50%);
+      transition: transform var(--dshd-m-fast) ease, background-color var(--dshd-m-fast) ease;
+    }
+    .sswitch:checked { background: var(--dshd-accent); border-color: var(--dshd-accent); }
+    .sswitch:checked::before { transform: translate(18px, -50%); background: #fff; }
+    .sswitch:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
+    .sswitch:disabled { opacity: .55; cursor: default; }
+    .srow:has(.sswitch:disabled) { opacity: .8; pointer-events: none; }
+    .serr {
+      margin-top: 10px; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--dshd-border);
+      background: rgba(224, 88, 76, .12); color: var(--dshd-error-text);
+      font-size: 12px; line-height: 18px; overflow-wrap: anywhere;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sswitch, .sswitch::before { transition: none; }
+    }
     .pcount { font-weight: 400; color: var(--dshd-text-dim); font-size: 11px; }
     .plist { list-style: none; display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
     .pitem {
@@ -162,23 +217,50 @@
     .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
     /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
     .dshd-btn.danger {
-      background: rgba(248, 81, 73, .12); color: var(--dshd-error-text);
-      border-color: rgba(248, 81, 73, .35);
+      background: rgba(248, 81, 73, .14); color: var(--dshd-error-text);
+      border-color: rgba(248, 81, 73, .4);
     }
-    .dshd-btn.danger:hover { background: rgba(248, 81, 73, .2); }
+    .dshd-btn.danger:hover { background: rgba(248, 81, 73, .24); border-color: rgba(248, 81, 73, .55); }
+    .dshd-btn.danger:active { background: rgba(248, 81, 73, .34); border-color: rgba(248, 81, 73, .7); }
+    .dshd-btn.danger:disabled:hover { background: rgba(248, 81, 73, .14); border-color: rgba(248, 81, 73, .4); }
     @media (prefers-color-scheme: light) {
-      .dshd-btn.danger { background: rgba(180, 35, 24, .08); color: var(--dshd-error-text); border-color: rgba(180, 35, 24, .35); }
-      .dshd-btn.danger:hover { background: rgba(180, 35, 24, .14); }
+      .dshd-btn.danger { background: rgba(180, 35, 24, .09); color: var(--dshd-error-text); border-color: rgba(180, 35, 24, .4); }
+      .dshd-btn.danger:hover { background: rgba(180, 35, 24, .16); border-color: rgba(180, 35, 24, .55); }
+      .dshd-btn.danger:active { background: rgba(180, 35, 24, .24); border-color: rgba(180, 35, 24, .7); }
+      .dshd-btn.danger:disabled:hover { background: rgba(180, 35, 24, .09); border-color: rgba(180, 35, 24, .4); }
     }
 
     /* —— 会话文件变更（统一弹窗内） —— */
-    .sd-sub { font-size: 11px; color: var(--dshd-text-dim); margin-bottom: 10px; word-break: break-all; }
+    .sd-help { margin-bottom: 8px; color: var(--dshd-text-dim); font-size: 12px; line-height: 18px; }
+    .sd-sub { font-size: 11px; color: var(--dshd-text-dim); margin-bottom: 8px; overflow-wrap: anywhere; }
     .sditem { border: 1px solid var(--dshd-border); border-radius: 10px; overflow: hidden; margin-bottom: 6px; }
     .sditem-head {
-      display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
+      display: flex; align-items: center;
       transition: background-color var(--dshd-m-fast);
     }
     .sditem-head:hover { background: var(--dshd-hover); }
+    .sditem-head:has(.sditem-toggle:active) { background: var(--dshd-pressed); }
+    .sditem-toggle {
+      flex: 1; min-width: 0; min-height: 40px; display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border: 0; background: transparent; color: inherit;
+      font: inherit; text-align: left; cursor: pointer; outline: none;
+    }
+    .sditem-toggle::before {
+      content: ""; width: 7px; height: 7px; flex: none; box-sizing: border-box;
+      border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+      color: var(--dshd-text-dim); transform: rotate(-45deg);
+      transition: transform var(--dshd-m-fast) ease;
+    }
+    .sditem.open .sditem-toggle::before { transform: rotate(45deg); }
+    .sditem-toggle:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+    /* 行内按钮与 pill 标签同高：紧凑行的次级操作（danger 色沿用全局定义）；
+       hover 用实心红底白字——与行背景 hover 的亮色区分，多态清晰 */
+    .sditem-head .dshd-btn {
+      height: 24px; padding: 0 10px; border-radius: 8px;
+      font-size: 12px; flex: none; margin-right: 12px;
+    }
+    .sditem-head .dshd-btn.danger:hover { background: var(--dshd-danger); color: #fff; }
+    .sditem-head .dshd-btn.danger:active { background: var(--dshd-danger-pressed); color: #fff; }
     .sditem-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .sditem-meta { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
     .sditem-count {
@@ -194,7 +276,7 @@
     .dop { font-size: 12px; }
     .dop-label { color: var(--dshd-text-dim); font-size: 11px; margin-bottom: 2px; }
     .dop-old, .dop-new {
-      white-space: pre-wrap; word-break: break-all; padding: 4px 8px; border-radius: 6px;
+      white-space: pre-wrap; overflow-wrap: anywhere; padding: 4px 8px; border-radius: 6px;
       font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.45;
     }
     .dop-old { background: rgba(248, 81, 73, .12); color: #f0a0a0; }
@@ -205,7 +287,7 @@
       .dop-new { color: #2e7d32; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .dshd-btn, .pcat-btn, .sditem-head { transition: none; }
+      .dshd-btn, .pcat-btn, .sditem-head, .sditem-toggle::before { transition: none; }
     }
     @media (prefers-reduced-motion: reduce) {
       .spin { animation: none; }
@@ -221,11 +303,11 @@
 </head>
 <body class="dshd-body" role="dialog" aria-modal="true" aria-labelledby="title">
   <div id="card" class="dshd-card">
-  <div class="dshd-head" data-tauri-drag-region="deep"><span class="title" id="title">…</span><button type="button" class="dshd-refresh hidden" id="btn-refresh" data-i18n-title="refreshBalance" data-i18n-aria-label="refreshBalance"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg></button><button type="button" class="dshd-x" id="btn-x" data-i18n-title="close" data-i18n-aria-label="close">&#xE8BB;</button></div>
+  <div class="dshd-head" data-tauri-drag-region="deep"><span class="title" id="title" data-trunc-tip>…</span><button type="button" class="dshd-refresh hidden" id="btn-refresh" data-i18n-title="refreshBalance" data-i18n-aria-label="refreshBalance"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg></button><button type="button" class="dshd-x" id="btn-x" data-i18n-title="close" data-i18n-aria-label="close">&#xE8BB;</button></div>
   <div id="shell">
     <nav id="nav" aria-label=""></nav>
     <div id="main">
-      <div class="body dshd-scroll" id="body" aria-live="polite"></div>
+      <div class="body dshd-scroll" id="body"></div>
       <div class="dshd-foot" id="foot"></div>
     </div>
   </div>
@@ -245,6 +327,18 @@
     const $ = (id) => document.getElementById(id);
     const cur = (c) => esc(dshdCurrency(c)) + ' ';
 
+    // 仅为实际截断的元素设置 title（显示完整无额外信息则不出现悬停提示）；
+    // data-tip-extra 提供"额外信息"提示（无论是否截断都显示，截断时
+    // 截断的文本优先）。带 data-trunc-tip 的元素在每次渲染后调用
+    function applyTruncationTips(root) {
+      const scope = root || document;
+      scope.querySelectorAll('[data-trunc-tip]').forEach((el) => {
+        const truncated = el.scrollWidth > el.clientWidth + 1;
+        const extra = el.dataset.tipExtra || '';
+        el.title = truncated ? el.textContent.trim() : extra;
+      });
+    }
+
     function foot(primaryLabel) {
       $('foot').innerHTML = '<button type="button" class="dshd-btn primary" id="b-close">' + esc(primaryLabel) + '</button>';
       document.getElementById('b-close').addEventListener('click', close);
@@ -257,20 +351,20 @@
       lastBalanceData = data;
       const body = $('body');
       if (!data) {
-        body.innerHTML = '<div class="msg"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</div>';
+        body.innerHTML = '<div class="msg" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</div>';
         $('foot').innerHTML = '';
         return;
       }
       if (!data.ok || !data.balances || !data.balances.length) {
-        body.innerHTML = '<div class="msg error">' + esc((data && data.error) || dshdT('balanceQueryFailed')) + '</div>';
+        body.innerHTML = '<div class="msg error" role="alert">' + esc((data && data.error) || dshdT('balanceQueryFailed')) + '</div>';
         foot(dshdT('close'));
         return;
       }
       const b = data.balances[0];
       const fmt = (v) => esc(dshdBalanceValue(v));
       const parts = '<div class="balance-parts">' +
-        '<div class="balance-part"><span>' + dshdT('toppedUpBalance') + '</span><b title="' + cur(b.currency) + fmt(b.topped_up_balance) + '">' + cur(b.currency) + fmt(b.topped_up_balance) + '</b></div>' +
-        '<div class="balance-part"><span>' + dshdT('grantedBalance') + '</span><b title="' + cur(b.currency) + fmt(b.granted_balance) + '">' + cur(b.currency) + fmt(b.granted_balance) + '</b></div>' +
+        '<div class="balance-part"><span data-trunc-tip>' + dshdT('toppedUpBalance') + '</span><b data-trunc-tip>' + cur(b.currency) + fmt(b.topped_up_balance) + '</b></div>' +
+        '<div class="balance-part"><span data-trunc-tip>' + dshdT('grantedBalance') + '</span><b data-trunc-tip>' + cur(b.currency) + fmt(b.granted_balance) + '</b></div>' +
         '</div>';
       const upd = data.updated_at
         ? '<span class="upd">' + dshdT('updatedAt', { time: new Date(data.updated_at * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }) }) + '</span>'
@@ -279,16 +373,18 @@
       const st = data.is_available ? dshdT('accountAvailable') : dshdT('accountUnavailable');
       body.innerHTML =
         '<div class="center-wrap">' +
+        '<div class="bal-api">DeepSeek API</div>' +
         '<div class="big">' + cur(b.currency) + fmt(b.total_balance) +
         '<span class="cur">' + esc(b.currency) + '</span></div>' + parts +
         '<div class="status"><span class="dot' + dot + '"></span>' + st + upd + '</div>' +
         '</div>';
       foot(dshdT('close'));
+      applyTruncationTips($('body'));
     }
 
     // —— 检查更新 ——
     function renderCheckLoading(message) {
-      $('body').innerHTML = '<div class="msg"><span class="spin" aria-hidden="true"></span>' + (message || dshdT('checkingUpdates')) + '</div>';
+      $('body').innerHTML = '<div class="msg" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + (message || dshdT('checkingUpdates')) + '</div>';
       $('foot').innerHTML = '<button type="button" class="dshd-btn" id="b-close">' + dshdT('close') + '</button>';
       document.getElementById('b-close').addEventListener('click', close);
     }
@@ -328,8 +424,9 @@
       const body = $('body');
       let html = '';
       if (r.dsh) {
+        const hint = r.dsh.latest_error ? ' data-tip-extra="' + esc(r.dsh.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">dsh</div>' +
-          '<div class="ver">' + verHtml(r.dsh.installed, r.dsh.latest, r.dsh.update_available) + '</div></div>' +
+          '<div class="ver" data-trunc-tip' + hint + '>' + verHtml(r.dsh.installed, r.dsh.latest, r.dsh.update_available) + '</div></div>' +
           '<span id="u-dsh"></span></div>';
       }
       if (r.node) {
@@ -340,9 +437,9 @@
             : dshdT('systemManagedUnavailable'))
           : !r.node.latest_lts ? dshdT('versionServiceUnavailable')
           : dshdT('upToDateLts');
-        const hint = r.node.latest_error ? ' title="' + esc(r.node.latest_error) + '"' : '';
+        const hint = r.node.latest_error ? ' data-tip-extra="' + esc(r.node.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">Node.js</div>' +
-          '<div class="ver"' + hint + '>' + (r.node.update_available
+          '<div class="ver" data-trunc-tip' + hint + '>' + (r.node.update_available
             ? verHtml(v, r.node.latest_lts || dshdT('latestVersion'), true)
             : (r.node.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
           '<span id="u-node"></span></div>';
@@ -352,33 +449,51 @@
         const label = !r.pwsh.installed ? dshdT('notInstalled')
           : !r.pwsh.latest ? dshdT('versionServiceUnavailable')
           : dshdT('upToDate');
-        const hint = r.pwsh.latest_error ? ' title="' + esc(r.pwsh.latest_error) + '"' : '';
+        const hint = r.pwsh.latest_error ? ' data-tip-extra="' + esc(r.pwsh.latest_error) + '"' : '';
         html += '<div class="uprow"><div class="info"><div class="name">PowerShell 7</div>' +
-          '<div class="ver"' + hint + '>' + (r.pwsh.update_available
+          '<div class="ver" data-trunc-tip' + hint + '>' + (r.pwsh.update_available
             ? verHtml(v, r.pwsh.latest || dshdT('latestVersion'), true)
             : (r.pwsh.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
           '<span id="u-pwsh"></span></div>';
       }
-      if (r.app) {
+      // GitHub 查询失败时 r.app 为空，但应用本机版本仍应始终可见；
+      // 远端状态明确标注不可用，避免用户误以为没有检查应用本体。
+      const localAppVersion = currentOpen && currentOpen.initial
+        ? currentOpen.initial.app_version || ''
+        : '';
+      if (r.app || localAppVersion) {
+        const installed = r.app ? r.app.installed : localAppVersion;
+        // 空 latest 显示"暂无法获取版本信息"；错误原因经 data-tip-extra 悬停展示
+        // 注意：verLabel 不再重复拼接 installed（曾显示成 0.1200.1.20）
+        const verLabel = !r.app || !r.app.latest
+          ? '<span class="v-ok">' + dshdT('versionServiceUnavailable') + '</span>'
+          : (r.app.update_available
+            ? '<span class="v-arrow">→</span><b class="v-latest">' + esc(r.app.latest) + '</b>'
+            : '<span class="v-ok">' + dshdT('upToDate') + '</span>');
+        const hint = r.app && r.app.latest_error
+          ? ' data-tip-extra="' + esc(r.app.latest_error) + '"'
+          : '';
         html += '<div class="uprow"><div class="info"><div class="name">DSHDesktop</div>' +
-          '<div class="ver">' + verHtml(r.app.installed, r.app.latest, r.app.update_available) + '</div></div>' +
+          '<div class="ver" data-trunc-tip' + hint + '>' + esc(installed) + verLabel + '</div></div>' +
           '<span id="u-app"></span></div>';
       }
-      if (r.error) html += '<div class="msg">' + esc(r.error) + '</div>';
-      if (!r.dsh && !r.node && !r.pwsh && !r.app) html += '<div class="msg error">' + dshdT('checkFailedRetry') + '</div>';
+      if (r.error) html += '<div class="msg error" role="alert">' + esc(r.error) + '</div>';
+      if (!r.dsh && !r.node && !r.pwsh && !r.app) html += '<div class="msg error" role="alert">' + dshdT('checkFailedRetry') + '</div>';
       body.innerHTML = html;
       if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
       if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
       if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
       if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
       const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.app && r.app.update_available);
-      if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.app)) {
+      if (!any && !r.error && r.app && (r.dsh || r.node || r.pwsh)) {
         const message = document.createElement('div');
         message.className = 'msg';
+        message.setAttribute('role', 'status');
         message.textContent = dshdT('noUpdates');
         body.append(message);
       }
       foot(dshdT('close'));
+      applyTruncationTips(body);
     }
     let lastProgress = '';
     function renderProgress(message) {
@@ -390,6 +505,7 @@
       if (line) { line.textContent = message; return; }
       const div = document.createElement('div');
       div.className = 'msg';
+      div.setAttribute('role', 'status');
       div.textContent = message;
       body.append(div);
     }
@@ -413,11 +529,13 @@
       });
       if (line) {
         line.className = 'msg ' + (p.ok ? 'success' : 'error');
+        line.setAttribute('role', p.ok ? 'status' : 'alert');
         line.textContent = text;
       }
       else {
         const div = document.createElement('div');
         div.className = 'msg ' + (p.ok ? 'success' : 'error');
+        div.setAttribute('role', p.ok ? 'status' : 'alert');
         div.textContent = text;
         body.append(div);
       }
@@ -439,7 +557,8 @@
         '<div class="tag">' + dshdT('aboutTagline') + '</div>' +
         '<div class="ver-row">' +
         '<span>' + dshdT('appVersion', { version: esc(initial.app_version) }) + '</span>' +
-        '<span>dsh ' + esc(initial.dsh_version) + '</span>' +
+        '<span>dsh ' + esc(initial.dsh_version || '—') + '</span>' +
+        '<span>' + dshdT('marketRow') + '</span>' +
         '</div>' +
         '<button type="button" class="dshd-btn" id="about-check">' + dshdT('checkUpdates') + '</button>' +
         '<div class="cp">© ' + new Date().getFullYear() + ' JeffioZ</div>' +
@@ -455,17 +574,19 @@
       { kind: 'check', label: 'navCheck', icon: 'refresh' },
       { kind: 'plugins', label: 'navPlugins', icon: 'puzzle' },
       { kind: 'session-diff', label: 'navSessionDiff', icon: 'file' },
+      { kind: 'settings', label: 'navSettings', icon: 'gear' },
       { kind: 'about', label: 'navAbout', icon: 'info' },
     ];
     const NAV_TITLE_KEY = {
       balance: 'balanceTitle', check: 'checkUpdates', plugins: 'pluginsTitle',
-      'session-diff': 'sessionDiffTitle', about: 'about',
+      'session-diff': 'sessionDiffTitle', settings: 'settingsTitle', about: 'about',
     };
     const NAV_ICONS = {
       wallet: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 7H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h13"></path><path d="M3 5v14a2 2 0 0 0 2 2h16V7"></path><path d="M16 13h3"></path></svg>',
       refresh: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg>',
       puzzle: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M21 16v5h-5"></path><path d="M3 16v5h5"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>',
       file: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path><path d="M9 13h6M9 17h4"></path></svg>',
+      gear: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
       info: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path></svg>',
     };
     function renderNav(activeKind) {
@@ -479,7 +600,7 @@
         btn.className = 'nav-item' + (item.kind === activeKind ? ' active' : '');
         btn.dataset.kind = item.kind;
         btn.setAttribute('aria-current', item.kind === activeKind ? 'page' : 'false');
-        btn.innerHTML = '<span class="nic">' + NAV_ICONS[item.icon] + '</span><span>' + esc(dshdT(item.label)) + '</span>';
+        btn.innerHTML = '<span class="nic">' + NAV_ICONS[item.icon] + '</span><span class="nav-label">' + esc(dshdT(item.label)) + '</span>';
         btn.addEventListener('click', () => navigateTo(item.kind));
         nav.append(btn);
       }
@@ -510,6 +631,7 @@
       } else if (k === 'about') renderAbout((currentOpen && currentOpen.initial) || {});
       else if (k === 'plugins') renderPlugins();
       else if (k === 'session-diff') renderSessionDiff();
+      else if (k === 'settings') renderSettings();
     }
     function navigateTo(kind) {
       if (!currentOpen || openKind === kind) return;
@@ -517,6 +639,7 @@
       currentOpen = { kind, title: '', initial: currentOpen.initial };
       renderNav(kind);
       $('title').textContent = NAV_TITLE_KEY[kind] ? dshdT(NAV_TITLE_KEY[kind]) : '';
+      applyTruncationTips(document);
       $('btn-refresh').classList.toggle('hidden', kind !== 'balance');
       renderCurrent({ triggerCheck: true, triggerBalance: true });
       document.body.classList.remove('dshd-pop-in');
@@ -524,42 +647,128 @@
       document.body.classList.add('dshd-pop-in');
     }
 
+    // —— 设置（统一弹窗内：开机自启 / 隐藏工具调用 / 隐藏统计行） ——
+    let settingsBusy = false;
+    const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar'];
+    function settingsRow(key, nameKey, descKey) {
+      return (
+        '<label class="srow">' +
+        '<span class="srow-txt">' +
+        '<span class="srow-name">' + dshdT(nameKey) + '</span>' +
+        '<span class="srow-desc">' + dshdT(descKey) + '</span>' +
+        '</span>' +
+        '<input type="checkbox" class="sswitch" role="switch" data-key="' + key + '">' +
+        '</label>'
+      );
+    }
+    function renderSettings() {
+      const body = $('body');
+      body.innerHTML =
+        '<div class="psection">' +
+        settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
+        settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
+        settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
+        settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
+        '</div>' +
+        '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
+      body.querySelectorAll('.sswitch').forEach((el) => {
+        el.addEventListener('change', onSettingToggle);
+      });
+      invoke('settings_get').then(applySettingState).catch((e) => showSettingError(e));
+    }
+    function applySettingState(state) {
+      const body = $('body');
+      SETTING_KEYS.forEach((key) => {
+        const el = body.querySelector('.sswitch[data-key="' + key + '"]');
+        if (el) el.checked = Boolean(state[key]);
+      });
+    }
+    function showSettingError(message) {
+      const err = $('serr');
+      if (!err) return;
+      err.textContent = message;
+      err.hidden = false;
+    }
+    function hideSettingError() {
+      const err = $('serr');
+      if (err) err.hidden = true;
+    }
+    async function onSettingToggle(ev) {
+      const input = ev.target;
+      if (settingsBusy) {
+        // 并发切换中：弹回（等待中的 invoke 返回后统一应用最新状态）
+        input.checked = !input.checked;
+        return;
+      }
+      settingsBusy = true;
+      input.disabled = true;
+      hideSettingError();
+      try {
+        const state = await invoke('settings_set', {
+          key: input.dataset.key,
+          value: input.checked,
+        });
+        applySettingState(state);
+      } catch (e) {
+        input.checked = !input.checked;
+        showSettingError(dshdT('settingsFailed', { message: String(e) }));
+      } finally {
+        settingsBusy = false;
+        input.disabled = false;
+      }
+    }
+
     // —— 插件管理（统一弹窗内） ——
     let pluginsBusy = false;
+    let pluginSearchSeq = 0;
     const CAT_QUERIES = {
       skin: 'dsh-plugin skin OR dsh-web-ui OR dsh-ui theme',
       tool: 'dsh-plugin tool',
       workflow: 'dsh-plugin workflow',
     };
     function renderPlugins() {
+      // 重新进入页面时让上一次尚未返回的搜索失效，避免旧结果覆盖新页面。
+      pluginSearchSeq += 1;
       const body = $('body');
       body.innerHTML =
         '<div class="psearch">' +
         '<span class="psearch-ic" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg></span>' +
-        '<input class="pinput" id="p-query" type="search" placeholder="' + esc(dshdT('pluginSearchHint')) + '" autocomplete="off" spellcheck="false" />' +
+        '<input class="pinput" id="p-query" type="search" aria-label="' + esc(dshdT('pluginSearchHint')) + '" placeholder="' + esc(dshdT('pluginSearchHint')) + '" autocomplete="off" spellcheck="false" />' +
         '<button type="button" class="dshd-btn" id="p-search">' + esc(dshdT('pluginSearch')) + '</button>' +
         '</div>' +
         '<div class="pcats">' +
-        '<button type="button" class="pcat-btn active" data-cat="">' + esc(dshdT('pluginCatAll')) + '</button>' +
-        '<button type="button" class="pcat-btn" data-cat="skin">' + esc(dshdT('pluginCatSkin')) + '</button>' +
-        '<button type="button" class="pcat-btn" data-cat="tool">' + esc(dshdT('pluginCatTool')) + '</button>' +
-        '<button type="button" class="pcat-btn" data-cat="workflow">' + esc(dshdT('pluginCatWorkflow')) + '</button>' +
+        '<button type="button" class="pcat-btn active" data-cat="" aria-pressed="true">' + esc(dshdT('pluginCatAll')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="skin" aria-pressed="false">' + esc(dshdT('pluginCatSkin')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="tool" aria-pressed="false">' + esc(dshdT('pluginCatTool')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="workflow" aria-pressed="false">' + esc(dshdT('pluginCatWorkflow')) + '</button>' +
         '</div>' +
         '<div class="pstatus" id="p-status" role="status" aria-live="polite"></div>' +
         '<div class="psection hidden" id="p-results-sec">' +
         '<h3>' + esc(dshdT('pluginResults')) + ' <span class="pcount" id="p-results-count"></span></h3>' +
         '<ul class="plist" id="p-results"></ul></div>' +
-        '<div class="psection"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
+        '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
         '<ul class="plist" id="p-installed"></ul></div>';
       foot(dshdT('close'));
       $('p-search').addEventListener('click', () => doPluginSearch());
       $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(); });
       document.querySelectorAll('.pcat-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
-          document.querySelectorAll('.pcat-btn').forEach((b) => b.classList.toggle('active', b === btn));
+          document.querySelectorAll('.pcat-btn').forEach((b) => {
+            const active = b === btn;
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-pressed', String(active));
+          });
           const q = btn.dataset.cat ? CAT_QUERIES[btn.dataset.cat] : '';
           if (q) doPluginSearch(q);
-          else { $('p-query').value = ''; $('p-results-sec').classList.add('hidden'); $('p-results').innerHTML = ''; }
+          else {
+            // 「全部」分类：回到默认态——清空搜索，结果区隐藏、已装区恢复
+            pluginSearchSeq += 1;
+            $('p-query').value = '';
+            $('p-results-sec').classList.add('hidden');
+            $('p-results').innerHTML = '';
+            $('p-installed-sec').classList.remove('hidden');
+            pluginStatus('');
+          }
         });
       });
       refreshPlugins();
@@ -580,13 +789,24 @@
     async function doPluginSearch(query) {
       const q = (query != null ? query : $('p-query').value).trim();
       if (!q) return;
+      const seq = ++pluginSearchSeq;
       pluginStatus(dshdT('pluginSearching'));
       try {
         const list = await invoke('plugin_search', { query: q });
-        if (openKind !== 'plugins') return;
+        if (openKind !== 'plugins' || seq !== pluginSearchSeq) return;
         renderResults(list || []);
         pluginStatus(dshdT('pluginSearchDone', { count: (list || []).length }), 'ok');
-      } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+      } catch (e) {
+        if (openKind === 'plugins' && seq === pluginSearchSeq) {
+          pluginStatus(dshdT('pluginFailed', { message: e }), 'err');
+        }
+      }
+    }
+    function setPluginsBusy(busy) {
+      pluginsBusy = busy;
+      document.querySelectorAll('.plugin-action').forEach((button) => {
+        button.disabled = busy;
+      });
     }
     function pluginItemRow(p, actions) {
       const li = document.createElement('li');
@@ -603,19 +823,26 @@
       const name = document.createElement('div');
       name.className = 'name';
       name.textContent = p.name;
+      name.dataset.truncTip = '';
       const desc = document.createElement('div');
       desc.className = 'desc';
       desc.textContent = p.description || '';
+      // 截断才提示（显示完整无额外信息则不设 title）
+      desc.dataset.truncTip = '';
       info.append(name, desc);
       li.append(info);
       if (p.version) {
         const ver = document.createElement('span');
         ver.className = 'ver';
-        ver.textContent = 'v' + p.version;
+        ver.textContent = cleanVersion(p.version);
         li.append(ver);
       }
       li.append(actions);
       return li;
+    }
+    // 版本 spec 清理：package.json 里的 ^1.8.0 / ~1.2 / v2.0.1 → 1.8.0
+    function cleanVersion(v) {
+      return String(v || '').replace(/^[vV^~<>= ]+/, '').trim() || '?';
     }
     function renderInstalled(list) {
       const ul = $('p-installed');
@@ -628,37 +855,42 @@
         e.className = 'pempty';
         e.textContent = dshdT('pluginNone');
         ul.append(e);
+        applyTruncationTips($('body'));
         return;
       }
       for (const p of list) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'dshd-btn danger';
+        btn.className = 'dshd-btn danger plugin-action';
         btn.textContent = dshdT('pluginUninstall');
         btn.disabled = pluginsBusy;
         btn.addEventListener('click', async () => {
-          pluginsBusy = true;
-          btn.disabled = true;
+          if (pluginsBusy) return;
+          setPluginsBusy(true);
           pluginStatus(dshdT('pluginRemoving', { name: p.name }));
           try {
             await invoke('plugin_remove', { name: p.name });
             pluginStatus(dshdT('pluginRemoved', { name: p.name }), 'ok');
           } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
-          finally { pluginsBusy = false; await refreshPlugins(); }
+          finally { setPluginsBusy(false); await refreshPlugins(); }
         });
         ul.append(pluginItemRow(p, btn));
       }
+      applyTruncationTips($('body'));
     }
     function renderResults(list) {
       const sec = $('p-results-sec');
       const ul = $('p-results');
       if (!sec || !ul) return;
-      // 未搜索（null）：整个结果区隐藏，不显示空标题
+      // 未搜索（null）：整个结果区隐藏，恢复已装区（搜索态覆盖浏览态）
       if (list === null || list === undefined) {
         sec.classList.add('hidden');
+        $('p-installed-sec').classList.remove('hidden');
         return;
       }
+      // 搜索态：结果区覆盖已装区——避免两者并存挤压空间
       sec.classList.remove('hidden');
+      $('p-installed-sec').classList.add('hidden');
       const countEl = $('p-results-count');
       if (countEl) countEl.textContent = list.length ? '(' + list.length + ')' : '';
       ul.textContent = '';
@@ -677,27 +909,40 @@
           btn.textContent = dshdT('pluginInstalledTag');
           btn.disabled = true;
         } else {
+          btn.classList.add('plugin-action');
           btn.textContent = dshdT('pluginInstall');
           btn.disabled = pluginsBusy;
           btn.addEventListener('click', async () => {
-            pluginsBusy = true;
-            btn.disabled = true;
+            if (pluginsBusy) return;
+            setPluginsBusy(true);
             pluginStatus(dshdT('pluginInstalling', { name: p.name }));
+            let installed = false;
             try {
               await invoke('plugin_install', { name: p.name });
+              installed = true;
               pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
             } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
-            finally { pluginsBusy = false; await refreshPlugins(); }
+            finally {
+              setPluginsBusy(false);
+              if (installed) {
+                btn.classList.remove('plugin-action');
+                btn.textContent = dshdT('pluginInstalledTag');
+                btn.disabled = true;
+              }
+              await refreshPlugins();
+            }
           });
         }
         ul.append(pluginItemRow(p, btn));
       }
+      applyTruncationTips($('body'));
     }
 
     // —— 会话文件变更（统一弹窗内） ——
     function renderSessionDiff() {
       const body = $('body');
       body.innerHTML =
+        '<div class="sd-help">' + dshdT('sessionDiffHelp') + '</div>' +
         '<div class="sd-sub" id="sd-sub"></div>' +
         '<div class="pstatus" id="sd-status" role="status" aria-live="polite"></div>' +
         '<ul class="plist" id="sd-list"></ul>';
@@ -724,42 +969,52 @@
       if (!list) return;
       list.textContent = '';
       const sub = $('sd-sub');
-      if (sub && data.session_id) {
-        // 完整会话 id 过长，展示前 8 位便于识别
-        sub.textContent = dshdT('sessionDiffSession', { id: data.session_id.slice(0, 8) });
+      if (sub) {
+        // 工作目录比会话 id 更有辨识度（用户能看出是哪次会话改的文件）
+        sub.textContent = data.workdir
+          ? dshdT('sessionDiffWorkdir', { path: data.workdir })
+          : dshdT('sessionDiffSession', { id: String(data.session_id || '').replace(/^session-/, '').slice(0, 8) });
       }
       if (!data.files || !data.files.length) {
+        // 加载完成且无改动：明确状态替换「正在读取…」
+        sdStatus(dshdT('sessionDiffNone'));
         const e = document.createElement('li');
         e.className = 'pempty';
         e.textContent = dshdT('sessionDiffNone');
         list.append(e);
         return;
       }
+      const totalEdits = data.files.reduce((n, f) => n + (f.edits ? f.edits.length : 0), 0);
+      sdStatus(dshdT('sessionDiffSummary', { files: data.files.length, edits: totalEdits }), 'ok');
       for (const f of data.files) {
         const li = document.createElement('li');
         li.className = 'sditem';
         const head = document.createElement('div');
         head.className = 'sditem-head';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'sditem-toggle';
+        toggle.setAttribute('aria-expanded', 'false');
         const path = document.createElement('span');
         path.className = 'sditem-path';
         path.textContent = f.path;
-        path.title = f.path;
-        head.append(path);
+        path.dataset.truncTip = '';
+        toggle.append(path);
         const meta = document.createElement('span');
         meta.className = 'sditem-count';
         meta.textContent = dshdT('sessionDiffEdits', { count: f.edits.length });
-        head.append(meta);
+        toggle.append(meta);
         const tag = document.createElement('span');
         tag.className = 'sditem-tag ' + (f.revertible ? 'ok' : 'no');
         tag.textContent = f.revertible ? dshdT('sessionDiffRevertible') : dshdT('sessionDiffNotRevertible');
-        head.append(tag);
+        toggle.append(tag);
+        head.append(toggle);
         if (f.revertible) {
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'dshd-btn danger';
           btn.textContent = dshdT('sessionDiffRevert');
-          btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
+          btn.addEventListener('click', async () => {
             if (!window.confirm(dshdT('sessionDiffRevertConfirm', { path: f.path }))) return;
             btn.disabled = true;
             sdStatus(dshdT('sessionDiffReverting', { path: f.path }));
@@ -771,10 +1026,16 @@
           });
           head.append(btn);
         }
-        head.addEventListener('click', () => li.classList.toggle('open'));
+        const diffId = 'sd-diff-' + list.children.length;
+        toggle.setAttribute('aria-controls', diffId);
+        toggle.addEventListener('click', () => {
+          const open = li.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', String(open));
+        });
         li.append(head);
         const diff = document.createElement('div');
         diff.className = 'sddiff dshd-scroll';
+        diff.id = diffId;
         for (const op of f.edits) {
           const wrap = document.createElement('div');
           wrap.className = 'dop';
@@ -808,17 +1069,19 @@
         li.append(diff);
         list.append(li);
       }
+      applyTruncationTips($('body'));
     }
 
     let closeTimer = null;
-    function close() {      // 内容先淡出（视觉上直接消失，不露出“…”标题），130ms 后请 Rust 清空并隐藏；
+    function close() {      // 内容快速淡出（不露出“…”标题），90ms 后请 Rust 清空并隐藏；
       // 淡出后的表面近似空卡片，天然充当下次打开前的中性帧
       if (document.body.classList.contains('fade-out')) return;
       document.body.classList.add('fade-out');
+      const delay = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 90;
       closeTimer = setTimeout(() => {
         closeTimer = null;
         invoke('app_dialog_close').catch(() => {});
-      }, 130);
+      }, delay);
     }
 
     let lastOpenKey = '';
@@ -865,6 +1128,7 @@
       openKind = p.kind;
       const titleKey = NAV_TITLE_KEY[p.kind];
       $('title').textContent = titleKey ? dshdT(titleKey) : p.title;
+      applyTruncationTips(document);
       renderNav(p.kind);
       // Rust 打开时已按 kind 预置状态（open_check 触发检查等），此处只渲染
       renderCurrent();
@@ -922,6 +1186,7 @@
       if (!currentOpen) return;
       const titleKey = NAV_TITLE_KEY[openKind];
       $('title').textContent = titleKey ? dshdT(titleKey) : currentOpen.title;
+      applyTruncationTips(document);
       renderNav(openKind);
       renderCurrent();
     });

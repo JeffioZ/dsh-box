@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="common.css" />
+  <style>
+/* 底部状态栏：固定 26px 单行；会话统计（左）+ 余额 chip（右）。
+   悬停说明使用系统默认 title，子 WebView 不再因 hover 扩缩。 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: #181819;
+  color: var(--dshd-text);
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  user-select: none;
+}
+/* 窗口失焦：与标题栏一致整体变暗（class 由 Rust 侧 Focused 广播驱动） */
+body.window-inactive .stats { opacity: .55; }
+body.window-inactive .sb-chip { opacity: .55; }
+
+.statusbar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 26px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px 0 8px; background: #181819;
+}
+/* 与 dsh 内容的分层线：画在 26px 条内（box-shadow 落条外会被子 webview 裁剪） */
+.statusbar::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: var(--dshd-border);
+}
+/* —— 会话统计（纯展示；悬停说明由系统默认 title 提供） —— */
+.stats {
+  min-width: 0; max-width: 100%; display: flex; align-items: center; gap: 0;
+  height: 100%; padding: 0 6px; border-radius: 6px;
+  font-size: 12px; line-height: 1; white-space: nowrap; overflow: hidden;
+  cursor: default;
+}
+/* 统计组：图标（装饰性，dim 色）+ 数值文本（主色 + 500 字重） */
+.stats .g { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.stats .g-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--dshd-text-dim); }
+.stats .g-t {
+  color: var(--dshd-text); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* 缓存命中组：success 色点缀（文字本身承载语义，颜色非唯一信号） */
+.stats .g.cache .g-t { color: var(--dshd-success-text); }
+/* 组间竖分隔线：1px 高 10px，与 dsh 分隔线色一致 */
+.stats .vsep { flex: none; width: 1px; height: 10px; margin: 0 7px;
+  background: var(--dshd-border-strong); }
+/* 统计区与余额 chip 之间的常驻分隔线（余额是信息流的固定尾组） */
+.statusbar > .vsep.edge { flex: none; width: 1px; height: 10px; margin: 0 6px;
+  background: var(--dshd-border-strong); }
+.flex-space { flex: 1; }
+
+/* —— 余额 chip（点击打开详情；悬停说明由系统默认 title 提供） —— */
+.sb-chip {
+  position: relative; z-index: 0; display: inline-flex; align-items: center; gap: 4px; height: 24px;
+  color: var(--dshd-text); font: inherit;
+  background: transparent; border: none; border-radius: 7px;
+  padding: 0 8px; font-size: 12px; line-height: 1; cursor: pointer; outline: none;
+  font-variant-numeric: tabular-nums; font-weight: 500;
+  transition: color var(--dshd-m-fast) ease;
+}
+.sb-chip::before {
+  content: ""; position: absolute; z-index: -1; inset: 2px; border-radius: 5px; pointer-events: none;
+  background: transparent; transition: background-color var(--dshd-m-fast) ease;
+}
+.sb-chip:hover::before { background: var(--dshd-hover); }
+.sb-chip:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+.sb-chip:active::before { background: var(--dshd-pressed); }
+.sb-chip .c-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--dshd-text-dim); }
+.sb-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dshd-success); flex: none; }
+.sb-chip .dot.warn { background: var(--dshd-warning); }
+.sb-chip .dot.err { background: var(--dshd-error); }
+
+/* 浅色主题覆盖 */
+@media (prefers-color-scheme: light) {
+  body { background: #fcfcfd; }
+  .statusbar { background: #fcfcfd; }
+  .statusbar::before { background: rgba(0, 0, 0, .04); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb-chip, .sb-chip::before { transition: none; }
+}
+  </style>
+</head>
+<body>
+  <div class="statusbar">
+    <div id="stats" class="stats" data-i18n-aria-label="statsRegion"></div>
+    <div class="flex-space"></div>
+    <span class="vsep edge" id="edge-sep" aria-hidden="true"></span>
+    <button type="button" id="balance-chip" class="sb-chip"
+            data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint"></button>
+  </div>
+  <script src="common.js"></script>
+  <script src="statusbar.js"></script>
+</body>
+</html>

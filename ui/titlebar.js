@@ -1,15 +1,8 @@
-// 自绘标题栏：品牌区/拖拽区、API 余额、共用主菜单与窗口控制按钮。
+// 自绘标题栏：品牌区/拖拽区、共用主菜单与窗口控制按钮。
+// （余额 chip 已迁移到窗口底部状态栏，见 statusbar.js）
 const $ = (id) => document.getElementById(id);
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
-const esc = dshdEsc;
 
-const MANUAL_REFRESH_COOLDOWN_MS = 1600;
-const MIN_REFRESH_SPIN_MS = 900;
-
-let lastBalance = null;
-let balanceExpanded = false;
-let balanceRefreshing = false;
-let refreshCooldownUntil = 0;
 let mainMenuOpen = false;
 let mainMenu = null;
 
@@ -28,11 +21,9 @@ function initPlatform() {
 
 // 浮层高度按内容实测（+36px 标题栏 + 24px 阴影余量）：
 // 当前阴影 blur 12px + y 偏移 4px，24px 余量足够；不足会被 webview
-// 底缘硬切（阴影边缘突然截断）。Rust 端再按 36..512 收敛
+// 底缘硬切（阴影边缘突然截断）。Rust 端再按 36..620 收敛
 function syncOverlayHeight() {
-  let content = 0;
-  if (mainMenuOpen) content = $('main-menu-panel') ? $('main-menu-panel').offsetHeight : 0;
-  else if (balanceExpanded) content = $('balance-pop') ? $('balance-pop').offsetHeight : 0;
+  const content = mainMenuOpen && $('main-menu-panel') ? $('main-menu-panel').offsetHeight : 0;
   const height = content > 0 ? 36 + content + 24 : 36;
   invoke('titlebar_expand', { expand: height > 36, height }).catch(() => {});
 }
@@ -40,174 +31,6 @@ function syncOverlayHeight() {
 // 收起时推迟收缩 webview：淡出动画（140/160ms）期间立即收缩会把
 // 正在淡出的面板硬裁切，裁切边贴着标题栏分隔线，产生“衔接处闪烁”
 let overlaySyncTimer = null;
-
-function setBalanceExpanded(expanded) {
-  balanceExpanded = Boolean(expanded) && !mainMenuOpen;
-  $('balance-wrap').classList.toggle('open', balanceExpanded);
-  $('balance-chip').setAttribute('aria-expanded', String(balanceExpanded));
-  $('balance-pop').setAttribute('aria-hidden', String(!balanceExpanded));
-  $('balance-pop').inert = !balanceExpanded;
-  clearTimeout(overlaySyncTimer);
-  if (balanceExpanded) syncOverlayHeight();
-  else overlaySyncTimer = setTimeout(syncOverlayHeight, 200);
-}
-
-function popHeader() {
-  return '<div class="pop-head">' +
-    '<span class="pop-head-label">' + dshdT('balanceTitle') + '</span>' +
-    '<button type="button" class="pop-refresh" id="balance-refresh" title="' + dshdT('refreshBalance') + '" aria-label="' + dshdT('refreshBalance') + '">' +
-    '<span class="refresh-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg></span></button></div>';
-}
-
-function updateRefreshButton() {
-  const button = $('balance-refresh');
-  if (!button) return;
-  // 冷却期只静默忽略重复点击，不禁用按钮：禁用态会让人误以为“卡住不可点”
-  button.disabled = balanceRefreshing;
-  button.classList.toggle('refreshing', balanceRefreshing);
-  const label = balanceRefreshing ? dshdT('refreshingBalance') : dshdT('refreshBalance');
-  button.title = label;
-  button.setAttribute('aria-label', label);
-  $('balance-pop').setAttribute('aria-busy', String(balanceRefreshing));
-}
-
-function bindRefreshButton() {
-  const button = $('balance-refresh');
-  if (!button) return;
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    refreshBalance(true);
-  });
-  updateRefreshButton();
-}
-
-function setPopContent(content) {
-  $('balance-pop').innerHTML = popHeader() + content;
-  bindRefreshButton();
-  // 内容变化（如错误文案换行、数据到达）可能改变浮层高度，展开时同步实测高度
-  if (balanceExpanded) syncOverlayHeight();
-}
-
-function renderPop(data) {
-  if (!data) {
-    setPopContent('<div class="pop-error">' + dshdT('queryingBalance') + '</div>');
-    return;
-  }
-  if (!data.ok) {
-    const kind = data.error_kind;
-    const head = kind === 'no_key' ? dshdT('noApiKey')
-      : kind === 'invalid_key' ? dshdT('invalidApiKey')
-      : dshdT('balanceQueryFailed');
-    setPopContent('<div class="pop-error-title">' + head + '</div><div class="pop-error">' + esc(data.error || '') + '</div>');
-    return;
-  }
-  if (!data.balances || !data.balances.length) {
-    setPopContent('<div class="pop-error">' + dshdT('noBalanceInfo') + '</div>');
-    return;
-  }
-
-  const balance = data.balances[0];
-  const currency = esc(dshdCurrency(balance.currency)) + ' ';
-  const format = (value) => esc(dshdBalanceValue(value));
-  // 明细改为双格卡片（与统一弹窗余额页的指标卡一致），视觉更聚焦
-  const part = (label, value) =>
-    `<div class="pop-part"><span>${label}</span><b title="${format(value)}">${currency}${format(value)}</b></div>`;
-  // 明细仅在赠送 > 0 时展示：此时"总余额 = 已充值 + 赠送"的拆分才有信息量；
-  // 赠送为 0 时两行与总数重复，不展示（用户此前反馈）
-  const granted = parseFloat(balance.granted_balance || '0') || 0;
-  const parts = granted > 0
-    ? `<div class="pop-parts">${part(dshdT('toppedUpBalance'), balance.topped_up_balance)}${part(dshdT('grantedBalance'), balance.granted_balance)}</div>`
-    : '';
-  const updated = data.updated_at
-    ? '<span class="pop-upd">' + dshdT('updatedAt', {
-      time: new Date(data.updated_at * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }),
-    }) + '</span>'
-    : '';
-  const status = data.is_available
-    ? `<div class="pop-status"><span class="dot"></span>${dshdT('accountStatusAvailable')}${updated}</div>`
-    : `<div class="pop-status"><span class="dot warn"></span>${dshdT('accountStatusUnavailable')}${updated}</div>`;
-  setPopContent(
-    `<div class="pop-total">${currency}${format(balance.total_balance)}<span class="cur">${esc(balance.currency)}</span></div>` +
-    parts + status,
-  );
-}
-
-function updateChipAccessibility() {
-  const value = $('balance-text').textContent;
-  $('balance-chip').setAttribute('aria-label', value + ' — ' + dshdT('balanceDetailsAria'));
-}
-
-function renderChip(data) {
-  const chip = $('balance-chip');
-  const text = $('balance-text');
-  const dot = chip.querySelector('.dot');
-  // 状态点不能只靠颜色（skill: Color Only 规则）——同步设置 title 文字语义
-  const setDot = (cls, label) => { dot.className = cls; dot.title = label; };
-  if (!data || !data.ok) {
-    chip.classList.remove('hidden');
-    const kind = data && data.error_kind;
-    if (kind === 'no_key') {
-      setDot('dot warn', dshdT('noApiKey'));
-      text.textContent = dshdT('noApiKey');
-    } else if (kind === 'invalid_key') {
-      setDot('dot err', dshdT('invalidApiKey'));
-      text.textContent = dshdT('invalidApiKey');
-    } else {
-      setDot('dot warn', dshdT('balanceQueryFailed'));
-      text.textContent = dshdT('balanceQueryFailed');
-    }
-    updateChipAccessibility();
-    return;
-  }
-  if (data.balances && data.balances.length) {
-    const balance = data.balances[0];
-    const currency = dshdCurrency(balance.currency);
-    chip.classList.remove('hidden');
-    const statusLabel = data.is_available ? dshdT('accountStatusAvailable') : dshdT('accountStatusUnavailable');
-    setDot('dot' + (data.is_available ? '' : ' warn'), statusLabel);
-    text.textContent = currency + (balance.currency === 'CNY' ? '' : ' ') + dshdBalanceValue(balance.total_balance);
-  } else {
-    chip.classList.remove('hidden');
-    setDot('dot err', dshdT('noBalance'));
-    text.textContent = dshdT('noBalance');
-  }
-  updateChipAccessibility();
-}
-
-function renderBalance(data) {
-  lastBalance = data;
-  renderChip(data);
-  renderPop(data);
-}
-
-async function refreshBalance(manual = false) {
-  if (balanceRefreshing) return;
-  if (manual && Date.now() < refreshCooldownUntil) return;
-
-  balanceRefreshing = true;
-  const spinStarted = Date.now();
-  // 转圈期间只在现有按钮上更新状态，不重建浮层内容：
-  // 重建会替换按钮元素，CSS 旋转动画在新元素上从 0 度重来 → 闪烁
-  updateRefreshButton();
-  let next = null;
-  try {
-    next = await invoke('api_balance');
-  } catch (error) {
-    next = { ok: false, error: String(error) };
-  } finally {
-    // 旋转动画至少转满一圈：本地查询很快（百余毫秒），
-    // 若立即停转会呈现“刚动就停”的错觉
-    const elapsed = Date.now() - spinStarted;
-    if (elapsed < MIN_REFRESH_SPIN_MS) {
-      await new Promise((resolve) => setTimeout(resolve, MIN_REFRESH_SPIN_MS - elapsed));
-    }
-    balanceRefreshing = false;
-    // 转圈结束才一次性渲染新数据（含按钮重建，此刻无旋转状态）
-    renderBalance(next);
-    if (manual) refreshCooldownUntil = Date.now() + MANUAL_REFRESH_COOLDOWN_MS;
-    updateRefreshButton();
-  }
-}
 
 async function refreshMainMenu() {
   try {
@@ -219,7 +42,6 @@ async function refreshMainMenu() {
 
 function setMainMenuOpen(open, focusMenu = false) {
   mainMenuOpen = Boolean(open);
-  if (mainMenuOpen) setBalanceExpanded(false);
   $('main-menu-wrap').classList.toggle('open', mainMenuOpen);
   $('btn-menu').setAttribute('aria-expanded', String(mainMenuOpen));
   $('main-menu-panel').setAttribute('aria-hidden', String(!mainMenuOpen));
@@ -240,61 +62,6 @@ function setMainMenuOpen(open, focusMenu = false) {
   if (!mainMenuOpen) overlaySyncTimer = setTimeout(syncOverlayHeight, 200);
 }
 
-function bindBalance() {
-  const wrap = $('balance-wrap');
-  const chip = $('balance-chip');
-  const pop = $('balance-pop');
-  let hoverTimer = null;
-  let leaveTimer = null;
-
-  // 指针是否仍在“入口区或浮层区”内：浮层展开需要 IPC 往返，
-  // 期间指针可能已经离开入口区（webview 加高前该区域尚未属于本页面），
-  // 用几何包含判定代替 mouseleave，避免途经间隙时误收起
-  const inSurface = (x, y) => {
-    const wr = wrap.getBoundingClientRect();
-    if (x >= wr.left && x <= wr.right && y >= wr.top && y <= wr.bottom) return true;
-    if (!balanceExpanded) return false;
-    const pr = pop.getBoundingClientRect();
-    return x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom;
-  };
-
-  chip.addEventListener('click', (event) => {
-    event.stopPropagation();
-    setBalanceExpanded(false);
-    invoke('app_dialog_open_balance').catch(() => {});
-  });
-  wrap.addEventListener('mouseenter', () => {
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(() => setBalanceExpanded(true), 100);
-  });
-  wrap.addEventListener('mouseleave', () => {
-    // 离开芯片：取消未到时的展开；已展开时补收起定时器——
-    // 无后续 mousemove 也能收起（mousemove 路径会正常接管/取消它）
-    clearTimeout(hoverTimer);
-    if (!balanceExpanded || leaveTimer) return;
-    leaveTimer = setTimeout(() => { leaveTimer = null; setBalanceExpanded(false); }, 240);
-  });
-  document.addEventListener('mousemove', (event) => {
-    if (!balanceExpanded) return;
-    if (inSurface(event.clientX, event.clientY)) {
-      if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
-    } else if (!leaveTimer) {
-      // 离开两区持续 240ms 才收起：给快速扫过的移动与浮层淡入留余量
-      leaveTimer = setTimeout(() => { leaveTimer = null; setBalanceExpanded(false); }, 240);
-    }
-  });
-  chip.addEventListener('focus', () => {
-    clearTimeout(hoverTimer);
-    setBalanceExpanded(true);
-  });
-  chip.addEventListener('blur', () => {
-    clearTimeout(hoverTimer);
-    setTimeout(() => {
-      if (!wrap.matches(':hover') && !wrap.matches(':focus-within')) setBalanceExpanded(false);
-    }, 0);
-  });
-}
-
 function bindMainMenu() {
   mainMenu = dshdCreateMenu($('main-menu-list'), {
     onChoose: async (id) => {
@@ -308,7 +75,7 @@ function bindMainMenu() {
       setMainMenuOpen(false);
       $('btn-menu').focus();
     },
-    // 语言子菜单展开/收起会改变面板高度，同步 webview 高度。
+    // 子菜单展开/收起会改变面板高度，同步 webview 高度。
     // menu.js 先发通知后改 DOM，这里等一帧让 DOM 就绪再实测
     onSubmenuChange: () => requestAnimationFrame(syncOverlayHeight),
   });
@@ -338,7 +105,6 @@ function bindMainMenu() {
   $('main-menu-panel').addEventListener('click', (event) => event.stopPropagation());
   document.addEventListener('pointerdown', (event) => {
     if (mainMenuOpen && !$('main-menu-wrap').contains(event.target)) setMainMenuOpen(false);
-    if (balanceExpanded && !$('balance-wrap').contains(event.target)) setBalanceExpanded(false);
   });
 }
 
@@ -372,7 +138,6 @@ async function init() {
   dshdApplyI18n();
   initPlatform();
   bindMainMenu();
-  bindBalance();
   bindWindowControls();
   document.addEventListener('contextmenu', (event) => event.preventDefault());
 
@@ -383,17 +148,15 @@ async function init() {
   });
   window.addEventListener('blur', () => {
     if (mainMenuOpen) setMainMenuOpen(false);
-    if (balanceExpanded) setBalanceExpanded(false);
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && balanceExpanded) {
+    if (event.key === 'Escape' && mainMenuOpen) {
       event.preventDefault();
-      setBalanceExpanded(false);
+      setMainMenuOpen(false);
+      $('btn-menu').focus();
     }
   });
   window.addEventListener('dshd-language-changed', () => {
-    if (lastBalance) renderBalance(lastBalance);
-    else renderPop(null);
     applyMaxState($('btn-max').classList.contains('maximized'));
     refreshMainMenu();
   });
@@ -414,10 +177,7 @@ async function init() {
   window.__dshdSetWindowActive = (active) => {
     document.body.classList.toggle('window-inactive', !active);
   };
-  const { listen } = window.__TAURI__.event;
-  await listen('balance-updated', (event) => renderBalance(event.payload));
   refreshMainMenu();
-  refreshBalance();
   // 初始化完成回报：Rust 启动自愈看门狗据此判断本页面是否加载成功
   invoke('titlebar_ready').catch(() => {});
 }

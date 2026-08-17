@@ -37,6 +37,19 @@ pub(crate) fn client() -> ureq::Agent {
         .clone()
 }
 
+/// 版本检查专用客户端：连接 5s、响应 8s——检查类请求（npm / Node LTS /
+/// GitHub）应当快速失败并显示"暂无法获取版本信息"，而不是拖满 90s
+/// 拖慢整个检查流程（大文件下载仍用 download_client）。
+pub(crate) fn check_client() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .tls_config(crate::default_tls_config())
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_recv_response(Some(Duration::from_secs(8)))
+        .timeout_recv_body(Some(Duration::from_secs(8)))
+        .build()
+        .new_agent()
+}
+
 /// 大文件下载专用客户端：ureq 3 的 timeout_recv_body 是「响应头收完起、
 /// body 全部收完的整体时限」（timings.rs 中 RecvBody 以上一阶段记录时刻
 /// 为基准），并非单次读取空闲超时。常规 90s 会掐断慢网下的大归档下载，
@@ -51,9 +64,9 @@ pub(crate) fn download_client() -> ureq::Agent {
         .new_agent()
 }
 
-/// 读取一个小 URL 到字符串（供版本检查等使用）。
+/// 读取一个小 URL 到字符串（供版本检查等使用；短超时快速失败）。
 fn get_text(url: &str) -> Result<String, String> {
-    let resp = client().get(url).call().map_err(|e| {
+    let resp = check_client().get(url).call().map_err(|e| {
         format!(
             "{}: {e}",
             crate::locale::text("网络请求失败", "Network request failed")
@@ -93,7 +106,7 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
             }
         }
     }
-    let resp = client().get(NODEJS_INDEX).call().map_err(|e| {
+    let resp = check_client().get(NODEJS_INDEX).call().map_err(|e| {
         format!(
             "{}: {e}",
             crate::locale::text(

@@ -64,8 +64,10 @@ pub fn state(app: &AppHandle) -> OnboardingState {
 /// 保存首次配置（“开始使用”或“跳过”）。
 pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     let config = app.state::<AppState>().config();
-    // 先落标记：即使后续某一步失败，下次启动也不再重复引导（避免死循环）
+    // 先持久化 onboarded：即使后续可选配置失败，下次启动也不重复引导；
+    // 只有这一步成功后才放行 boot，避免保存失败但内存状态已完成。
     app_state::save_config_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
+    app_state::mark_onboarding_done();
     if payload.skip {
         return Ok(());
     }
@@ -134,9 +136,10 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
 }
 
 /// 是否首次使用：仅当 config.json 完全不存在（全新安装）。
-/// 与 AppState::onboarding_pending 保持一致（老用户升级不再引导）。
+/// 与 AppState::onboarding_pending 保持一致（老用户升级不再引导；
+/// dev 构建恒引导）。
 fn needs_onboarding(config: &app_state::Config) -> bool {
-    !config.root.join("config.json").is_file()
+    crate::app_state::dev_build() || !config.root.join("config.json").is_file()
 }
 
 /// dsh 凭据文件是否已配置 DEEPSEEK_API_KEY。

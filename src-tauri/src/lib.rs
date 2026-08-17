@@ -23,6 +23,7 @@ mod plugins;
 mod processes;
 mod runtime;
 mod session_diff;
+mod stats;
 mod titlebar;
 mod tray;
 mod tray_menu;
@@ -165,6 +166,8 @@ var css = [
   '.__dshd_cm_ar{font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;',
   'font-size:12px;color:var(--dsw-alias-label-tertiary,#adb2b8);margin-left:6px;line-height:1;}',
   '.__dshd_cm_sep{height:1px;margin:4px 2px;background:var(--dsw-alias-border-l1,rgba(255,255,255,.06));}',
+  // 退出动效：与主菜单/托盘菜单一致的淡出（90ms）
+  '.__dshd_cm_out{opacity:0;transition:opacity .09s ease;}',
   // 子菜单：与 dsh 一致，最小宽 163；伪元素桥接父项与子菜单间隙，鼠标跨过不丢悬停
   '.__dshd_cm_sub{min-width:163px;}',
   '.__dshd_cm_sub::before{content:"";position:absolute;top:0;bottom:0;left:-6px;width:6px;}'
@@ -213,7 +216,18 @@ function closeSub() {
 var focusReturn = null;
 function hide() {
   closeSub();
-  if (menuEl) { menuEl.remove(); menuEl = null; }
+  if (menuEl) {
+    // 统一退出动效：与主菜单/托盘菜单一致的淡出（90ms），
+    // 播放完再移除 DOM；reduced-motion 下立即移除
+    var el = menuEl;
+    menuEl = null;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      el.remove();
+    } else {
+      el.classList.add('__dshd_cm_out');
+      setTimeout(function () { el.remove(); }, 90);
+    }
+  }
   items = [];
   if (focusReturn && document.contains(focusReturn)) {
     try { focusReturn.focus(); } catch (e) {}
@@ -449,6 +463,9 @@ function closeSubSoon() {
 
 function show(x, y, list) {
   hide();
+  // 清理尚在淡出的旧菜单（hide 的延迟 remove 未到期时立即移除）
+  var stale = document.querySelector('.__dshd_cm_out');
+  if (stale) stale.remove();
   focusReturn = (document.activeElement && document.activeElement !== document.body)
     ? document.activeElement : null;
   items = list;
@@ -1044,6 +1061,71 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// dev 构建自愈：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
+/// 未监听时自动拉起 node scripts/serve-ui.mjs 并等待就绪（最多 5s）。
+/// 仅 dev 构建启用；返回 true 表示本次由本函数启动了服务器
+/// （调用方应在窗口创建后 reload 启动页——页面可能已在服务器就绪前
+/// 加载失败）。
+fn ensure_dev_ui_server(app: &AppHandle) -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    if app.config().build.dev_url.is_none() {
+        return false;
+    }
+    if TcpStream::connect(("127.0.0.1", 4321)).is_ok() {
+        return false;
+    }
+    // serve-ui.mjs 位于仓库 scripts/，开发版 exe 在 dist-dev/ 下
+    let Ok(exe_dir) = std::env::current_exe().and_then(|p| {
+        p.parent()
+            .map(|d| d.to_path_buf())
+            .ok_or_else(|| std::io::Error::other("no parent"))
+    }) else {
+        return false;
+    };
+    let script = exe_dir.join("..").join("scripts").join("serve-ui.mjs");
+    if !script.is_file() {
+        logging::log(&format!(
+            "dev-ui: 未找到 {}，无法自动拉起 UI 服务器",
+            script.display()
+        ));
+        return false;
+    }
+    let args = vec![script.to_string_lossy().into_owned()];
+    let spawn = processes::spawn_process(
+        std::path::Path::new("node"),
+        &args,
+        &[],
+        script.parent(),
+        None,
+    );
+    match spawn {
+        Ok(child) => {
+            // 复用统一进程树守卫：应用退出时回收开发服务器，不留孤儿。
+            let guard = processes::TreeGuard::from_child(&child);
+            app.state::<AppState>().set_dev_ui_job(guard);
+            // 等待监听就绪（最多 5s）；期间阻塞 setup——dev 工具路径，
+            // 服务器冷启动通常 <1s，可接受
+            for _ in 0..50 {
+                if TcpStream::connect(("127.0.0.1", 4321)).is_ok() {
+                    logging::log("dev-ui: 已自动启动 UI 静态服务器（4321）");
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            logging::log("dev-ui: UI 服务器 5s 内未就绪，自绘界面可能空白");
+            false
+        }
+        Err(e) => {
+            logging::log(&format!(
+                "dev-ui: 拉起 UI 服务器失败（node 不在 PATH？）：{e}"
+            ));
+            false
+        }
+    }
+}
+
 /// 隐藏工具调用开关开启时注入的样式脚本（navigate 注入与托盘切换共用）。
 const HIDE_TOOLS_APPLY: &str = "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
 s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
@@ -1051,6 +1133,110 @@ document.documentElement.appendChild(s);}";
 /// 开关关闭时移除该样式。
 const HIDE_TOOLS_CLEAR: &str =
     "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();";
+
+/// 隐藏会话统计行（开关开启时注入）：CSS 按当前版本 class 隐藏
+/// StatsLine，另挂文本特征 fallback + MutationObserver 补位——dsh 更新
+/// 后 class 变化时 fallback 仍能隐藏；两路都失效则统计行重新出现
+/// （静默降级，不影响任何功能）。
+/// 隐藏 StatsLine 的 CSS（initialization_script 首帧注入与 navigate 注入共用，
+/// 同一份定义避免双份拷贝；style id 与 fallback 脚本共用 guard）。
+/// 注意：属性选择器必须用双引号——注入脚本以 JS 单引号字符串承载本 CSS，
+/// 内含单引号会破坏脚本语法（曾因此使整段注入失效）。
+const HIDE_STATS_CSS: &str =
+    "[data-slot=\"conversation.composer.dock\"] .FJxK0a_root{display:none!important}";
+
+/// 隐藏会话统计行（开关开启时注入）：CSS 按当前版本 class 隐藏
+/// StatsLine，另挂文本特征 fallback + MutationObserver 补位——dsh 更新
+/// 后 class 变化时 fallback 仍能隐藏；两路都失效则统计行重新出现
+/// （静默降级，不影响任何功能）。
+fn hide_stats_apply() -> String {
+    format!(
+        "{head}{css}{tail}",
+        head = r#"window.__dshdHideStats = true;
+if (!document.getElementById('__dshd_hide_stats')) {
+  var s = document.createElement('style');
+  s.id = '__dshd_hide_stats';
+  s.textContent = '"#,
+        css = HIDE_STATS_CSS,
+        tail = r#"';
+  document.documentElement.appendChild(s);
+}
+if (!window.__dshdHideStatsObs) {
+  window.__dshdHideStatsObs = true;
+  var dockSel = '[data-slot="conversation.composer.dock"]';
+  var statsRe = /(轮|步|turns|steps)/i;
+  function sweepStats() {
+    var dock = document.querySelector(dockSel);
+    if (!dock) return;
+    var matches = [];
+    dock.querySelectorAll('div').forEach(function (el) {
+      var t = el.textContent || '';
+      // dsh 统计行以「·」分组（本壳状态栏同款文案），「|」为兼容旧版
+      if (t.length < 12 || (t.indexOf('|') < 0 && t.indexOf('·') < 0) || !statsRe.test(t)) return;
+      matches.push(el);
+    });
+    matches.forEach(function (el) {
+      // textContent 会让祖先也命中；只处理没有更小匹配后代的叶端候选，
+      // 避免误隐藏整个 composer/input 容器。
+      if (matches.some(function (other) { return other !== el && el.contains(other); })) return;
+      if (window.__dshdHideStats) {
+        if (!el.__dshdHiddenStats) { el.__dshdHiddenStats = true; el.style.display = 'none'; }
+      } else if (el.__dshdHiddenStats) {
+        el.__dshdHiddenStats = false; el.style.display = '';
+      }
+    });
+  }
+  var timer = null;
+  var obs = new MutationObserver(function () {
+    if (timer) return;
+    timer = setTimeout(function () { timer = null; sweepStats(); }, 200);
+  });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+  sweepStats();
+}
+"#,
+    )
+}
+
+/// initialization_script 首帧注入：dsh 页面挂载前即隐藏 StatsLine，消除
+/// “统计行先出现在输入框下方、注入后跳走”的闪动。与 navigate 后注入的
+/// 完整脚本共用同一 style id——后者 guard 命中即跳过，开关关闭一并移除。
+/// 外部 URL 导航的 initialization_script 可靠性不足，navigate 注入仍是兜底。
+fn hide_stats_early() -> String {
+    format!(
+        "try{{var __hs=document.getElementById('__dshd_hide_stats');\
+         if(!__hs){{var __hst=document.createElement('style');\
+         __hst.id='__dshd_hide_stats';__hst.textContent='{css}';\
+         document.documentElement.appendChild(__hst);}}}}catch(e){{}}",
+        css = HIDE_STATS_CSS
+    )
+}
+
+/// 关闭隐藏：移除样式并恢复 fallback 隐藏的元素。
+const HIDE_STATS_CLEAR: &str = r#"
+window.__dshdHideStats = false;
+var s = document.getElementById('__dshd_hide_stats');
+if (s) s.remove();
+var dock = document.querySelector('[data-slot="conversation.composer.dock"]');
+if (dock) {
+  dock.querySelectorAll('div').forEach(function (el) {
+    if (el.__dshdHiddenStats) { el.__dshdHiddenStats = false; el.style.display = ''; }
+  });
+}
+"#;
+
+/// 应用“隐藏会话统计行”开关到 dsh 页面（设置页切换与导航注入共用）。
+pub fn apply_hide_stats(app: &AppHandle) {
+    let hide = app.state::<AppState>().config().hide_stats_line;
+    let script = if hide {
+        hide_stats_apply()
+    } else {
+        HIDE_STATS_CLEAR.to_string()
+    };
+    if let Some(wv) = main_webview(app) {
+        let _ = wv.eval(script);
+    }
+}
 
 /// 应用“隐藏工具调用”开关到 dsh 页面：开启注入隐藏样式，关闭移除。
 /// 导航注入与菜单切换共用同一逻辑。
@@ -1092,6 +1278,8 @@ pub fn navigate(app: &AppHandle, url: &str) {
         }
         logging::log(&format!("navigate: {url}"));
         let _ = wv.navigate(u);
+        // 状态栏统计立即刷新：dsh 就绪后不必等下一个 5s 轮询周期
+        stats::refresh_once(app.clone());
         // dsh 页面挂载时会用自带 document.title 覆盖窗口标题。
         // 两层保障：立即 set_title（窗口级，立刻生效）；
         // 页面加载完成后注入常驻脚本，任意时刻的 title 变化都会被拉回产品名。
@@ -1113,6 +1301,11 @@ pub fn navigate(app: &AppHandle, url: &str) {
             } else {
                 ""
             };
+            let hide_stats = if config.hide_stats_line {
+                hide_stats_apply()
+            } else {
+                String::new()
+            };
             let script = format!(
                 "(() => {{ if (window.__dshdInit) return; window.__dshdInit = true; \
                  window.__dshdProtocolToken = {protocol_token}; \
@@ -1121,10 +1314,11 @@ pub fn navigate(app: &AppHandle, url: &str) {
                  fix(); \
                  const el = document.querySelector('head > title'); \
                  if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-                 {menu} {heartbeat} {hide_tools} }})();",
+                 {menu} {heartbeat} {hide_tools} {hide_stats} }})();",
                 menu = MENU_INJECT,
                 heartbeat = HEARTBEAT_INJECT,
                 hide_tools = hide_tools,
+                hide_stats = hide_stats,
                 protocol_token = protocol_token,
             );
             // 注入失败自愈：eval 返回错误时（页面加载中、导航瞬间执行被拒）
@@ -1160,10 +1354,25 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(commands::invoke_handler())
         .setup(|app| {
+            // dev 构建标记（devUrl bake）：onboarding 每次启动引导便于测试
+            if app.config().build.dev_url.is_some() {
+                app_state::mark_dev_build();
+            }
             // 手建主窗口（conf windows 为空）：带初始化脚本预设 dsh 深色主题，
             // 背景色跟随系统主题，与 dsh/loading 底色统一，消除启动与导航的明暗闪烁
             let navigation_app = app.handle().clone();
-            let page_init_script = format!("{}\n{}", locale::init_script(), PAGE_INIT_SCRIPT);
+            let page_load_app = app.handle().clone();
+            let hide_stats_early = if app.state::<AppState>().config().hide_stats_line {
+                hide_stats_early()
+            } else {
+                String::new()
+            };
+            let page_init_script = format!(
+                "{}\n{}\n{}",
+                locale::init_script(),
+                PAGE_INIT_SCRIPT,
+                hide_stats_early
+            );
             let win = tauri::WebviewWindowBuilder::new(
                 app,
                 MAIN_WINDOW,
@@ -1176,6 +1385,9 @@ pub fn run() {
             .center()
             .visible(false)
             .background_color(DARK_BG)
+            // Windows 上默认的 drag-drop handler 会禁用页面 HTML5 拖放
+            // （破坏 dsh 页面自身的拖放与 dsh-file-drop 插件），显式关闭
+            .disable_drag_drop_handler()
             .initialization_script(page_init_script)
             .on_navigation(move |url| {
                 let allowed = is_allowed_navigation(&navigation_app, url);
@@ -1183,6 +1395,23 @@ pub fn run() {
                     logging::log(&format!("navigation: 已拦截非白名单地址 {url}"));
                 }
                 allowed
+            })
+            // dsh 页面加载完成即注入 hide-stats（CSS + fallback）：早于
+            // navigate 后 1.5s 的复合注入，StatsLine 挂载前后即被隐藏，
+            // 消除“统计行先出现、片刻后消失”的闪动；幂等 guard 与复合注入共用
+            .on_page_load(move |wv, _payload| {
+                let config = page_load_app.state::<AppState>().config();
+                if !config.hide_stats_line {
+                    return;
+                }
+                if !wv
+                    .url()
+                    .ok()
+                    .is_some_and(|url| is_dsh_url(&url, &config))
+                {
+                    return;
+                }
+                let _ = wv.eval(hide_stats_apply());
             })
             .build()
             .expect("主窗口创建失败");
@@ -1345,9 +1574,33 @@ pub fn run() {
             }
             // 按 DPI 设置窗口图标（标题栏/任务栏 1:1 像素，避免系统缩放糊化）
             window::set_window_icon(app.handle());
+            // dev 构建自愈：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
+            // 服务器未监听时全部自绘 UI 白屏——自动拉起 node scripts/serve-ui.mjs
+            // 并等待就绪（仅 dev 构建启用，生产构建 devUrl 为 None 不受影响）。
+            // 返回 true = 本次刚启动服务器：主 webview 的启动页可能已在
+            // 服务器就绪前加载失败，窗口创建后 reload 自愈
+            let dev_ui_restarted = ensure_dev_ui_server(app.handle());
+            // dev 自愈刚拉起 UI 服务器：内置页面可能已在服务器就绪前
+            // 加载失败（白屏）——延迟 reload 全部内置窗口使页面重新加载
+            if dev_ui_restarted {
+                let reload_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    logging::log("dev-ui: 服务器已拉起，重载内置页面");
+                    for (_, window) in reload_handle.webview_windows() {
+                        for (_, wv) in window.webviews() {
+                            let _ = wv.reload();
+                        }
+                    }
+                });
+            }
             // 自绘标题栏：去掉系统标题栏（macOS 除外）、创建顶条子 webview、主 webview 让位
             if let Err(e) = titlebar::init(app.handle()) {
                 logging::log(&format!("标题栏: 初始化失败：{e}"));
+            }
+            // 底部状态栏：会话统计 + 余额 + 设置入口（独立子 webview）
+            if let Err(e) = titlebar::init_statusbar(app.handle()) {
+                logging::log(&format!("状态栏: 初始化失败：{e}"));
             }
             // 标题栏加载自愈：页面初始化完成会回报 titlebar_ready；
             // 3s 内未回报（页面加载失败/被跳过）则重新导航一次——
@@ -1387,8 +1640,14 @@ pub fn run() {
             notify::start_task_watch(app.handle().clone());
             // dsh 页面心跳监控：页面挂起/崩溃时重载自愈（指数退避）
             heartbeat::start_page_watch(app.handle().clone());
-            // 跟随 dsh 的设置（语言/主题）：后台每 15s 读取 settings.yaml
+            // 跟随 dsh 的设置（语言/主题）：后台每 3s 检查 settings.yaml mtime
             tray::start_follow_dsh_settings(app.handle().clone());
+            // 状态栏会话统计：每 5s 轮询 dsh 投影并广播（失败静默显示占位）
+            stats::start_periodic(app.handle().clone());
+            // 状态栏实时生成速率：每 2s 尾帧解码会话日志估算流式 tok/s
+            stats::start_live_rate(app.handle().clone());
+            // 内置插件市场（dsh-market）：dsh 就绪后自动预装，此后每日同步最新版
+            plugins::start_market_bootstrap(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标
             let minimized = std::env::args().any(|a| a == "--minimized");
             if minimized {
@@ -1426,17 +1685,18 @@ pub fn run() {
                 }
             }
             tauri::WindowEvent::Focused(focused) => {
-                // 标题栏失焦样式跟随主窗口焦点：子 webview 的 window
+                // 标题栏/状态栏失焦样式跟随主窗口焦点：子 webview 的 window
                 // focus/blur 事件与主窗口焦点并不同步（WebView2 行为），
-                // 由 Rust 侧统一广播，titlebar.js 按此切换样式
-                if let Some(wv) = window
-                    .webviews()
-                    .into_iter()
-                    .find(|w| w.label() == crate::titlebar::TITLEBAR_LABEL)
-                {
-                    let _ = wv.eval(format!(
-                        "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
-                    ));
+                // 由 Rust 侧统一广播，页面侧按此切换样式
+                for label in [
+                    crate::titlebar::TITLEBAR_LABEL,
+                    crate::titlebar::STATUSBAR_LABEL,
+                ] {
+                    if let Some(wv) = window.webviews().into_iter().find(|w| w.label() == label) {
+                        let _ = wv.eval(format!(
+                            "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
+                        ));
+                    }
                 }
                 if *focused {
                     // 获焦时触发重绘脉冲：合成层失效导致的标题栏空白
@@ -1488,7 +1748,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod url_tests {
-    use super::is_local_app_url;
+    use super::{hide_stats_apply, hide_stats_early, is_local_app_url};
+
+    /// 注入脚本以 JS 单引号字符串承载 CSS：CSS 内再出现单引号会破坏整段
+    /// 注入脚本语法（曾致 hide-stats/右键菜单/心跳一并失效的回归）。
+    #[test]
+    fn hide_stats_scripts_keep_js_quoting_valid() {
+        for script in [hide_stats_early(), hide_stats_apply()] {
+            assert!(!script.contains("[data-slot='"), "CSS 不得使用单引号");
+            assert!(script.contains("__dshd_hide_stats"));
+        }
+        assert!(hide_stats_apply().contains("sweepStats"));
+        assert!(hide_stats_early().contains("FJxK0a_root"));
+    }
 
     #[test]
     fn local_app_origin_is_an_exact_pair() {

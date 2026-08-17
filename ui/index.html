@@ -15,6 +15,9 @@
   --muted: var(--dshd-text-dim);
   --blue: var(--dshd-accent);
   --blue-dim: var(--dshd-accent-hover);
+  --blue-surface: var(--dshd-accent-surface);
+  --blue-surface-hover: var(--dshd-accent-surface-hover);
+  --blue-surface-pressed: var(--dshd-accent-surface-pressed);
   --red: var(--dshd-error-text);
   --green: var(--dshd-success);
 }
@@ -67,7 +70,7 @@ body.fade-out { opacity: 0; }
 
 .error-box { width: 100%; background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .35); border-radius: 12px; padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
 .error-title { font-size: 14px; font-weight: 600; color: var(--red); }
-.error-msg { font-size: 12px; color: var(--muted); line-height: 1.5; word-break: break-all; max-height: 96px; overflow: auto; user-select: text; }
+.error-msg { font-size: 12px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; max-height: 96px; overflow: auto; user-select: text; }
 .error-actions { display: flex; gap: 8px; }
 .update-box { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .update-line { font-size: 12px; color: var(--muted); }
@@ -81,45 +84,102 @@ body.fade-out { opacity: 0; }
 .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
 .btn:active { background: var(--dshd-pressed); }
-.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn.primary:hover { background: var(--blue-dim); }
-.btn.primary:active { background: var(--dshd-accent-pressed); }
+.btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
+.btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
+.btn.primary:active { background: var(--blue-surface-pressed); border-color: var(--blue-surface-pressed); }
 .btn:disabled { cursor: default; opacity: .55; }
 .btn:disabled:hover { background: #23232b; border-color: var(--line); }
-.btn.primary:disabled:hover { background: var(--blue); border-color: var(--blue); }
+.btn.primary:disabled:hover { background: var(--blue-surface); border-color: var(--blue-surface); }
 .btn.small { padding: 4px 12px; font-size: 12px; }
 .hidden { display: none !important; }
 
 .footer { position: fixed; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); }
 .versions { opacity: .75; }
 
-/* 首次使用配置 */
-.ob-box { width: 100%; margin-top: 22px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; text-align: left; }
-.ob-title { font-size: 16px; font-weight: 600; }
-.ob-sub { font-size: 12px; color: var(--muted); line-height: 1.5; }
-.ob-field { display: flex; flex-direction: column; gap: 6px; }
-.ob-label { font-size: 12px; color: var(--muted); }
-.ob-input { background: #1c1c24; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; }
-.ob-input:focus { border-color: var(--blue); }
-.ob-hint { font-size: 11px; color: var(--muted); }
-.ob-group { border: none; padding: 0; margin: 0; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
-.ob-opt { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none; }
-.ob-opt input { accent-color: var(--blue); }
-.ob-actions { display: flex; gap: 8px; margin-top: 2px; }
-.ob-error { font-size: 12px; color: var(--red); word-break: break-all; }
-@media (prefers-color-scheme: light) {
-  .ob-box { background: rgba(0,0,0,.025); }
-  .ob-input { background: #fff; }
+/* 首次使用配置：现代 onboarding 卡片——大内边距、分段控件、全宽主按钮 */
+.ob-box {
+  width: 100%;
+  max-width: 480px;
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 26px 28px;
+  display: flex; flex-direction: column; gap: 20px;
+  text-align: left;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .28);
 }
-
+.ob-head { display: flex; flex-direction: column; gap: 6px; }
+.ob-title { font-size: 20px; font-weight: 600; letter-spacing: .1px; }
+.ob-sub { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.ob-section { display: flex; flex-direction: column; gap: 12px; }
+.ob-sec-label { font-size: 11px; color: var(--muted); letter-spacing: .8px; text-transform: uppercase; }
+.ob-field { display: flex; flex-direction: column; gap: 7px; }
+.ob-label { font-size: 13px; color: var(--muted); }
+.ob-input {
+  height: 38px; background: var(--dshd-hover); border: 1px solid var(--line);
+  border-radius: 10px; padding: 0 12px; color: var(--text); font-size: 13px;
+  outline: none; transition: border-color var(--dshd-m-fast) ease, box-shadow var(--dshd-m-fast) ease;
+}
+.ob-input:hover { border-color: var(--dshd-text-dim); background: var(--dshd-pressed); }
+.ob-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(77, 107, 254, .18); }
+.ob-hint { font-size: 11.5px; color: var(--muted); }
+.ob-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ob-seg {
+  display: inline-flex; background: var(--dshd-hover);
+  border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px;
+}
+.ob-seg-opt { position: relative; cursor: pointer; user-select: none; }
+.ob-seg-opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+.ob-seg-opt span {
+  display: block; padding: 5px 14px; border-radius: 7px; font-size: 12.5px;
+  color: var(--muted); transition: background var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease;
+}
+.ob-seg-opt:hover span { color: var(--text); }
+.ob-seg-opt input:checked + span { background: var(--blue-surface); color: #fff; font-weight: 500; }
+.ob-seg-opt input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+.ob-switch { position: relative; width: 40px; height: 22px; flex: none; }
+.ob-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.ob-track {
+  display: block; width: 100%; height: 100%; border-radius: 999px;
+  background: var(--dshd-pressed); border: 1px solid var(--line);
+  transition: background var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease;
+}
+.ob-track::before {
+  content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; border-radius: 50%; background: var(--muted);
+  transition: transform var(--dshd-m-fast) ease, background var(--dshd-m-fast) ease;
+}
+.ob-switch input:checked + .ob-track { background: var(--blue); border-color: var(--blue); }
+.ob-switch input:checked + .ob-track::before { transform: translate(18px, -50%); background: #fff; }
+.ob-switch input:focus-visible + .ob-track { outline: 2px solid var(--blue); outline-offset: 2px; }
+.ob-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.ob-primary { width: 100%; height: 38px; font-size: 14px; font-weight: 500; }
+.ob-skip-btn {
+  background: none; border: none; color: var(--muted); font-size: 12.5px;
+  cursor: pointer; padding: 4px; align-self: center; border-radius: 6px;
+  transition: color var(--dshd-m-fast) ease;
+}
+.ob-skip-btn:hover { color: var(--text); }
+.ob-skip-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.ob-skip-btn:disabled { opacity: .55; cursor: default; }
+.ob-error { font-size: 12.5px; color: var(--red); overflow-wrap: anywhere; line-height: 1.5; }
+@media (prefers-color-scheme: light) {
+  .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
+  .ob-input { background: #fff; }
+  .ob-input:focus { box-shadow: 0 0 0 3px rgba(77, 107, 254, .14); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-seg-opt span, .ob-input, .ob-track, .ob-track::before, .ob-skip-btn { transition: none; }
+}
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
 @media (prefers-color-scheme: light) {
   body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
   .logo-wrap { box-shadow: 0 12px 40px rgba(77, 107, 254, .25); }
   .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
   .btn:hover { background: #e6e8ef; }
-  .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-  .btn.primary:hover { background: var(--blue-dim); }
+  .btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
+  .btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
   .error-box { background: rgba(248, 81, 73, .06); }
   .spinner { border-color: var(--line); border-top-color: var(--blue); }
 }
@@ -143,33 +203,48 @@ body.fade-out { opacity: 0; }
       <p class="tagline" data-i18n="tagline">本地智能体 · 一键启航</p>
 
       <div id="ob-box" class="ob-box hidden">
-        <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
-        <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后可在托盘菜单中随时调整。</p>
-        <label class="ob-field">
-          <span class="ob-label" data-i18n="apiKey">API Key</span>
-          <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-          <span class="ob-hint" data-i18n="apiKeyHint">留空则之后在 dsh 设置页配置</span>
-        </label>
-        <fieldset class="ob-group">
-          <legend class="ob-label" data-i18n="language">语言</legend>
-          <label class="ob-opt"><input type="radio" name="ob-lang" value="zh-CN" checked /> 中文</label>
-          <label class="ob-opt"><input type="radio" name="ob-lang" value="en" /> English</label>
-        </fieldset>
-        <fieldset class="ob-group">
-          <legend class="ob-label" data-i18n="theme">主题</legend>
-          <label class="ob-opt"><input type="radio" name="ob-theme" value="system" checked /> <span data-i18n="themeSystem">跟随系统</span></label>
-          <label class="ob-opt"><input type="radio" name="ob-theme" value="light" /> <span data-i18n="themeLight">浅色</span></label>
-          <label class="ob-opt"><input type="radio" name="ob-theme" value="dark" /> <span data-i18n="themeDark">深色</span></label>
-        </fieldset>
-        <label class="ob-opt">
-          <input id="ob-autostart" type="checkbox" />
-          <span data-i18n="autostart">开机自启动</span>
-        </label>
-        <div class="ob-actions">
-          <button type="button" id="ob-start" class="btn primary" data-i18n="startUsing">开始使用</button>
-          <button type="button" id="ob-skip" class="btn" data-i18n="skip">跳过</button>
+        <div class="ob-head">
+          <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
+          <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后可在桌面端设置中随时调整。</p>
         </div>
-        <div id="ob-error" class="ob-error hidden"></div>
+        <div class="ob-section">
+          <div class="ob-sec-label">API</div>
+          <label class="ob-field">
+            <span class="ob-label">DeepSeek API Key</span>
+            <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+            <span class="ob-hint" data-i18n="apiKeyHint">留空则之后在 dsh 设置页配置</span>
+          </label>
+        </div>
+        <div class="ob-section">
+          <div class="ob-sec-label" data-i18n="preferences">偏好设置</div>
+          <div class="ob-row">
+            <span class="ob-label" data-i18n="language">语言</span>
+            <div class="ob-seg" role="radiogroup" data-i18n-aria-label="language">
+              <label class="ob-seg-opt"><input type="radio" name="ob-lang" value="zh-CN" checked /><span>中文</span></label>
+              <label class="ob-seg-opt"><input type="radio" name="ob-lang" value="en" /><span>English</span></label>
+            </div>
+          </div>
+          <div class="ob-row">
+            <span class="ob-label" data-i18n="theme">主题</span>
+            <div class="ob-seg" role="radiogroup" data-i18n-aria-label="theme">
+              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="system" checked /><span data-i18n="themeSystem">跟随系统</span></label>
+              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="light" /><span data-i18n="themeLight">浅色</span></label>
+              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="dark" /><span data-i18n="themeDark">深色</span></label>
+            </div>
+          </div>
+          <label class="ob-row ob-switch-row">
+            <span class="ob-label" data-i18n="autostart">开机自启动</span>
+            <span class="ob-switch">
+              <input id="ob-autostart" type="checkbox" role="switch" />
+              <span class="ob-track" aria-hidden="true"></span>
+            </span>
+          </label>
+        </div>
+        <div class="ob-actions">
+          <button type="button" id="ob-start" class="btn primary ob-primary" data-i18n="startUsing">开始使用</button>
+          <button type="button" id="ob-skip" class="ob-skip-btn" data-i18n="skip">跳过</button>
+        </div>
+        <div id="ob-error" class="ob-error hidden" role="alert" aria-live="polite"></div>
       </div>
 
       <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true">

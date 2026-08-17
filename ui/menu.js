@@ -13,8 +13,8 @@ function dshdCreateMenu(container, options) {
     download: '<svg viewBox="0 0 24 24"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M4 21h16"></path></svg>',
     puzzle: '<svg viewBox="0 0 24 24"><path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M21 16v5h-5"></path><path d="M3 16v5h5"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>',
     file: '<svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path></svg>',
-    power: '<svg viewBox="0 0 24 24"><path d="M12 3v9"></path><path d="M6.3 6.3a9 9 0 1 0 11.4 0"></path></svg>',
     eye: '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>',
+    gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
     info: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path></svg>',
     exit: '<svg viewBox="0 0 24 24"><path d="M9 4h10a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H9"></path><path d="M4 12h10"></path><path d="M11 8l4 4-4 4"></path></svg>',
   };
@@ -129,6 +129,8 @@ function dshdCreateMenu(container, options) {
     const label = document.createElement('span');
     label.className = 'lb';
     label.textContent = item.label;
+    // 截断才提示（菜单 label 长时悬停看全）
+    label.dataset.truncTip = '';
     // 图标（.ic 由 common.css 定义 16px；stroke SVG 随文字颜色）
     if (item.icon && ICONS[item.icon]) {
       const ic = document.createElement('span');
@@ -172,6 +174,11 @@ function dshdCreateMenu(container, options) {
         for (const child of item.children) container.append(makeRow(child, true));
       }
     }
+    // 截断才提示（label 长时悬停看全；显示完整则不设 title）
+    container.querySelectorAll('[data-trunc-tip]').forEach((el) => {
+      const truncated = el.scrollWidth > el.clientWidth + 1;
+      el.title = truncated ? el.textContent.trim() : '';
+    });
 
     const visibleRows = rows();
     visibleRows.forEach((row) => { row.tabIndex = -1; });

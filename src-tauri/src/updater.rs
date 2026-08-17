@@ -37,6 +37,9 @@ pub struct VersionInfo {
     pub installed: String,
     pub latest: String,
     pub update_available: bool,
+    /// 版本查询失败原因（前端 hover tips 展示，与其他更新行统一）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_error: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -204,19 +207,30 @@ pub fn check(app: &AppHandle) -> CheckResult {
                     latest: latest.clone(),
                     update_available: versions::compare_versions(&latest, &installed)
                         == std::cmp::Ordering::Greater,
+                    latest_error: None,
                 }),
                 None,
             ),
-            Err(e) => (
-                None,
-                Some(format!(
+            Err(e) => {
+                // 查询失败仍保留行：前端显示"暂无法获取版本信息"，
+                // hover 经 data-tip-extra 展示原因（与 node/pwsh 行统一）
+                let error = format!(
                     "{}: {e}",
                     crate::locale::text(
                         "查询 dsh 最新版本失败",
                         "Failed to query the latest dsh version"
                     )
-                )),
-            ),
+                );
+                (
+                    Some(VersionInfo {
+                        installed: installed.clone(),
+                        latest: String::new(),
+                        update_available: false,
+                        latest_error: Some(error),
+                    }),
+                    None,
+                )
+            }
         },
         None => (
             None,
@@ -315,16 +329,27 @@ pub fn check(app: &AppHandle) -> CheckResult {
 fn check_app_update() -> Option<VersionInfo> {
     const REPO: &str = "JeffioZ/dsh-desktop";
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let resp = match runtime::client()
+    // 查询失败仍返回带错误信息的行（前端显示"暂无法获取版本信息"，
+    // hover tips 展示原因，与其他更新行统一）
+    let fail = |e: String| {
+        crate::logging::log(&format!("updater: 应用版本查询失败：{e}"));
+        Some(VersionInfo {
+            installed: env!("CARGO_PKG_VERSION").to_string(),
+            latest: String::new(),
+            update_available: false,
+            latest_error: Some(crate::locale::owned(
+                format!("查询应用最新版本失败：{e}"),
+                format!("Failed to query the latest app version: {e}"),
+            )),
+        })
+    };
+    let resp = match runtime::check_client()
         .get(&url)
         .header("User-Agent", "DSHDesktop")
         .call()
     {
         Ok(r) => r,
-        Err(e) => {
-            crate::logging::log(&format!("updater: 应用版本查询失败：{e}"));
-            return None;
-        }
+        Err(e) => return fail(format!("{e}")),
     };
     let mut text = String::new();
     if resp
@@ -333,11 +358,11 @@ fn check_app_update() -> Option<VersionInfo> {
         .read_to_string(&mut text)
         .is_err()
     {
-        return None;
+        return fail("读取响应失败".into());
     }
     let json: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
-        Err(_) => return None,
+        Err(_) => return fail("解析响应失败".into()),
     };
     let latest = json
         .get("tag_name")
@@ -350,6 +375,7 @@ fn check_app_update() -> Option<VersionInfo> {
         installed,
         latest,
         update_available,
+        latest_error: None,
     })
 }
 
@@ -406,7 +432,7 @@ fn latest_pwsh_version() -> Result<String, String> {
         }
     }
 
-    let metadata_result = runtime::client()
+    let metadata_result = runtime::check_client()
         .get("https://raw.githubusercontent.com/PowerShell/PowerShell/master/tools/metadata.json")
         .header("User-Agent", "DSHDesktop")
         .call()
@@ -433,7 +459,7 @@ fn latest_pwsh_version() -> Result<String, String> {
 /// 从 GitHub Releases 列表取最高的非预览 tag。
 #[cfg(windows)]
 fn github_latest_stable() -> Result<String, String> {
-    let response = runtime::client()
+    let response = runtime::check_client()
         .get("https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30")
         .header("User-Agent", "DSHDesktop")
         .header("Accept", "application/vnd.github+json")
@@ -863,7 +889,8 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
     std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
 
     // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
-    let spawn = std::process::Command::new("powershell")
+    let mut replace_cmd = std::process::Command::new("powershell");
+    replace_cmd
         .args([
             "-NoProfile",
             "-WindowStyle",
@@ -872,8 +899,9 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
             "Bypass",
             "-File",
         ])
-        .arg(&script)
-        .spawn();
+        .arg(&script);
+    processes::hide_console(&mut replace_cmd);
+    let spawn = replace_cmd.spawn();
     if spawn.is_err() {
         return Err(crate::locale::text(
             "无法启动更新脚本。",
