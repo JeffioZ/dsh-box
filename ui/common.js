@@ -55,6 +55,7 @@ const DSHD_MESSAGES = {
   checkFailed: ['检查更新失败', 'Update check failed'],
   checkFailedRetry: ['检查失败，请稍后重试', 'The update check failed. Please try again later.'],
   checkingUpdates: ['正在检查更新…', 'Checking for updates…'],
+  updatingDsh: ['正在更新…', 'Updating…'],
   checkUpdates: ['检查更新', 'Check for updates'],
   close: ['关闭', 'Close'],
   closeToTray: ['关闭到托盘', 'Close to tray'],

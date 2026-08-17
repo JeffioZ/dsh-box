@@ -180,14 +180,56 @@ fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
         crate::locale::text("立即更新", "Update now"),
         crate::locale::text("稍后", "Later"),
     ) {
-        if let Err(e) = apply(app, "dsh") {
-            crate::dialog::show_message(
-                app,
-                format!("{}: {e}", crate::locale::text("更新失败", "Update failed")),
-                crate::locale::text("更新", "Update"),
-                MessageDialogKind::Warning,
-            );
-        }
+        // 打开弹窗作为进度载体：update-progress / update-result 事件在
+        // check 页实时呈现，用户全程可见（下载→安装→重启服务），
+        // 更新仍在后台线程执行，不阻塞界面
+        crate::app_dialog::open_update_progress(app);
+        let handle = app.clone();
+        std::thread::spawn(move || match apply(&handle, "dsh") {
+            Ok(()) => {
+                // 成功后重查一次：弹窗显示新版本状态（已是最新）。
+                // 结果同时写入状态（轮询通道）与事件（即时渲染）：
+                // 事件早于弹窗页面就绪时被丢弃，轮询兜底保证不滞留
+                emit_progress(
+                    &handle,
+                    crate::locale::text("正在确认新版本…", "Verifying the new version…"),
+                );
+                let result = check(&handle);
+                let done_msg = crate::locale::text("dsh 更新完成。", "dsh was updated.");
+                handle
+                    .state::<AppState>()
+                    .set_update_done(true, Some(done_msg.into()));
+                handle
+                    .state::<AppState>()
+                    .set_last_check(Some(result.clone()));
+                handle.state::<AppState>().set_check_progress(None);
+                let _ = handle.emit("update-result", &result);
+            }
+            Err(e) => {
+                let result = CheckResult {
+                    error: Some(e.clone()),
+                    ..CheckResult::default()
+                };
+                handle
+                    .state::<AppState>()
+                    .set_update_done(false, Some(e.clone()));
+                handle
+                    .state::<AppState>()
+                    .set_last_check(Some(result.clone()));
+                handle.state::<AppState>().set_check_progress(None);
+                let _ = handle.emit("update-result", &result);
+                // 弹窗未显示时才弹 win32 兜底（弹窗开着已显示失败原因，
+                // 不再重复打扰）
+                if !crate::app_dialog::is_check_open(&handle) {
+                    crate::dialog::show_message(
+                        &handle,
+                        format!("{}: {e}", crate::locale::text("更新失败", "Update failed")),
+                        crate::locale::text("更新", "Update"),
+                        MessageDialogKind::Warning,
+                    );
+                }
+            }
+        });
     }
 }
 

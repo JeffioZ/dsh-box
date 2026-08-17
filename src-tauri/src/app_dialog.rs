@@ -245,6 +245,31 @@ pub fn open_balance(app: &AppHandle) {
 
 // ---------- 检查更新 ----------
 
+/// 打开"更新进行中"视图：作为 win32 提示框确认后的更新进度载体——
+/// 不重跑检查，页面显示"正在更新…"并实时承接 update-progress /
+/// update-result 事件（弹窗内更新按钮路径复用同一机制）。
+pub fn open_update_progress(app: &AppHandle) {
+    // 对齐 run_check 的 reset 语义：清旧检查结果与完成状态，避免弹窗
+    // 轮询用旧 last_check 覆盖"正在更新…"视图（旧结果行会闪现可更新按钮）
+    let state = app.state::<AppState>();
+    state.set_last_check(None);
+    state.set_update_done(false, None);
+    state.set_check_progress(Some(crate::locale::text("正在更新…", "Updating…").into()));
+    show(
+        app,
+        crate::locale::text("检查更新", "Check for updates"),
+        "check",
+        serde_json::json!({ "updating": true }),
+    );
+}
+
+/// 检查更新弹窗当前是否可见（更新失败时决定是否弹 win32 兜底提示，
+/// 避免弹窗内已显示失败原因时重复打扰）。
+pub fn is_check_open(app: &AppHandle) -> bool {
+    app.get_webview_window(APP_DIALOG_WINDOW)
+        .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
 /// 打开检查更新弹窗：立即出窗显示进度，检查在后台执行、结果写入状态，
 /// 页面轮询拉取。
 pub fn open_check(app: &AppHandle) {
@@ -252,6 +277,13 @@ pub fn open_check(app: &AppHandle) {
     // 进度与结果（进度已同步写入 check_progress 状态，事件通道对隐藏窗口
     // 不可靠），按钮保持禁用，避免并发更新。
     let updating = app.state::<AppState>().is_updating();
+    if updating {
+        // 更新中重开：清旧结果与完成状态，轮询不会用旧 last_check
+        // 覆盖"正在更新…"视图（与 open_update_progress 一致）
+        let state = app.state::<AppState>();
+        state.set_last_check(None);
+        state.set_update_done(false, None);
+    }
     show(
         app,
         crate::locale::text("检查更新", "Check for updates"),

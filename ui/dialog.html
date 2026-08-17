@@ -412,11 +412,11 @@
       document.getElementById(id).append(btn);
     }
     // 版本对比行：当前版本弱化 + 箭头 + 最新版本高亮（可更新时）
-    function verHtml(cur, latest, available, okLabel) {
+    function verHtml(cur, latest, available) {
       if (available) {
         return esc(cur) + '<span class="v-arrow">→</span><b class="v-latest">' + esc(latest) + '</b>';
       }
-      return esc(cur) + '<span class="v-ok">' + (okLabel || dshdT('upToDate')) + '</span>';
+      return esc(cur) + '<span class="v-ok">' + dshdT('upToDate') + '</span>';
     }
     function renderCheckResult(r) {
       if (openKind !== 'check') return;
@@ -425,8 +425,15 @@
       let html = '';
       if (r.dsh) {
         const hint = r.dsh.latest_error ? ' data-tip-extra="' + esc(r.dsh.latest_error) + '"' : '';
+        // 空 latest：查询失败时如实标注"暂无法获取版本信息"，不显示"已是最新"；
+        // 版本号只输出一次（verHtml 内含 esc(cur)，此处仅拼接状态标签）
+        const verLabel = !r.dsh.latest
+          ? '<span class="v-ok">' + dshdT('versionServiceUnavailable') + '</span>'
+          : (r.dsh.update_available
+            ? '<span class="v-arrow">→</span><b class="v-latest">' + esc(r.dsh.latest) + '</b>'
+            : '<span class="v-ok">' + dshdT('upToDate') + '</span>');
         html += '<div class="uprow"><div class="info"><div class="name">dsh</div>' +
-          '<div class="ver" data-trunc-tip' + hint + '>' + verHtml(r.dsh.installed, r.dsh.latest, r.dsh.update_available) + '</div></div>' +
+          '<div class="ver" data-trunc-tip' + hint + '>' + esc(r.dsh.installed) + verLabel + '</div></div>' +
           '<span id="u-dsh"></span></div>';
       }
       if (r.node) {
@@ -478,7 +485,7 @@
           '<span id="u-app"></span></div>';
       }
       if (r.error) html += '<div class="msg error" role="alert">' + esc(r.error) + '</div>';
-      if (!r.dsh && !r.node && !r.pwsh && !r.app) html += '<div class="msg error" role="alert">' + dshdT('checkFailedRetry') + '</div>';
+      if (!r.dsh && !r.node && !r.pwsh && !r.app && !r.error) html += '<div class="msg error" role="alert">' + dshdT('checkFailedRetry') + '</div>';
       body.innerHTML = html;
       if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
       if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
@@ -502,7 +509,7 @@
       lastProgress = message;
       const body = $('body');
       const line = body.querySelector('.msg');
-      if (line) { line.textContent = message; return; }
+      if (line) { line.innerHTML = '<span class="spin" aria-hidden="true"></span>' + esc(message); return; }
       const div = document.createElement('div');
       div.className = 'msg';
       div.setAttribute('role', 'status');
@@ -621,11 +628,15 @@
         if (opts && opts.triggerBalance) invoke('app_dialog_refresh_balance').catch(() => {});
       }
       else if (k === 'check') {
-        if (lastCheckResult) renderCheckResult(lastCheckResult);
+        const updating = !!(currentOpen && currentOpen.initial && currentOpen.initial.updating);
+        if (updating) {
+          // 更新后台执行中：显示"正在更新 dsh…"（win32 提示框确认路径，
+          // 或更新中重开弹窗）；进度事件随后覆盖本行
+          renderCheckLoading(dshdT('updatingDsh'));
+        } else if (lastCheckResult) renderCheckResult(lastCheckResult);
         else {
-          // 更新仍在后台执行时重开：显示“更新正在进行…”而非“正在检查更新…”
-          renderCheckLoading();
           // 仅导航进入时触发检查（applyOpen 时 Rust 已触发，避免重复网络请求）
+          renderCheckLoading();
           if (opts && opts.triggerCheck) invoke('app_dialog_run_check').catch(() => {});
         }
       } else if (k === 'about') renderAbout((currentOpen && currentOpen.initial) || {});
