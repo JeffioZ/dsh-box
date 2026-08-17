@@ -1044,16 +1044,22 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// 隐藏工具调用开关开启时注入的样式脚本（navigate 注入与托盘切换共用）。
+const HIDE_TOOLS_APPLY: &str = "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
+s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
+document.documentElement.appendChild(s);}";
+/// 开关关闭时移除该样式。
+const HIDE_TOOLS_CLEAR: &str =
+    "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();";
+
 /// 应用“隐藏工具调用”开关到 dsh 页面：开启注入隐藏样式，关闭移除。
 /// 导航注入与菜单切换共用同一逻辑。
 pub fn apply_hide_tools(app: &AppHandle) {
     let hide = app.state::<AppState>().config().hide_tool_calls;
     let script = if hide {
-        "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
-         s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
-         document.documentElement.appendChild(s);}"
+        HIDE_TOOLS_APPLY
     } else {
-        "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();"
+        HIDE_TOOLS_CLEAR
     };
     if let Some(wv) = main_webview(app) {
         let _ = wv.eval(script.to_string());
@@ -1095,39 +1101,49 @@ pub fn navigate(app: &AppHandle, url: &str) {
         let handle = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(1500));
-            if let Some(wv) = main_webview(&handle) {
-                let config = handle.state::<AppState>().config();
+            let config = handle.state::<AppState>().config();
+            let title = serde_json::to_string(APP_TITLE).unwrap_or_default();
+            let protocol_token = serde_json::to_string(handle.state::<AppState>().protocol_token())
+                .unwrap_or_default();
+            // 单实例：重复 navigate 不叠加观察器/菜单监听；
+            // MutationObserver 只在 title 真正变化时拉回（无常驻轮询开销）；
+            // 右键菜单定制一并注入（此通道在 dsh 页面生效）
+            let hide_tools = if config.hide_tool_calls {
+                HIDE_TOOLS_APPLY
+            } else {
+                ""
+            };
+            let script = format!(
+                "(() => {{ if (window.__dshdInit) return; window.__dshdInit = true; \
+                 window.__dshdProtocolToken = {protocol_token}; \
+                 const t = {title}; \
+                 const fix = () => {{ if (document.title !== t) document.title = t; }}; \
+                 fix(); \
+                 const el = document.querySelector('head > title'); \
+                 if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
+                 {menu} {heartbeat} {hide_tools} }})();",
+                menu = MENU_INJECT,
+                heartbeat = HEARTBEAT_INJECT,
+                hide_tools = hide_tools,
+                protocol_token = protocol_token,
+            );
+            // 注入失败自愈：eval 返回错误时（页面加载中、导航瞬间执行被拒）
+            // 补注——eval 成功即注入完成（guard 在 IIFE 首行置位，重复注入
+            // 幂等），最多 3 次尝试（1.5s/3.5s/5.5s）。
+            for attempt in 0..3 {
+                let Some(wv) = main_webview(&handle) else {
+                    return;
+                };
+                // 每次尝试前确认仍在 dsh 页面（用户可能已导航离开）
                 if !wv.url().ok().is_some_and(|url| is_dsh_url(&url, &config)) {
                     return;
                 }
-                let title = serde_json::to_string(APP_TITLE).unwrap_or_default();
-                let protocol_token =
-                    serde_json::to_string(handle.state::<AppState>().protocol_token())
-                        .unwrap_or_default();
-                // 单实例：重复 navigate 不叠加观察器/菜单监听；
-                // MutationObserver 只在 title 真正变化时拉回（无常驻轮询开销）；
-                // 右键菜单定制一并注入（此通道在 dsh 页面生效）
-                let hide_tools = if handle.state::<AppState>().config().hide_tool_calls {
-                    "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
-                     s.id='__dshd_hide_tools';s.textContent='[data-tool]{display:none!important}';\
-                     document.documentElement.appendChild(s);}"
-                } else {
-                    ""
-                };
-                let _ = wv.eval(format!(
-                    "(() => {{ if (window.__dshdInit) return; window.__dshdInit = true; \
-                     window.__dshdProtocolToken = {protocol_token}; \
-                     const t = {title}; \
-                     const fix = () => {{ if (document.title !== t) document.title = t; }}; \
-                     fix(); \
-                     const el = document.querySelector('head > title'); \
-                     if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-                     {menu} {heartbeat} {hide_tools} }})();",
-                    menu = MENU_INJECT,
-                    heartbeat = HEARTBEAT_INJECT,
-                    hide_tools = hide_tools,
-                    protocol_token = protocol_token,
-                ));
+                if wv.eval(script.clone()).is_ok() {
+                    return;
+                }
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
             }
         });
     }
