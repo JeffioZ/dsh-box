@@ -55,7 +55,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg(not(windows))]
 fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let model = crate::tray_menu::items(true);
     let item = |id: &str| {

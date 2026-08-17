@@ -895,7 +895,6 @@ pub fn prefetch_app_update(app: &AppHandle) {
     #[cfg(not(windows))]
     {
         let _ = app;
-        return;
     }
     #[cfg(windows)]
     {
