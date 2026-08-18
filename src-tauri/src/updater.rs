@@ -276,7 +276,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
         },
         None => (
             None,
-            Some(crate::locale::text("未检测到 dsh 安装", "Installed dsh was not found").into()),
+            Some(crate::locale::text("未检测到已安装的 dsh", "No installed dsh was found").into()),
         ),
     });
 

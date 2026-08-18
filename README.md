@@ -1,6 +1,6 @@
 # DSHBox
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、状态栏、托盘、一键更新与本地文件菜单。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面加载官方 `dsh web`，并提供标题栏、状态栏、托盘、更新与本地文件菜单等桌面能力。
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-4d6bfe" />
