@@ -1,6 +1,6 @@
 {
   "name": "dsh-box",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "private": true,
   "description": "DeepSeek Harness (dsh) desktop shell with tray and managed runtime updates",
   "scripts": {
