@@ -228,7 +228,7 @@ DSHBox 是 dsh 的**桌面封装**，而不是另一套实现：
 
 ## 内置插件市场
 
-DSHBox 默认预装两个社区插件（均 MIT，经 `dsh plugin` CLI 安装）：
+DSHBox 默认预装两个社区插件（经 `dsh plugin` CLI 安装；`dsh-file-drop` 为 BSD-3-Clause）：
 
 - [dsh-market](https://github.com/dsh-market/dsh-market)（npm 包 `dshmarket`）——dsh 内的可视化插件市场：社区插件目录浏览、搜索、一键安装、主题切换与备份恢复。
 - [dsh-file-drop](https://github.com/dannyvan/dsh-file-drop)（npm 包 `dsh-file-drop`）——拖拽/点击文件插入对话：Linux 经 uri-list 直取原始路径，Windows/macOS 走插件自带的工作区上传兜底。
