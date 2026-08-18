@@ -275,7 +275,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
                 )
             });
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     // 5) 就绪，进入界面
@@ -284,7 +284,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     crate::logging::log(&format!(
         "boot: 就绪 dsh={} node={} port={}",
         runtime::installed_dsh_version(&config).unwrap_or_default(),
-        runtime::current_node_version(&config).unwrap_or_default(),
+        state.node_version().unwrap_or_default(),
         config.port
     ));
     // 先等首次配置完成再 emit Ready：ready 会触发启动页整体淡出（含面板），
@@ -446,7 +446,7 @@ pub(crate) fn wait_ready(port: u16, timeout: Duration) -> bool {
         if health_check(port) {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
     false
 }

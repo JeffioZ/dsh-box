@@ -27,6 +27,18 @@ $oldVer = "{0}.{1}.{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].
 $newVer = "{0}.{1}.{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, ([int]$m.Groups[3].Value + 1)
 Write-Host "版本号：$oldVer -> $newVer"
 
+# 前置校验：三处版本号必须一致。bump 以 Cargo.toml 为准，若他处已被手动改过，
+# Replace 只替换等于 oldVer 的行、不一致的行被静默跳过，会导致版本更不一致。
+foreach ($p in @($confJson, $pkgJson, $lockJson)) {
+  if (-not (Test-Path -LiteralPath $p)) { continue }
+  $t = [System.IO.File]::ReadAllText($p)
+  # 用 [^"]+ 而非 [\d.]+：后者会截断 0.1.20-beta.1 这类带后缀版本，恰好放过不一致。
+  $vm = [regex]::Match($t, '"version"\s*:\s*"([^"]+)"')
+  if ($vm.Success -and $vm.Groups[1].Value -ne $oldVer) {
+    throw "版本号不一致：$p 为 $($vm.Groups[1].Value)，Cargo.toml 为 $oldVer；请先人工统一后再 bump。"
+  }
+}
+
 # 2) Cargo.toml：package.version（仅此一处，行首锚定避免误伤依赖）
 $cargoText = [regex]::Replace($cargoText, '(?m)^(version\s*=\s*")[\d.]+(")', "`${1}$newVer`${2}", 1)
 Write-Utf8NoBom $cargoToml $cargoText

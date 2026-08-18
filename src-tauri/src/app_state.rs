@@ -895,6 +895,11 @@ impl AppState {
         self.lock_inner().node_version = version;
     }
 
+    /// 读取缓存的 Node 版本（None 表示尚未检测）。
+    pub fn node_version(&self) -> Option<String> {
+        self.lock_inner().node_version.clone()
+    }
+
     /// 自绘弹窗：记录最近一次打开载荷。
     pub fn set_last_dialog(&self, payload: crate::app_dialog::AppDialogOpen) {
         self.lock_inner().last_dialog = Some(payload);

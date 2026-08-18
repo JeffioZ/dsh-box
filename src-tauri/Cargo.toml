@@ -1,6 +1,6 @@
 [package]
 name = "dsh-box"
-version = "0.1.20"
+version = "0.1.21"
 description = "DeepSeek Harness (dsh) desktop shell"
 license-file = "../LICENSE"
 authors = ["JeffioZ <13286072+JeffioZ@users.noreply.github.com>"]
