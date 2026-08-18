@@ -126,28 +126,27 @@ jobs:
       # macOS：用 tauri CLI 把已构建的二进制打包为 .app 并生成 dmg（tauri bundle 只打包
       # 不编译，复用上方 Release build 产物；--no-sign 显式跳过签名，产物未签名，
       # Gatekeeper 首次运行需手动放行）。dmg 默认名为 <productName>_<ver>_<arch>.dmg
-      # （productName 含空格），重命名为统一 asset 名。
+      # （productName 含空格），按精确名匹配并重命名为统一 asset 名；
+      # 未生成则显式报错，避免静默上传空产物。
       - name: Install JS toolchain (macOS bundle)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: npm ci
 
-      - name: Bundle macOS app (native)
+      - name: Bundle macOS apps (dmg)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         shell: bash
         run: |
           cd src-tauri
-          npx tauri bundle --no-sign --bundles dmg --target ${{ matrix.target }}
-          cd "target/${{ matrix.target }}/release/bundle/dmg"
-          mv "$(ls *.dmg | head -1)" "$GITHUB_WORKSPACE/DSHBox-${{ matrix.asset }}.dmg"
-
-      - name: Bundle macOS app (cross)
-        if: matrix.cross != '' && github.event_name != 'pull_request'
-        shell: bash
-        run: |
-          cd src-tauri
-          npx tauri bundle --no-sign --bundles dmg --target ${{ matrix.cross }}
-          cd "target/${{ matrix.cross }}/release/bundle/dmg"
-          mv "$(ls *.dmg | head -1)" "$GITHUB_WORKSPACE/DSHBox-${{ matrix.cross-asset }}.dmg"
+          ver=$(node -p "require('../package.json').version")
+          for spec in "${{ matrix.target }}:${{ matrix.asset }}" "${{ matrix.cross }}:${{ matrix.cross-asset }}"; do
+            t="${spec%%:*}"; a="${spec##*:}"
+            [ -z "$t" ] && continue
+            npx tauri bundle --no-sign --bundles dmg --target "$t"
+            arch="${t%%-*}"
+            dmg="target/$t/release/bundle/dmg/DeepSeek Harness Box_${ver}_${arch}.dmg"
+            [ -f "$dmg" ] || { echo "::error::dmg 未生成: $dmg"; exit 1; }
+            mv "$dmg" "$GITHUB_WORKSPACE/DSHBox-$a.dmg"
+          done
 
       - name: Rename Windows asset
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
@@ -190,4 +189,4 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
