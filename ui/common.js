@@ -97,6 +97,8 @@ const DSHD_MESSAGES = {
   openLogs: ['打开日志', 'Open logs'],
   operationNotStarted: ['未能开始：{message}', 'Could not start: {message}'],
   pluginCatAll: ['全部', 'All'],
+  pluginCatMemory: ['记忆/智能', 'Memory/AI'],
+  pluginCatNetwork: ['网络/集成', 'Network/Integration'],
   pluginCatSkin: ['皮肤/主题', 'Skins/Themes'],
   pluginCatTool: ['工具', 'Tools'],
   pluginCatWorkflow: ['工作流', 'Workflows'],

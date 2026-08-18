@@ -138,8 +138,10 @@
     .pinput:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
     .pcats { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
     .pcat-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 24px; line-height: 1; white-space: nowrap;
       background: transparent; color: var(--dshd-text-dim); border: 1px solid var(--dshd-border);
-      border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer;
+      border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer;
       transition: background-color var(--dshd-m-fast), color var(--dshd-m-fast), border-color var(--dshd-m-fast);
     }
     .pcat-btn:hover { color: var(--dshd-text); border-color: var(--dshd-text-dim); }
@@ -673,14 +675,30 @@
     // —— 插件管理（统一弹窗内） ——
     let pluginsBusy = false;
     let pluginSearchSeq = 0;
+    // 当前选中的分类（'' 为「全部」）。分类与搜索框关键词叠加为查询条件，
+    // 切换分类不清空已输入的关键词。
+    let activeCat = '';
     const CAT_QUERIES = {
       skin: 'dsh-plugin skin OR dsh-web-ui OR dsh-ui theme',
       tool: 'dsh-plugin tool',
       workflow: 'dsh-plugin workflow',
+      memory: 'dsh-plugin memory',
+      network: 'dsh-plugin mcp OR http OR lan OR notify',
     };
+    // 关键词与分类叠加成 npm registry 查询：分类基准词 + 用户关键词。
+    // 未知分类（CAT_QUERIES 未配置）按无分类处理，避免拼出 "undefined <kw>"。
+    function buildQuery(kw, cat) {
+      const base = (cat && CAT_QUERIES[cat]) || '';
+      const q = (kw || '').trim();
+      if (base && q) return base + ' ' + q;
+      return base || q;
+    }
     function renderPlugins() {
       // 重新进入页面时让上一次尚未返回的搜索失效，避免旧结果覆盖新页面。
       pluginSearchSeq += 1;
+      // DOM 重建后按钮回到「全部」高亮，分类状态必须同步重置，否则
+      // 搜索会用残留的旧分类叠加，与界面显示不符。
+      activeCat = '';
       const body = $('body');
       body.innerHTML =
         '<div class="psearch">' +
@@ -693,6 +711,8 @@
         '<button type="button" class="pcat-btn" data-cat="skin" aria-pressed="false">' + esc(dshdT('pluginCatSkin')) + '</button>' +
         '<button type="button" class="pcat-btn" data-cat="tool" aria-pressed="false">' + esc(dshdT('pluginCatTool')) + '</button>' +
         '<button type="button" class="pcat-btn" data-cat="workflow" aria-pressed="false">' + esc(dshdT('pluginCatWorkflow')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="memory" aria-pressed="false">' + esc(dshdT('pluginCatMemory')) + '</button>' +
+        '<button type="button" class="pcat-btn" data-cat="network" aria-pressed="false">' + esc(dshdT('pluginCatNetwork')) + '</button>' +
         '</div>' +
         '<div class="pstatus" id="p-status" role="status" aria-live="polite"></div>' +
         '<div class="psection hidden" id="p-results-sec">' +
@@ -701,8 +721,8 @@
         '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
         '<ul class="plist" id="p-installed"></ul></div>';
       foot(dshdT('close'));
-      $('p-search').addEventListener('click', () => doPluginSearch());
-      $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(); });
+      $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
+      $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(buildQuery($('p-query').value, activeCat)); });
       document.querySelectorAll('.pcat-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('.pcat-btn').forEach((b) => {
@@ -710,12 +730,18 @@
             b.classList.toggle('active', active);
             b.setAttribute('aria-pressed', String(active));
           });
-          const q = btn.dataset.cat ? CAT_QUERIES[btn.dataset.cat] : '';
-          if (q) doPluginSearch(q);
-          else {
-            // 「全部」分类：回到默认态——清空搜索，结果区隐藏、已装区恢复
+          activeCat = btn.dataset.cat || '';
+          const kw = $('p-query').value.trim();
+          if (activeCat) {
+            // 分类：关键词已输入则叠加过滤，否则按分类查询
+            if (kw) doPluginSearch(buildQuery(kw, activeCat));
+            else doPluginSearch(CAT_QUERIES[activeCat]);
+          } else if (kw) {
+            // 「全部」：保留输入，仅按关键词搜索
+            doPluginSearch(kw);
+          } else {
+            // 「全部」且无关键词：回到默认态——清空搜索，结果区隐藏、已装区恢复
             pluginSearchSeq += 1;
-            $('p-query').value = '';
             $('p-results-sec').classList.add('hidden');
             $('p-results').innerHTML = '';
             $('p-installed-sec').classList.remove('hidden');
