@@ -1,6 +1,6 @@
 # DSHBox 1.0.0
 
-首个正式版本。DSHBox 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳（Tauri v2 + Rust）：主界面加载官方 `dsh web`，不改 dsh 内核、不 fork 上游，仅通过三条通道交互——注入 JS 脚本、读写 `$DSH_HOME` 下配置文件、调用 `dsh` CLI。自 0.1.16 起经多轮迭代，本版本为功能与稳定性基线。
+首个正式版本。DSHBox 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳（Tauri v2 + Rust），主界面加载官方 `dsh web` 界面。自 0.1.16 起经多轮迭代，本版本为功能与稳定性基线。
 
 ## 运行时管理
 
@@ -51,7 +51,6 @@
 
 ## 工程与安全
 
-- 薄外壳边界：不改 dsh 内核、不 fork 上游、不 patch dsh 包
 - 更新事务原语（备份 + 标记 + 中断恢复），所有"替换文件"类操作复用
 - 会话日志只读解析（zstd 解压设上限防内存膨胀）；`dshd://` 协议仅接受绝对路径
 - 单测覆盖版本解析、更新事务、主题/语言行级合并等核心逻辑；CI 强制 fmt / clippy `-D warnings` / 单测
