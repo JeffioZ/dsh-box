@@ -81,7 +81,11 @@ function renderVersions(payload) {
 
 function renderStatus(payload) {
   lastStatusPayload = payload;
-  setStatus(payload.phase, payload.message, payload.detail);
+  // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
+  // 纯固定文案的 phase 改用当前语言重译；动态消息（下载/安装进度、
+  // 端口回退等）保持后端快照，避免错译。
+  const fixedMsg = payload.phase === 'starting-server' ? phaseText('starting-server') : payload.message;
+  setStatus(payload.phase, fixedMsg, payload.detail);
   renderVersions(payload);
   // 多步骤引导：安装 Node → 安装 dsh → 启动服务，显示"第 x 步 / 共 3 步"
   const STEP_OF = { 'installing-node': 1, 'installing-dsh': 2, 'starting-server': 3 };
