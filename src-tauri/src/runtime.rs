@@ -143,7 +143,11 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
             }
         }
     }
-    Err(crate::locale::text("未找到 Node.js LTS 版本", "No Node.js LTS release was found").into())
+    Err(crate::locale::text(
+        "未找到 Node.js LTS 版本",
+        "No Node.js LTS release was found",
+    )
+    .into())
 }
 
 /// 查询 npm 官方 `@deepseek-ai/dsh` 的最新版本。
