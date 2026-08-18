@@ -47,7 +47,7 @@ cargo test --manifest-path src-tauri/Cargo.toml # 单测
 
 - 提交信息用 Conventional Commits；发布版本的变更摘要写在 commit message 的 `chore: release x.y.z——…` 里（没有独立 CHANGELOG.md）。
 - **提交前必查**：`cargo fmt`（及 `cargo clippy --all-targets -- -D warnings`、`cargo test --lib`）。CI 的 Format/Clippy 步骤以 `-D warnings` 拦截任何格式与 lint 问题；**本地只验证了当前平台，非 Windows 平台的 cfg 门控死代码（如 `#[cfg(windows)]` 字段）只有全平台 CI 才能抓到**——功能改动尽量走 PR，让 CI 在合并前跑全平台。
-- **发布 = 打 tag**：版本号三处同步（`src-tauri/Cargo.toml`、`package.json`、`src-tauri/tauri.conf.json`，CI 有 version-check 校验）→ 提交 `chore: release x.y.z——…` → 打 `vx.y.z` tag 推送。CI 自动构建五平台（windows-x64/macos-arm64/macos-x64/linux-x64/linux-arm64）并发布 release，**不要手动传本地产物**（产物名与平台数量由 CI 保证）。
+- **发布 = 打 tag**：版本号三处同步（`src-tauri/Cargo.toml`、`package.json`、`src-tauri/tauri.conf.json`，CI 有 version-check 校验）→ 提交 `chore: release x.y.z——…` → 打 `vx.y.z` tag 推送。CI 自动构建五平台（windows-x64/macos-arm64/macos-x64/linux-x64/linux-arm64）并发布 release，**不要手动传本地产物**（产物名与平台数量由 CI 保证）。发布日志正文来自仓库根 `RELEASE_NOTES.md`（CI 以 `body_path` 挂载，不自动生成），发布前更新为当前版本的内容。
 - 文案中英双语：`common.js` 的 `DSHD_MESSAGES` 表 + `data-i18n` 属性；新文案必须双语都加。
 - **UEUI 工作流（强制）**：任何涉及视觉样式、交互体验、布局/间距/尺寸、动效、配色、字体字号、文案描述的改动，**必须先调用 `ui-ux-pro-max` skill**（本地 `~/.agents/skills/ui-ux-pro-max/scripts/search.py` 按对应 domain 查询设计规则），取得规则依据后再实施；提交信息与文档中不提及该 skill。
 - 每个 Rust 文件一个职责，注释只写"为什么"；遵循现有分层（命令层不写业务实现）。

@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-box"
-version = "0.1.22"
+version = "1.0.0"
 dependencies = [
  "dirs",
  "flate2",
