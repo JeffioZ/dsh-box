@@ -12,9 +12,9 @@ use crate::processes::TreeGuard;
 pub const DEFAULT_PORT: u16 = 3080;
 /// 应用数据根目录名；与 README 公布的各平台路径保持一致。
 #[cfg(windows)]
-pub const APP_DIR_NAME: &str = "DSHDesktop";
+pub const APP_DIR_NAME: &str = "DSHBox";
 #[cfg(not(windows))]
-pub const APP_DIR_NAME: &str = "com.deepseek.dsh-desktop";
+pub const APP_DIR_NAME: &str = "com.deepseek.dsh-box";
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootPhase {
     Starting,
@@ -64,7 +64,8 @@ pub struct Config {
     pub port: u16,
     /// 应用数据根目录（node/、dsh/、logs/、config.json 所在处）。
     pub root: PathBuf,
-    /// 给 dsh 子进程的 DSH_HOME（默认不设置，沿用系统默认 ~/.dsh）。
+    /// 给 dsh 子进程的 DSH_HOME（固定为独立的 ~/.dsh-box，与官方 dsh CLI
+    /// 及第三方桌面壳隔离；可用 DSH_BOX_DSH_HOME 覆盖）。
     pub dsh_home: Option<PathBuf>,
     /// 手动指定的 DeepSeek API Key（未指定时从 dsh 凭据/环境变量读取）。
     pub api_key: Option<String>,
@@ -78,64 +79,28 @@ pub struct Config {
     pub hide_stats_line: bool,
     /// 隐藏窗口底部自绘状态栏（会话统计与余额一并隐藏，默认显示）。
     pub hide_statusbar: bool,
-    /// 启动的 dsh profile 名（默认 web）。
-    pub profile: String,
-}
-
-/// profile 名合法性：仅允许安全字符（防止路径注入/穿越）。
-pub(crate) fn is_valid_profile_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
-/// 列出可用 dsh profile（`$DSH_HOME/profiles/` 下含 package.json 的目录，
-/// 排除 pnpm 自身的 node_modules）。
-pub(crate) fn list_profiles(config: &Config) -> Vec<String> {
-    let dir = config.dsh_home().join("profiles");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return vec!["web".to_string()];
-    };
-    let mut out: Vec<String> = entries
-        .flatten()
-        .filter_map(|ent| {
-            let name = ent.file_name().to_string_lossy().into_owned();
-            if name == "node_modules" || name == ".bin" {
-                return None;
-            }
-            if !ent.path().is_dir() {
-                return None;
-            }
-            if !ent.path().join("package.json").is_file() {
-                return None;
-            }
-            Some(name)
-        })
-        .filter(|n| is_valid_profile_name(n))
-        .collect();
-    out.sort();
-    if !out.contains(&config.profile) {
-        out.push("web".to_string());
-        out.sort();
-    }
-    out
 }
 
 impl Config {
     pub fn load() -> Config {
-        let root = std::env::var("DSH_DESKTOP_ROOT")
+        let root = std::env::var("DSH_BOX_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| portable_root().unwrap_or_else(default_app_root));
-        let port = std::env::var("DSH_DESKTOP_PORT")
+        let port = std::env::var("DSH_BOX_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
             .filter(|p| *p > 0)
             .unwrap_or(DEFAULT_PORT);
-        let dsh_home = std::env::var("DSH_DESKTOP_DSH_HOME")
-            .ok()
-            .map(PathBuf::from);
+        let dsh_home = Some(
+            std::env::var("DSH_BOX_DSH_HOME")
+                .ok()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    dirs::home_dir()
+                        .map(|home| home.join(".dsh-box"))
+                        .unwrap_or_else(|| std::env::temp_dir().join("dsh-box"))
+                }),
+        );
         let api_base = "https://api.deepseek.com".into();
 
         // 可选的 config.json 覆盖（环境变量优先）。
@@ -149,7 +114,6 @@ impl Config {
             hide_tool_calls: false,
             hide_stats_line: true,
             hide_statusbar: false,
-            profile: "web".into(),
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
@@ -186,25 +150,20 @@ impl Config {
                 if let Some(hide) = json.get("hide_statusbar").and_then(|v| v.as_bool()) {
                     cfg.hide_statusbar = hide;
                 }
-                if let Some(profile) = json.get("profile").and_then(|v| v.as_str()) {
-                    if is_valid_profile_name(profile) {
-                        cfg.profile = profile.to_string();
-                    }
-                }
             }
         }
         // 环境变量永远覆盖 config.json。
-        if let Ok(k) = std::env::var("DSH_DESKTOP_API_KEY") {
+        if let Ok(k) = std::env::var("DSH_BOX_API_KEY") {
             if !k.is_empty() {
                 cfg.api_key = Some(k);
             }
         }
-        if let Ok(p) = std::env::var("DSH_DESKTOP_PORT") {
+        if let Ok(p) = std::env::var("DSH_BOX_PORT") {
             if let Ok(p @ 1..=u16::MAX) = p.parse::<u16>() {
                 cfg.port = p;
             }
         }
-        if let Ok(base) = std::env::var("DSH_DESKTOP_API_BASE") {
+        if let Ok(base) = std::env::var("DSH_BOX_API_BASE") {
             if !base.is_empty() {
                 cfg.api_base = base;
             }
@@ -261,13 +220,14 @@ impl Config {
         format!("http://127.0.0.1:{}", self.port)
     }
 
-    /// dsh 主目录（DSH_HOME）：显式配置 > 环境变量 DSH_HOME > ~/.dsh。
+    /// dsh 主目录（DSH_HOME）：固定为独立的 ~/.dsh-box（DSH_BOX_DSH_HOME 覆盖），
+    /// 与官方 dsh CLI 及第三方桌面壳隔离。
     pub fn dsh_home(&self) -> PathBuf {
-        self.dsh_home
-            .clone()
-            .or_else(|| std::env::var("DSH_HOME").ok().map(PathBuf::from))
-            .or_else(|| dirs::home_dir().map(|home| home.join(".dsh")))
-            .unwrap_or_else(std::env::temp_dir)
+        self.dsh_home.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .map(|home| home.join(".dsh-box"))
+                .unwrap_or_else(std::env::temp_dir)
+        })
     }
 
     /// 读取 dsh settings.yaml 中指定段落的字段值（顶层 `section:` 块内的
@@ -493,7 +453,7 @@ pub(crate) fn default_app_root() -> PathBuf {
 }
 
 /// 便携模式：exe 同级存在 `portable.txt` 时，数据目录跟随 exe（exe 旁 `data/`）。
-/// 显式标记避免误判；删除标记即恢复常规模式。环境变量 `DSH_DESKTOP_ROOT` 优先。
+/// 显式标记避免误判；删除标记即恢复常规模式。环境变量 `DSH_BOX_ROOT` 优先。
 fn portable_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
@@ -830,23 +790,6 @@ impl AppState {
         )?;
         self.lock_inner().config.hide_statusbar = next;
         Ok(next)
-    }
-
-    /// 切换启动 profile，持久化到 config.json 并更新内存配置。
-    /// 调用方负责重启服务使新 profile 生效。
-    pub fn set_profile(&self, name: &str) -> Result<(), String> {
-        if !is_valid_profile_name(name) {
-            return Err(
-                crate::locale::text("非法的 profile 名称。", "Invalid profile name.").into(),
-            );
-        }
-        save_config_value(
-            &self.config().root,
-            "profile",
-            serde_json::Value::String(name.to_string()),
-        )?;
-        self.lock_inner().config.profile = name.to_string();
-        Ok(())
     }
 
     /// 首次使用配置是否尚未完成：仅当数据目录完全没有 config.json（全新安装）

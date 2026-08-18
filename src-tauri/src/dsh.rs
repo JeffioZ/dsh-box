@@ -11,6 +11,9 @@ use crate::{emit_status, navigate, SPLASH_ORIGIN};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
+/// 端口扫描窗口：Windows 的 Hyper-V/WSL 动态保留端口（excluded port range）
+/// 可能连续圈定数百个端口（如 2914-3713 共 800 个），50 个远不够跳出保留块。
+const PORT_SCAN_WINDOW: u16 = 2048;
 
 // ---------- 引导主循环 ----------
 
@@ -164,7 +167,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let mut chosen = None;
-    for off in 0..=50u16 {
+    for off in 0..=PORT_SCAN_WINDOW {
         let Some(port) = base.checked_add(off) else {
             break;
         };
@@ -175,11 +178,11 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     }
     let chosen = chosen.ok_or_else(|| {
         if crate::locale::is_chinese() {
-            format!("端口 {base} 及其后 50 个端口均被占用")
+            format!("端口 {base} 及其后 {PORT_SCAN_WINDOW} 个端口均被占用或被系统保留")
         } else {
             format!(
-                "Ports {base} through {} are all in use",
-                base.saturating_add(50)
+                "Ports {base} through {} are all in use or reserved by the system",
+                base.saturating_add(PORT_SCAN_WINDOW)
             )
         }
     })?;
@@ -213,7 +216,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     if port_is_occupied(config.port) {
         let base = config.port;
         let mut next = None;
-        for off in 1..=50u16 {
+        for off in 1..=PORT_SCAN_WINDOW {
             let Some(p) = base.checked_add(off) else {
                 break;
             };
@@ -224,9 +227,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         }
         let next = next.ok_or_else(|| {
             if crate::locale::is_chinese() {
-                format!("端口 {base} 被占用，后 50 个端口均不可用")
+                format!("端口 {base} 被占用，后 {PORT_SCAN_WINDOW} 个端口均不可用")
             } else {
-                format!("Port {base} and the next 50 ports are unavailable")
+                format!("Port {base} and the next {PORT_SCAN_WINDOW} ports are unavailable")
             }
         })?;
         state.set_port(next);
@@ -374,9 +377,16 @@ pub fn shutdown(app: &AppHandle) {
 
 /// 端口是否已被任意进程占用，仅用于选择可用监听端口。
 pub(crate) fn port_is_occupied(port: u16) -> bool {
-    use std::net::{SocketAddr, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    // 1) 已有监听者：connect 成功即占用。
+    if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
+        return true;
+    }
+    // 2) Windows 保留端口（excluded port range，Hyper-V/WSL 动态圈定）等
+    //    导致 bind EACCES 的端口：无人监听但无法监听，同样视为不可用，
+    //    否则 dsh 启动会在此端口 listen EACCES 后超时（connect 探测看不到）。
+    TcpListener::bind(addr).is_err()
 }
 
 /// 验证端口上的服务确实是 dsh Web UI，而不只是任意 TCP 监听者。

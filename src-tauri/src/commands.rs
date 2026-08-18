@@ -195,25 +195,6 @@ pub async fn plugin_remove(
     crate::plugins::remove(&app, &name)
 }
 
-// ---------- 会话文件变更（session-diff 窗口调用） ----------
-
-/// 最新会话的文件改动汇总。
-#[tauri::command]
-pub fn session_changes(
-    app: AppHandle,
-    webview: tauri::Webview,
-) -> Result<crate::session_diff::SessionChanges, String> {
-    ensure_local_origin(&webview)?;
-    Ok(crate::session_diff::changes(&app))
-}
-
-/// 还原指定文件到会话前状态（反向应用会话内全部 edit）。
-#[tauri::command]
-pub fn session_revert(app: AppHandle, webview: tauri::Webview, path: String) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    crate::session_diff::revert(&app, &path)
-}
-
 // ---------- 自绘标题栏（titlebar 子 webview 调用） ----------
 
 #[tauri::command]
@@ -295,19 +276,6 @@ pub fn menu_choose(app: AppHandle, webview: tauri::Webview, id: String) -> Resul
     ensure_local_origin(&webview)?;
     crate::logging::log(&format!("menu: 选择 {id}"));
     crate::tray_menu::run_action(&app, &id);
-    Ok(())
-}
-
-/// 托盘窗口的语言子菜单展开后需要同步调整原生窗口高度。
-#[tauri::command]
-pub fn tray_menu_set_submenu_expanded(
-    app: AppHandle,
-    webview: tauri::Webview,
-    id: String,
-    expanded: bool,
-) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    crate::tray_menu::set_submenu_expanded(&app, &id, expanded);
     Ok(())
 }
 
@@ -504,8 +472,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         plugin_search,
         plugin_install,
         plugin_remove,
-        session_changes,
-        session_revert,
         crate::balance::api_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,
@@ -516,7 +482,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         titlebar_expand,
         menu_get,
         menu_choose,
-        tray_menu_set_submenu_expanded,
         app_dialog_open_balance,
         app_dialog_refresh_balance,
         app_dialog_get,

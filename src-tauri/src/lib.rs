@@ -1,4 +1,4 @@
-//! DSHDesktop —— DeepSeek Harness (dsh) 桌面端外壳。
+//! DSHBox —— DeepSeek Harness (dsh) 桌面端外壳。
 //!
 //! 职责：管理 Node/dsh 运行时（检测、安装、更新），以隐藏窗口方式启动
 //! `dsh web` 服务，用 WebView 加载 http://127.0.0.1:<port> 的官方界面，
@@ -22,7 +22,6 @@ mod onboarding;
 mod plugins;
 mod processes;
 mod runtime;
-mod session_diff;
 mod stats;
 mod titlebar;
 mod tray;
@@ -62,7 +61,7 @@ pub fn default_tls_config() -> ureq::tls::TlsConfig {
 /// 由 main 里的 panic hook 调用，直接追加写入应用日志（logging 可能尚未
 /// 初始化，不能走 logging::log）。
 pub fn log_panic(line: &str) {
-    let root = std::env::var("DSH_DESKTOP_ROOT")
+    let root = std::env::var("DSH_BOX_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| app_state::default_app_root());
     let path = root.join("logs").join("desktop.log");
@@ -80,7 +79,7 @@ pub fn log_panic(line: &str) {
 }
 
 /// 对外产品名（窗口标题/托盘/exe 属性等统一显示名）。
-pub const APP_TITLE: &str = "DeepSeek Harness Desktop";
+pub const APP_TITLE: &str = "DeepSeek Harness Box";
 
 /// 本地启动页（生产环境 Tauri 资源源）。
 pub const SPLASH_ORIGIN: &str = "tauri://localhost";

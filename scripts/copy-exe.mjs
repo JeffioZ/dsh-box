@@ -8,10 +8,10 @@ const root = path.resolve(__dirname, '..');
 const dist = path.join(root, 'dist');
 fs.mkdirSync(dist, { recursive: true });
 
-const src = path.join(root, 'src-tauri', 'target', 'release', 'DSHDesktop.exe');
+const src = path.join(root, 'src-tauri', 'target', 'release', 'DSHBox.exe');
 if (!fs.existsSync(src)) throw new Error('未找到编译产物: ' + src);
 
-const dst = path.join(dist, 'DSHDesktop.exe');
+const dst = path.join(dist, 'DSHBox.exe');
 fs.copyFileSync(src, dst);
 const size = fs.statSync(dst).size;
-console.log(`dist/DSHDesktop.exe (${(size / 1024 / 1024).toFixed(2)} MB)`);
+console.log(`dist/DSHBox.exe (${(size / 1024 / 1024).toFixed(2)} MB)`);

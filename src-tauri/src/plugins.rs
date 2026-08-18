@@ -71,7 +71,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
     let url = format!("https://registry.npmjs.org/-/v1/search?text={encoded}&size=24");
     let resp = crate::runtime::client()
         .get(&url)
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .call()
         .map_err(|e| format!("搜索失败：{e}"))?;
     use std::io::Read;
@@ -146,11 +146,15 @@ fn restart_service_silently(app: &AppHandle) {
 
 // —— 内置预装包（dsh-market + dsh-file-drop）：自动预装与每日版本同步 ——
 
-/// 内置预装包：插件市场（dshmarket）与文件拖拽（dsh-file-drop，MIT，
+/// 内置预装包：插件市场（dshmarket）与文件拖拽（dsh-file-drop，BSD-3-Clause，
 /// 与桌面壳场景直接相关）。均走 `dsh plugin` CLI 安装，失败静默重试。
 const MARKET_PKGS: &[&str] = &["dshmarket", "dsh-file-drop"];
 /// 版本检查门控间隔（24 小时）。
 const MARKET_CHECK_INTERVAL: u64 = 86_400;
+/// 引导（首次安装）失败后的重试退避：退避期内启动不再重试，避免
+/// 每次启动都刷失败日志（上游 supply-chain 策略拦截是持续性的，
+/// 短期反复重试必然失败）。
+const MARKET_BOOTSTRAP_RETRY: u64 = 6 * 3600;
 
 /// 已装包版本（web profile 的 package.json dependencies），未装为 None。
 fn market_installed_version(config: &crate::app_state::Config, pkg: &str) -> Option<String> {
@@ -169,7 +173,7 @@ fn market_latest_version(pkg: &str) -> Option<String> {
     use std::io::Read;
     let resp = crate::runtime::client()
         .get(&format!("https://registry.npmjs.org/{pkg}/latest"))
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .call()
         .ok()?;
     let mut text = String::new();
@@ -227,6 +231,24 @@ fn market_mark_bootstrapped(config: &crate::app_state::Config) {
     );
 }
 
+/// 引导失败退避时间戳：上次引导失败时写入 `now + MARKET_BOOTSTRAP_RETRY`，
+/// 该时刻前启动不再重试。
+fn market_bootstrap_retry_due(config: &crate::app_state::Config) -> bool {
+    let text = std::fs::read_to_string(config.root.join("config.json")).unwrap_or_default();
+    let retry_at = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|j| j.get("market_bootstrap_retry_at").and_then(|v| v.as_u64()));
+    retry_at.map(|t| market_unix_now() >= t).unwrap_or(true)
+}
+
+fn market_mark_bootstrap_retry(config: &crate::app_state::Config) {
+    let _ = crate::app_state::save_config_value(
+        &config.root,
+        "market_bootstrap_retry_at",
+        serde_json::json!(market_unix_now() + MARKET_BOOTSTRAP_RETRY),
+    );
+}
+
 /// 内置预装包引导（后台线程）：dsh 服务就绪后——
 /// 未安装的包逐个自动安装并重启服务；已安装的每 24h 检查一次 npm
 /// 最新版，落后时后台升级（`dsh plugin add` 重复执行即升级语义）并重启。
@@ -249,8 +271,10 @@ pub fn start_market_bootstrap(app: AppHandle) {
         }
         // 未安装的包逐个安装（仅在从未成功引导过时尝试：用户主动卸载
         // 后不自动重装）；全部包已存在或安装成功后才标记引导完成。
+        // 上次引导失败后的退避期内直接跳过：上游 supply-chain 策略拦截
+        // 是持续性的，短期反复重试必然失败，只会刷日志。
         let mut installed_any = false;
-        if !market_bootstrapped(&config) {
+        if !market_bootstrapped(&config) && market_bootstrap_retry_due(&config) {
             let mut bootstrap_complete = true;
             for pkg in MARKET_PKGS {
                 if market_installed_version(&config, pkg).is_some() {
@@ -264,9 +288,7 @@ pub fn start_market_bootstrap(app: AppHandle) {
                     }
                     Err(e) => {
                         bootstrap_complete = false;
-                        crate::logging::log(&format!(
-                            "market: {pkg} 安装失败（下次启动重试）：{e}"
-                        ));
+                        crate::logging::log(&format!("market: {pkg} 安装失败（退避后重试）：{e}"));
                     }
                 }
             }
@@ -277,6 +299,9 @@ pub fn start_market_bootstrap(app: AppHandle) {
                 if installed_any {
                     market_mark_checked(&config);
                 }
+            } else {
+                // 记退避：退避期内启动不再重试，避免刷屏
+                market_mark_bootstrap_retry(&config);
             }
         }
         if installed_any {
@@ -287,6 +312,8 @@ pub fn start_market_bootstrap(app: AppHandle) {
             return;
         }
         // 已安装包的版本同步（每 24h）；缺失表示用户已卸载，必须跳过。
+        // 与上方引导相互独立：dsh-file-drop 装不上（引导失败）不影响这里
+        // 对已装 dshmarket 的升级检查——未装包直接 continue，不会计入失败。
         let mut upgraded_any = false;
         let mut check_complete = true;
         for pkg in MARKET_PKGS {

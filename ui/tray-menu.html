@@ -30,8 +30,6 @@
 
     const menu = dshdCreateMenu(document.getElementById('list'), {
       onChoose: (id) => invoke('menu_choose', { id }).catch(() => {}),
-      onSubmenuChange: (id, expanded) =>
-        invoke('tray_menu_set_submenu_expanded', { id, expanded }).catch(() => {}),
       onEscape: () => currentWindow.hide(),
     });
 
@@ -54,7 +52,6 @@
     }
     // Rust 在窗口 show 后 eval 调用本函数：隐藏窗口收不到 emit 时的兜底
     window.__dshdRefresh = refresh;
-    window.__dshdCollapseMenu = () => menu.collapseSubmenus(false);
 
     listen('tray-menu-open', (e) => menu.setItems(e.payload));
     window.addEventListener('focus', () => {

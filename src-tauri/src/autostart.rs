@@ -1,7 +1,7 @@
 //! 开机自启动（跨平台）：
 //! - Windows：HKCU\...\Run 注册表键（值为 `"<exe>" --minimized`）；
-//! - macOS：~/Library/LaunchAgents/com.deepseek.dsh-desktop.plist；
-//! - Linux：~/.config/autostart/dsh-desktop.desktop。
+//! - macOS：~/Library/LaunchAgents/com.deepseek.dsh-box.plist；
+//! - Linux：~/.config/autostart/dsh-box.desktop。
 
 /// 可执行文件路径（不带引号，供 plist 等按参数拆分使用）。
 fn exe_path() -> String {
@@ -36,7 +36,7 @@ mod imp {
     };
 
     const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    const VALUE_NAME: &str = "DSHDesktop";
+    const VALUE_NAME: &str = "DSHBox";
 
     fn to_wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -128,8 +128,8 @@ mod imp {
     use super::*;
     use std::path::PathBuf;
 
-    const LABEL: &str = "com.deepseek.dsh-desktop";
-    const FILE_NAME: &str = "com.deepseek.dsh-desktop.plist";
+    const LABEL: &str = "com.deepseek.dsh-box";
+    const FILE_NAME: &str = "com.deepseek.dsh-box.plist";
 
     fn plist_path() -> Option<PathBuf> {
         dirs::home_dir().map(|home| home.join("Library/LaunchAgents").join(FILE_NAME))
@@ -212,7 +212,7 @@ mod imp {
     use super::*;
     use std::path::PathBuf;
 
-    const FILE_NAME: &str = "dsh-desktop.desktop";
+    const FILE_NAME: &str = "dsh-box.desktop";
 
     fn desktop_path() -> Option<PathBuf> {
         dirs::home_dir().map(|home| home.join(".config/autostart").join(FILE_NAME))
@@ -256,8 +256,8 @@ mod imp {
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
-             Name=DeepSeek Harness Desktop\n\
-             Comment=DeepSeek Harness Desktop\n\
+             Name=DeepSeek Harness Box\n\
+             Comment=DeepSeek Harness Box\n\
              Exec={exec}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n"

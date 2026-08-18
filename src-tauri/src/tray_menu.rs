@@ -22,10 +22,6 @@ pub struct TrayMenuItem {
     pub label: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sep: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<TrayMenuItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checked: Option<bool>,
     /// 图标名（menu.js 的 ICONS 表）；None 不显示图标
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<&'static str>,
@@ -37,8 +33,6 @@ impl TrayMenuItem {
             id: id.to_string(),
             label: label.to_string(),
             sep: false,
-            children: Vec::new(),
-            checked: None,
             icon: None,
         }
     }
@@ -48,25 +42,11 @@ impl TrayMenuItem {
             ..Self::row(id, label)
         }
     }
-    fn choice(id: &str, label: &str, checked: bool) -> Self {
-        Self {
-            checked: Some(checked),
-            ..Self::row(id, label)
-        }
-    }
-    fn parent(id: &str, label: &str, children: Vec<TrayMenuItem>) -> Self {
-        Self {
-            children,
-            ..Self::row(id, label)
-        }
-    }
     fn sep() -> Self {
         Self {
             id: String::new(),
             label: String::new(),
             sep: true,
-            children: Vec::new(),
-            checked: None,
             icon: None,
         }
     }
@@ -106,11 +86,6 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             "puzzle",
             crate::locale::text("插件管理…", "Plugin manager…"),
         ),
-        TrayMenuItem::row_icon(
-            "session_diff",
-            "file",
-            crate::locale::text("会话文件变更…", "Session file changes…"),
-        ),
         TrayMenuItem::sep(),
         TrayMenuItem::row_icon(
             "settings",
@@ -118,12 +93,6 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
             crate::locale::text("桌面端设置…", "Desktop settings…"),
         ),
     ];
-    // 多 profile 时追加“启动配置”子菜单（单选，切换后重启生效）；
-    // 分隔线按需添加，避免无 profile 时 settings 与 about 之间出现双分隔线
-    if let Some(profile_item) = profile_menu_item() {
-        rows.push(TrayMenuItem::sep());
-        rows.push(profile_item);
-    }
     rows.push(TrayMenuItem::sep());
     rows.push(TrayMenuItem::row_icon(
         "about",
@@ -150,25 +119,6 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows
 }
 
-/// “启动配置”子菜单：多个可用 profile 时显示（单选，切换后重启生效）。
-fn profile_menu_item() -> Option<TrayMenuItem> {
-    let config = crate::app_state::Config::load();
-    let profiles = crate::app_state::list_profiles(&config);
-    if profiles.len() <= 1 {
-        return None;
-    }
-    Some(TrayMenuItem::parent(
-        "profile",
-        crate::locale::text("启动配置", "Launch profile"),
-        profiles
-            .into_iter()
-            .map(|name| {
-                TrayMenuItem::choice(&format!("profile_{name}"), &name, name == config.profile)
-            })
-            .collect(),
-    ))
-}
-
 /// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口
 /// （圆角外的四个角透明）；如后续恢复阴影方案再调大。
 #[cfg(windows)]
@@ -189,18 +139,6 @@ fn menu_size() -> (f64, f64) {
             .sum::<f64>();
     (264.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
 }
-
-/// 托盘菜单窗口几何基线（物理像素）：(base_w, base_h, current_h)。
-/// 展开/收起围绕基线加减高度，宽度恒为基线宽，收起精确还原基线高——
-/// 不读系统回报尺寸（inner/outer 语义与设置值有 1-2px 差，逐次累加
-/// 会造成位置上移、宽度漂移、末行残余裁切）。
-#[derive(Clone, Copy)]
-struct Geometry {
-    base_w: i32,
-    base_h: i32,
-    current_h: i32,
-}
-static GEOMETRY: std::sync::Mutex<Option<Geometry>> = std::sync::Mutex::new(None);
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
 #[cfg(windows)]
@@ -272,15 +210,6 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     };
     let (width, height) = menu_size();
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
-    // 记录本次设置后的实际外尺寸基线，供展开/收起锚定（见 GEOMETRY 说明）
-    if let Ok(size) = win.outer_size() {
-        *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Geometry {
-            base_w: size.width as i32,
-            base_h: size.height as i32,
-            current_h: size.height as i32,
-        });
-    }
-    let _ = win.eval("window.__dshdCollapseMenu && window.__dshdCollapseMenu()");
     // 定位：仿 Windows 托盘菜单——菜单右下角贴点击点（向上/向左展开），放不下再翻转。
     // 关键：事件坐标是物理像素，窗口尺寸是逻辑像素——统一用目标显示器的缩放
     // 换算成逻辑坐标再计算（200% DPI 下混用会导致菜单位置偏移、鼠标落在菜单内）
@@ -341,107 +270,6 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     }
     let _ = win.eval("window.__dshdRefresh && window.__dshdRefresh()");
     let _ = win.set_focus();
-}
-
-/// 子菜单展开/收起时调整托盘窗口高度，底缘始终锚定托盘点击点。
-/// `id` 为父菜单项 id（当前仅 profile）；未展开时精确还原基线高。
-pub fn set_submenu_expanded(app: &AppHandle, id: &str, expanded: bool) {
-    let Some(win) = app.get_webview_window(TRAY_MENU_WINDOW) else {
-        return;
-    };
-    let Ok(position) = win.outer_position() else {
-        return;
-    };
-    let scale = win.scale_factor().unwrap_or(1.0);
-    // 子菜单展开高度增量（逻辑像素）：profile 每项一行。
-    let expand_rows: i32 = if id == "profile" {
-        let config = crate::app_state::Config::load();
-        crate::app_state::list_profiles(&config).len() as i32
-    } else {
-        0
-    };
-    // 以基线几何为准：宽度恒定、高度只加减子菜单的物理增量，
-    // 收起时精确还原基线高（消除残余裁切与宽度漂移）
-    let geo = *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner());
-    let (base_w, base_h, current_h) = match geo {
-        Some(g) => (g.base_w, g.base_h, g.current_h),
-        None => {
-            let Ok(size) = win.outer_size() else {
-                return;
-            };
-            (size.width as i32, size.height as i32, size.height as i32)
-        }
-    };
-    let new_width = base_w;
-    let new_height = if expanded {
-        base_h + (expand_rows as f64 * 40.0 * scale).round() as i32
-    } else {
-        base_h
-    };
-    // 底缘锚定：只动上缘，底边始终贴住托盘点击点
-    let bottom = position.y + current_h;
-    let new_y = bottom - new_height;
-    *GEOMETRY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Geometry {
-        base_w,
-        base_h,
-        current_h: new_height,
-    });
-
-    #[cfg(windows)]
-    {
-        // 单次 SetWindowPos 原子完成移动+缩放：分两步会出现
-        // “先长高/缩短、再上移/下移”的中间帧，底缘跳动即闪烁来源
-        if let Ok(hwnd) = win.hwnd() {
-            use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos;
-            let ok = unsafe {
-                SetWindowPos(
-                    hwnd.0,
-                    std::ptr::null_mut(),
-                    position.x,
-                    new_y,
-                    new_width,
-                    new_height,
-                    0x0004u32 | 0x0010u32, // SWP_NOZORDER | SWP_NOACTIVATE
-                )
-            };
-            if ok != 0 {
-                bump_popup_gen();
-                watch_outside_click(
-                    app.clone(),
-                    TRAY_MENU_WINDOW,
-                    (
-                        position.x,
-                        new_y,
-                        position.x + new_width,
-                        new_y + new_height,
-                    ),
-                );
-                return;
-            }
-        }
-    }
-
-    // 兜底路径（非 Windows 或 hwnd 不可用）：先移上缘再改高度
-    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-        position.x, new_y,
-    )));
-    let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-        new_width as u32,
-        new_height as u32,
-    )));
-
-    bump_popup_gen();
-    #[cfg(windows)]
-    watch_outside_click(
-        app.clone(),
-        TRAY_MENU_WINDOW,
-        (
-            position.x,
-            new_y,
-            position.x + new_width,
-            new_y + new_height,
-        ),
-    );
 }
 
 /// 隐藏菜单窗口（失焦/选中后）。无动效（此前尝试淡出，托盘窗口

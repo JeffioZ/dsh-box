@@ -1,6 +1,6 @@
 //! DeepSeek API 余额查询：GET {base}/user/balance。
 //!
-//! API Key 解析顺序：环境变量 DSH_DESKTOP_API_KEY → config.json 的 api_key
+//! API Key 解析顺序：环境变量 DSH_BOX_API_KEY → config.json 的 api_key
 //! → 环境变量 DEEPSEEK_API_KEY → dsh 凭据文件（$DSH_HOME/.credentials.yaml，
 //! 格式 `DEEPSEEK_API_KEY: sk-...`）。
 
@@ -110,8 +110,8 @@ fn resolve_api_key(config: &Config) -> Result<String, String> {
         return Ok(k);
     }
     Err(crate::locale::text(
-        "未找到 DeepSeek API Key。\n可在应用数据目录的 config.json 中添加 api_key 字段，\n或设置环境变量 DSH_DESKTOP_API_KEY / DEEPSEEK_API_KEY，\n或确认 dsh 凭据文件中已有该密钥。",
-        "No DeepSeek API Key was found.\nAdd an api_key field to config.json in the app data directory,\nset DSH_DESKTOP_API_KEY or DEEPSEEK_API_KEY,\nor confirm that the dsh credentials file contains the key.",
+        "未找到 DeepSeek API Key。\n可在应用数据目录的 config.json 中添加 api_key 字段，\n或设置环境变量 DSH_BOX_API_KEY / DEEPSEEK_API_KEY，\n或确认 dsh 凭据文件中已有该密钥。",
+        "No DeepSeek API Key was found.\nAdd an api_key field to config.json in the app data directory,\nset DSH_BOX_API_KEY or DEEPSEEK_API_KEY,\nor confirm that the dsh credentials file contains the key.",
     )
     .into())
 }

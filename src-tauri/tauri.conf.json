@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DeepSeek Harness Desktop",
-  "mainBinaryName": "DSHDesktop",
+  "productName": "DeepSeek Harness Box",
+  "mainBinaryName": "DSHBox",
   "version": "0.1.20",
-  "identifier": "com.deepseek.dsh-desktop",
+  "identifier": "com.deepseek.dsh-box",
   "build": {
     "frontendDist": "../ui"
   },

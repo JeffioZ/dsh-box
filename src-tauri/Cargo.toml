@@ -1,5 +1,5 @@
 [package]
-name = "dsh-desktop"
+name = "dsh-box"
 version = "0.1.20"
 description = "DeepSeek Harness (dsh) desktop shell"
 license-file = "../LICENSE"
@@ -9,11 +9,11 @@ edition = "2021"
 rust-version = "1.85"
 
 [[bin]]
-name = "DSHDesktop"
+name = "DSHBox"
 path = "src/main.rs"
 
 [lib]
-name = "dsh_desktop_lib"
+name = "dsh_box_lib"
 # 纯桌面应用，无需移动端的静态库/动态库产物
 crate-type = ["rlib"]
 

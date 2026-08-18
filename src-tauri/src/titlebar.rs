@@ -15,8 +15,8 @@ use crate::MAIN_WINDOW;
 pub const TITLEBAR_HEIGHT: f64 = 36.0;
 /// 浮层高度默认值：页面未提供实测高度时使用（36px 标题栏 + 浮层 + 阴影余量）。
 pub const TITLEBAR_EXPANDED_HEIGHT: f64 = 260.0;
-/// 浮层高度上限：主窗口最小高度为 620px；完整主菜单在含 2～3 个 profile
-/// 且展开子菜单时也能容纳，单 profile 的常规菜单仍按页面实测高度展开。
+/// 浮层高度上限：主窗口最小高度为 620px；完整主菜单也能容纳，
+/// 常规菜单仍按页面实测高度展开。
 pub const TITLEBAR_MENU_HEIGHT: f64 = 620.0;
 /// 标题栏子 webview 的 label。
 pub const TITLEBAR_LABEL: &str = "titlebar";

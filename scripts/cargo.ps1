@@ -1,4 +1,4 @@
-﻿# 构建 DSHDesktop（自动加载 MSVC 环境，工具链从 PATH/环境变量解析）。
+﻿# 构建 DSHBox（自动加载 MSVC 环境，工具链从 PATH/环境变量解析）。
 # 用法: pwsh -File scripts/cargo.ps1 [check|test|dev|build]
 param(
   [ValidateSet("check", "test", "dev", "build")]

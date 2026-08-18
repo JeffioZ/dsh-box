@@ -41,13 +41,13 @@ foreach ($p in @($confJson, $pkgJson, $lockJson)) {
   Write-Utf8NoBom $p $t
 }
 
-# 4) src-tauri/Cargo.lock：仅本包条目（name = "dsh-desktop" 后紧跟的 version 行），
+# 4) src-tauri/Cargo.lock：仅本包条目（name = "dsh-box" 后紧跟的 version 行），
 #    避免误伤其他恰好同版本号的依赖
 if (Test-Path -LiteralPath $cargoLock) {
   $t = [System.IO.File]::ReadAllText($cargoLock)
-  $pattern = '(?m)(name = "dsh-desktop"\r?\nversion = ")' + [regex]::Escape($oldVer) + '(")'
+  $pattern = '(?m)(name = "dsh-box"\r?\nversion = ")' + [regex]::Escape($oldVer) + '(")'
   if (-not [regex]::IsMatch($t, $pattern)) {
-    throw "Cargo.lock 中未找到 dsh-desktop 的 $oldVer 条目，请人工核对"
+    throw "Cargo.lock 中未找到 dsh-box 的 $oldVer 条目，请人工核对"
   }
   $t = [regex]::Replace($t, $pattern, "`${1}$newVer`${2}", 1)
   Write-Utf8NoBom $cargoLock $t

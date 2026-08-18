@@ -5,7 +5,7 @@
 // 该 lint 只能在被链接的 crate 根（bin）控制，不能放在 lib 根。
 #![allow(linker_messages)]
 
-//! DSHDesktop 入口。
+//! DSHBox 入口。
 //!
 //! Windows：启动前检查 WebView2 Runtime，缺失时自动安装；
 //! macOS/Linux：使用系统内置渲染（WKWebView/WebKitGTK），无需预检。
@@ -28,7 +28,7 @@ fn main() {
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_default();
-        dsh_desktop_lib::log_panic(&format!("{payload}（{location}）"));
+        dsh_box_lib::log_panic(&format!("{payload}（{location}）"));
         previous_hook(info);
     }));
 
@@ -36,13 +36,13 @@ fn main() {
     if !webview2_check::ensure_webview2() {
         return;
     }
-    dsh_desktop_lib::run()
+    dsh_box_lib::run()
 }
 
 /// WebView2 前置检查（仅 Windows：注册表检测 + 下载官方引导安装器自动安装）。
 #[cfg(windows)]
 mod webview2_check {
-    use dsh_desktop_lib::{locale, APP_TITLE};
+    use dsh_box_lib::{locale, APP_TITLE};
     use std::io::{Read, Seek};
     use std::os::windows::process::CommandExt;
     use std::time::Duration;
@@ -161,7 +161,7 @@ mod webview2_check {
     /// 不内嵌在 exe 中：仅在 WebView2 缺失时按需下载，保持安装包精简。
     fn download_bootstrapper(path: &std::path::Path) -> Result<(), String> {
         let resp = ureq::Agent::config_builder()
-            .tls_config(dsh_desktop_lib::default_tls_config())
+            .tls_config(dsh_box_lib::default_tls_config())
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_response(Some(Duration::from_secs(90)))
             // body 整体时限放宽：慢网下载 32MB 引导安装器可能超过常规读时限

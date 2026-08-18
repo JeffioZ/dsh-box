@@ -1,4 +1,4 @@
-// DSHDesktop 共享前端工具与轻量中英文本地化。
+// DSHBox 共享前端工具与轻量中英文本地化。
 // 各窗口页面无打包器，共享脚本以普通 <script src="common.js"> 引用。
 
 let DSHD_LANGUAGE = (() => {
@@ -66,7 +66,6 @@ const DSHD_MESSAGES = {
   currentVersion: ['当前 {version}', 'Current {version}'],
   dshUpdateAvailable: ['dsh 有新版本：{latest}（当前 {current}）', 'dsh {latest} is available (current: {current})'],
   dshUpToDate: ['dsh 已是最新（{version}）', 'dsh is up to date ({version})'],
-  errorOccurred: ['出错了', 'Something went wrong'],
   grantedBalance: ['赠送余额', 'Granted balance'],
   install: ['安装', 'Install'],
   installingDsh: ['正在安装 dsh（需要联网）…', 'Installing dsh (internet required)…'],
@@ -92,7 +91,6 @@ const DSHD_MESSAGES = {
   navCheck: ['检查更新', 'Updates'],
   navLabel: ['功能导航', 'Feature navigation'],
   navPlugins: ['插件管理', 'Plugins'],
-  navSessionDiff: ['会话文件变更', 'File changes'],
   navSettings: ['桌面端设置', 'Settings'],
   onboardingSub: ['配置 API Key、语言与主题；之后仍可在桌面端设置中调整。', 'Set up your API key, language, and theme. You can change them later in desktop settings.'],
   onboardingTitle: ['首次使用配置', 'First-run setup'],
@@ -130,23 +128,6 @@ const DSHD_MESSAGES = {
   restoreWindow: ['还原窗口', 'Restore window'],
   retry: ['重试', 'Retry'],
   saveFailed: ['保存失败', 'Failed to save'],
-  sessionDiffEdits: ['{count} 处修改', '{count} edits'],
-  sessionDiffFailed: ['操作失败：{message}', 'Operation failed: {message}'],
-  sessionDiffLoading: ['正在读取会话文件变更…', 'Loading session file changes…'],
-  sessionDiffHelp: ['这里列出最近一次会话记录的文件改动。展开可查看详情；“还原”会尝试撤销可还原的编辑，文件之后又被修改时可能失败。', 'This lists file changes recorded in the latest session. Expand a file for details; Revert attempts to undo eligible edits and may fail if the file changed again.'],
-  sessionDiffNone: ['没有找到会话文件改动', 'No session file changes found'],
-  sessionDiffNotRevertible: ['不可还原', "Can't revert"],
-  sessionDiffRewritten: ['整文件重写', 'rewritten'],
-  sessionDiffRevert: ['还原', 'Revert'],
-  sessionDiffReverted: ['已还原 {path}', 'Reverted {path}'],
-  sessionDiffRevertConfirm: ['还原 {path} 到会话前状态？', 'Revert {path} to its pre-session state?'],
-  sessionDiffRevertible: ['可还原', 'Can revert'],
-  sessionDiffReverting: ['正在还原 {path}…', 'Reverting {path}…'],
-  sessionDiffRewriteOp: ['整文件重写', 'Full rewrite'],
-  sessionDiffSession: ['最近会话 {id}', 'Recent session {id}'],
-  sessionDiffWorkdir: ['工作目录：{path}', 'Workspace: {path}'],
-  sessionDiffSummary: ['共 {files} 个文件 · {edits} 处修改', '{files} files · {edits} edits'],
-  sessionDiffTitle: ['会话文件变更', 'Session file changes'],
   settingsTitle: ['桌面端设置', 'Desktop settings'],
   settingsAutostartDesc: ['开机后静默启动并驻留托盘', 'Start silently in the tray on login'],
   settingsFailed: ['设置失败：{message}', 'Could not apply the setting: {message}'],
@@ -175,6 +156,7 @@ const DSHD_MESSAGES = {
   starting: ['正在启动…', 'Starting…'],
   startingServer: ['正在启动 dsh 服务…', 'Starting the dsh service…'],
   startupFailed: ['启动失败', 'Startup failed'],
+  startupFailedHint: ['请重试；若持续失败，可打开日志查看详情。', 'Please retry. If it keeps failing, open the logs for details.'],
   systemManaged: ['由系统管理', 'System managed'],
   systemManagedLatest: ['系统管理 · 最新 LTS {version}', 'System managed · Latest LTS {version}'],
   systemManagedUnavailable: ['系统管理 · 暂无法获取版本信息', 'System managed · Version information unavailable'],

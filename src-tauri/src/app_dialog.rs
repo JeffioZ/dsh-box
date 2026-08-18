@@ -370,13 +370,3 @@ pub fn open_settings(app: &AppHandle) {
         serde_json::json!({}),
     );
 }
-
-/// 会话文件变更（统一弹窗内）：内容由前端拉取，无需初始载荷。
-pub fn open_session_diff(app: &AppHandle) {
-    show(
-        app,
-        crate::locale::text("会话文件变更", "Session file changes"),
-        "session-diff",
-        serde_json::json!({}),
-    );
-}

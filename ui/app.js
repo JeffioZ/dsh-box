@@ -54,7 +54,13 @@ function setStatus(phase, message, detail) {
 function showError(message) {
   setStatus('error');
   $('error-msg').textContent = message || dshdT('unknownError');
-  $('error-box').classList.remove('hidden');
+  const box = $('error-box');
+  box.classList.remove('hidden');
+  // 每次显示重新触发入场动画；聚焦错误框供屏幕阅读器/键盘用户定位错误摘要
+  box.classList.remove('reveal');
+  void box.offsetWidth;
+  box.classList.add('reveal');
+  box.focus();
 }
 
 function hideError() {

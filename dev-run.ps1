@@ -6,7 +6,7 @@ param()
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
-$exe = Join-Path $root "dist-dev\DSHDesktop-dev.exe"
+$exe = Join-Path $root "dist-dev\DSHBox-dev.exe"
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "未找到开发版 exe：$exe（请先运行 dev-build.ps1 构建一次）"
 }
@@ -15,7 +15,7 @@ function Test-DshdUiServer {
     try {
         $response = Invoke-WebRequest -Uri "http://127.0.0.1:4321/" -TimeoutSec 2 -UseBasicParsing
         return $response.StatusCode -eq 200 -and
-            $response.Content.Contains("<title>DeepSeek Harness Desktop</title>")
+            $response.Content.Contains("<title>DeepSeek Harness Box</title>")
     } catch {
         return $false
     }

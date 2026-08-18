@@ -47,7 +47,6 @@ function setMainMenuOpen(open, focusMenu = false) {
   $('main-menu-panel').setAttribute('aria-hidden', String(!mainMenuOpen));
   $('main-menu-panel').inert = !mainMenuOpen;
   if (mainMenuOpen) {
-    mainMenu.collapseSubmenus(false);
     // 打开时不立即同步高度：等条目渲染完成后再按真实高度一次性扩展。
     // 先扩展再渲染会造成两次快速 resize（空面板高度→真实高度），
     // 双重重绘正是标题栏文案偶发闪烁的来源。
@@ -75,9 +74,6 @@ function bindMainMenu() {
       setMainMenuOpen(false);
       $('btn-menu').focus();
     },
-    // 子菜单展开/收起会改变面板高度，同步 webview 高度。
-    // menu.js 先发通知后改 DOM，这里等一帧让 DOM 就绪再实测
-    onSubmenuChange: () => requestAnimationFrame(syncOverlayHeight),
   });
   // 打开提前到 mousedown：mouseup 后 :active 样式结束、click 才加 .open 类，
   // 中间隔一帧背景「先亮后暗」——正是主菜单按钮闪烁的来源。

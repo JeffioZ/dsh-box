@@ -1,4 +1,4 @@
-# DSHDesktop
+# DSHBox
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面直接加载官方 `dsh web`，并在外面套一层桌面体验：标题栏、状态栏、托盘、一键更新与本地文件菜单。
 
@@ -29,10 +29,8 @@
 | **零依赖准备** | 自动检测并安装 Node.js 与 dsh；Windows 缺少 WebView2 时引导安装 |
 | **一键更新** | dsh 与 Node.js 事务化更新（失败自动回滚，被打断下次启动自动还原）；应用本体自更新（Windows） |
 | **服务自愈** | 单实例、看门狗自动恢复、端口冲突自动回退、页面挂起自动重载 |
-| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 窗口控制）、底部状态栏（会话统计 + API 余额）、统一弹窗（余额/更新/插件/文件变更/设置/关于） |
+| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 窗口控制）、底部状态栏（会话统计 + API 余额）、统一弹窗（余额/更新/插件/设置/关于） |
 | **插件管理** | 内置插件市场：搜索 npm 上的 dsh 插件，一键安装/卸载（走官方 `dsh plugin`） |
-| **会话文件变更** | 只读解析最近会话对文件的所有改动（行级 diff），纯 edit 改动可一键还原 |
-| **多 profile** | 主菜单或托盘菜单切换启动配置（`dsh --profile`），切换后重启生效 |
 | **便携模式** | exe 旁放 `portable.txt`，数据跟随 exe，拷 U 盘即用 |
 | **通知与提醒** | 任务完成系统通知（点击回窗口）、运行期每 6 小时自动检查更新 |
 | **双语界面** | 界面语言跟随 dsh 设置（中/英），深浅色随系统/主题自动切换 |
@@ -55,10 +53,10 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 ## 快速开始
 
-从 [Releases](https://github.com/JeffioZ/dsh-desktop/releases) 下载对应平台的产物：
+从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应平台的产物：
 
-- Windows：直接运行 `DSHDesktop.exe`
-- macOS / Linux：解压 `.zip` 后运行 `DSHDesktop`
+- Windows：直接运行 `DSHBox.exe`
+- macOS / Linux：解压 `.zip` 后运行 `DSHBox`
 
 各平台产物以最新 Release 附件为准，GitHub Actions 也会产出各平台的构建产物。所有产物均未签名，系统安全策略可能要求手动允许。
 
@@ -76,9 +74,9 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 | 平台 | 路径 |
 |---|---|
-| Windows | `%LOCALAPPDATA%\DSHDesktop` |
-| macOS | `~/Library/Application Support/com.deepseek.dsh-desktop` |
-| Linux | `$XDG_DATA_HOME/com.deepseek.dsh-desktop`（未设置 `XDG_DATA_HOME` 时为 `~/.local/share/com.deepseek.dsh-desktop`） |
+| Windows | `%LOCALAPPDATA%\DSHBox` |
+| macOS | `~/Library/Application Support/com.deepseek.dsh-box` |
+| Linux | `$XDG_DATA_HOME/com.deepseek.dsh-box`（未设置 `XDG_DATA_HOME` 时为 `~/.local/share/com.deepseek.dsh-box`） |
 
 该目录下会生成 `node/`、`dsh/`、`npm-cache/` 与 `logs/`（`desktop.log`，时间为 UTC，超过 2 MB 自动轮转为 `.old`）。更新 dsh 或 Node 期间会短暂出现 `dsh-old/` 或 `node-old/` 备份目录，更新成功后自动清理。
 
@@ -94,8 +92,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
   "language": "zh-CN",
   "hide_tool_calls": false,
   "hide_stats_line": true,
-  "hide_statusbar": false,
-  "profile": "web"
+  "hide_statusbar": false
 }
 ```
 
@@ -107,20 +104,20 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 | 变量 | 作用 |
 |---|---|
-| `DSH_DESKTOP_ROOT` | 覆盖数据根目录 |
-| `DSH_DESKTOP_PORT` | 覆盖监听端口 |
-| `DSH_DESKTOP_DSH_HOME` | 覆盖 dsh 主目录（`DSH_HOME`） |
-| `DSH_DESKTOP_API_KEY` | 覆盖 API Key |
-| `DSH_DESKTOP_API_BASE` | 覆盖 API 基地址 |
+| `DSH_BOX_ROOT` | 覆盖数据根目录 |
+| `DSH_BOX_PORT` | 覆盖监听端口 |
+| `DSH_BOX_DSH_HOME` | 覆盖 dsh 主目录（`DSH_HOME`） |
+| `DSH_BOX_API_KEY` | 覆盖 API Key |
+| `DSH_BOX_API_BASE` | 覆盖 API 基地址 |
 | `DSHD_LANG` | 固定界面语言（`zh-CN` / `en`，重启后生效，优先级最高） |
 
 ### 便携模式
 
-把 `DSHDesktop.exe` 所在目录放一个空的 `portable.txt` 文件，数据目录（`node/`、`dsh/`、`logs/`、`config.json`）即跟随 exe 存放在旁边的 `data/` 目录，拷贝到 U 盘即可随身携带。删除 `portable.txt` 即恢复常规模式。`DSH_DESKTOP_ROOT` 环境变量仍优先于便携模式。
+把 `DSHBox.exe` 所在目录放一个空的 `portable.txt` 文件，数据目录（`node/`、`dsh/`、`logs/`、`config.json`）即跟随 exe 存放在旁边的 `data/` 目录，拷贝到 U 盘即可随身携带。删除 `portable.txt` 即恢复常规模式。`DSH_BOX_ROOT` 环境变量仍优先于便携模式。
 
 ### API Key
 
-解析顺序：`DSH_DESKTOP_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，未设置 `DSH_HOME` 时为 `~/.dsh/.credentials.yaml`）。
+解析顺序：`DSH_BOX_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，即 `~/.dsh-box/.credentials.yaml`）。
 
 > `config.json` 中的 API Key 以明文保存在当前用户的数据目录内，请勿提交到仓库或发送给他人。
 
@@ -137,7 +134,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 ```powershell
 # 一键构建（Windows）
 pwsh -NoLogo -NoProfile -File .\build.ps1
-# 输出：dist\DSHDesktop.exe
+# 输出：dist\DSHBox.exe
 
 # 分步
 npm install
@@ -151,7 +148,7 @@ node scripts\copy-exe.mjs
 ### 开发模式（改 UI 免编译）
 
 ```powershell
-pwsh -File .\dev-build.ps1   # 首次：构建不嵌入资源的开发版（dist-dev\DSHDesktop-dev.exe）
+pwsh -File .\dev-build.ps1   # 首次：构建不嵌入资源的开发版（dist-dev\DSHBox-dev.exe）
 pwsh -File .\dev-run.ps1     # 运行：自动启动 UI 静态服务器(4321) + 开发版 exe
 # 之后只改 ui/ 下的文件，重启 dev-run.ps1（或刷新页面）即生效；改 Rust 代码需重新 dev-build
 ```
@@ -170,7 +167,7 @@ desktop/
     lib.rs              # run() 组装、状态广播、导航、右键菜单注入脚本、自定义协议
     app_state.rs        # 共享状态：配置、引导阶段、生命周期锁、弹窗轮询数据
     commands.rs         # Tauri 命令层（IPC 转发，无业务实现）
-    app_dialog.rs       # 统一自绘弹窗（余额/检查更新/插件/文件变更/设置/关于）
+    app_dialog.rs       # 统一自绘弹窗（余额/检查更新/插件/设置/关于）
     dialog.rs           # 原生消息框封装（模态、互斥）
     file_actions.rs     # 本地文件动作（默认程序打开 / 定位 / 打开方式）
     icons.rs            # 图标提取（SHGetFileInfo → PNG，含缓存）
@@ -178,7 +175,6 @@ desktop/
     locale.rs           # 系统语言检测与中英文选择
     onboarding.rs       # 首次使用配置与持久化
     plugins.rs          # 插件搜索、安装/卸载与内置插件后台维护
-    session_diff.rs     # 最近会话的文件变更解析与安全还原
     stats.rs            # 会话统计读取、格式化与实时速率估算
     titlebar.rs         # 自绘标题栏（子 webview）
     tray_menu.rs        # 标题栏/托盘共用菜单模型；Windows 自绘托盘菜单窗口
@@ -201,7 +197,7 @@ desktop/
 
 ## 边界与规划
 
-DSHDesktop 是 dsh 的**桌面封装**，而不是另一套实现：
+DSHBox 是 dsh 的**桌面封装**，而不是另一套实现：
 
 - **不改动 dsh**：主界面直接加载官方 `dsh web`，dsh 照常独立升级，外壳随之跟进
 - **只做桌面层**：托盘、标题栏、系统通知、更新、本地文件菜单等桌面体验；不重复实现 dsh 的对话与会话能力，也不另存一份会话数据
@@ -220,14 +216,14 @@ DSHDesktop 是 dsh 的**桌面封装**，而不是另一套实现：
 
 ## 内置插件市场
 
-DSHDesktop 默认预装两个社区插件（均 MIT，经 `dsh plugin` CLI 安装）：
+DSHBox 默认预装两个社区插件（均 MIT，经 `dsh plugin` CLI 安装）：
 
 - [dsh-market](https://github.com/dsh-market/dsh-market)（npm 包 `dshmarket`）——dsh 内的可视化插件市场：社区插件目录浏览、搜索、一键安装、主题切换与备份恢复。
 - [dsh-file-drop](https://github.com/dannyvan/dsh-file-drop)（npm 包 `dsh-file-drop`）——拖拽/点击文件插入对话：Linux 经 uri-list 直取原始路径，Windows/macOS 走插件自带的工作区上传兜底。
 
 **自动安装**：dsh 服务就绪后自动安装未装的内置包并重启服务生效；仅首次引导执行（`market_bootstrapped` 标记）。
 **自动更新**：每 24 小时检查一次 npm 最新版本，落后则后台升级并重启服务；检查与升级均静默失败重试，不阻塞使用。
-**移除**：卸载任一内置包后（`dsh plugin --profile web remove <pkg>`），DSHDesktop 不会自动重装；更新检查也仅作用于仍已安装的包。
+**移除**：卸载任一内置包后（`dsh plugin --profile web remove <pkg>`），DSHBox 不会自动重装；更新检查也仅作用于仍已安装的包。
 市场内的插件均为第三方代码，安装前请确认来源可信；列表收录不等于安全背书（见上游 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的免责声明）。
 
 ## 致谢

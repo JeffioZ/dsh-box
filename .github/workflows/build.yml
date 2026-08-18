@@ -120,39 +120,39 @@ jobs:
         shell: bash
         run: |
           cd "src-tauri/target/${{ matrix.target }}/release"
-          zip -q "DSHDesktop-${{ matrix.asset }}.zip" DSHDesktop
-          mv "DSHDesktop-${{ matrix.asset }}.zip" "$GITHUB_WORKSPACE/"
+          zip -q "DSHBox-${{ matrix.asset }}.zip" DSHBox
+          mv "DSHBox-${{ matrix.asset }}.zip" "$GITHUB_WORKSPACE/"
 
       - name: Package artifact (cross Unix)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         shell: bash
         run: |
           cd "src-tauri/target/${{ matrix.cross }}/release"
-          zip -q "DSHDesktop-${{ matrix.cross-asset }}.zip" DSHDesktop
-          mv "DSHDesktop-${{ matrix.cross-asset }}.zip" "$GITHUB_WORKSPACE/"
+          zip -q "DSHBox-${{ matrix.cross-asset }}.zip" DSHBox
+          mv "DSHBox-${{ matrix.cross-asset }}.zip" "$GITHUB_WORKSPACE/"
 
       - name: Rename Windows asset
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
-        run: cp "src-tauri/target/${{ matrix.target }}/release/DSHDesktop.exe" "DSHDesktop-${{ matrix.asset }}.exe"
+        run: cp "src-tauri/target/${{ matrix.target }}/release/DSHBox.exe" "DSHBox-${{ matrix.asset }}.exe"
 
       - name: Upload artifact (native)
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: DSHDesktop-${{ matrix.asset }}
+          name: DSHBox-${{ matrix.asset }}
           path: |
-            DSHDesktop-${{ matrix.asset }}.exe
-            DSHDesktop-${{ matrix.asset }}.zip
+            DSHBox-${{ matrix.asset }}.exe
+            DSHBox-${{ matrix.asset }}.zip
           if-no-files-found: warn
 
       - name: Upload artifact (cross)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: DSHDesktop-${{ matrix.cross-asset }}
+          name: DSHBox-${{ matrix.cross-asset }}
           path: |
-            DSHDesktop-${{ matrix.cross-asset }}.zip
+            DSHBox-${{ matrix.cross-asset }}.zip
           if-no-files-found: warn
 
   # tag 触发（push v*）时：汇总五平台产物并自动发布 release。

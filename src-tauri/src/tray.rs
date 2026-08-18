@@ -55,7 +55,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg(not(windows))]
 fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let model = crate::tray_menu::items(true);
     let item = |id: &str| {
@@ -86,80 +86,30 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     )?;
     let plugins_item =
         MenuItem::with_id(app, "plugins", &item("plugins").label, true, None::<&str>)?;
-    let session_diff_item = MenuItem::with_id(
-        app,
-        "session_diff",
-        &item("session_diff").label,
-        true,
-        None::<&str>,
-    )?;
     let settings_item =
         MenuItem::with_id(app, "settings", &item("settings").label, true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", &item("quit").label, true, None::<&str>)?;
     let about_item = MenuItem::with_id(app, "about", &item("about").label, true, None::<&str>)?;
-    let profile_menu = if let Some(profile_model) = model.iter().find(|entry| entry.id == "profile")
-    {
-        let submenu = Submenu::with_id(app, profile_model.id.as_str(), &profile_model.label, true)?;
-        for child in &profile_model.children {
-            let child_item = CheckMenuItem::with_id(
-                app,
-                child.id.as_str(),
-                &child.label,
-                true,
-                child.checked.unwrap_or(false),
-                None::<&str>,
-            )?;
-            submenu.append(&child_item)?;
-        }
-        Some(submenu)
-    } else {
-        None
-    };
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    let sep4 = PredefinedMenuItem::separator(app)?;
-    if let Some(profile_menu) = profile_menu.as_ref() {
-        Menu::with_items(
-            app,
-            &[
-                &open_item,
-                &balance_item,
-                &browser_item,
-                &sep1,
-                &restart_item,
-                &check_item,
-                &plugins_item,
-                &session_diff_item,
-                &sep2,
-                &settings_item,
-                &sep3,
-                profile_menu,
-                &sep4,
-                &about_item,
-                &quit_item,
-            ],
-        )
-    } else {
-        Menu::with_items(
-            app,
-            &[
-                &open_item,
-                &balance_item,
-                &browser_item,
-                &sep1,
-                &restart_item,
-                &check_item,
-                &plugins_item,
-                &session_diff_item,
-                &sep2,
-                &settings_item,
-                &sep3,
-                &about_item,
-                &quit_item,
-            ],
-        )
-    }
+    Menu::with_items(
+        app,
+        &[
+            &open_item,
+            &balance_item,
+            &browser_item,
+            &sep1,
+            &restart_item,
+            &check_item,
+            &plugins_item,
+            &sep2,
+            &settings_item,
+            &sep3,
+            &about_item,
+            &quit_item,
+        ],
+    )
 }
 
 #[cfg(not(windows))]
@@ -188,9 +138,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
         "restart" => restart_from_tray(app),
         "check_update" => crate::app_dialog::open_check(app),
         "plugins" => crate::app_dialog::open_plugins(app),
-        "session_diff" => crate::app_dialog::open_session_diff(app),
         "settings" => crate::app_dialog::open_settings(app),
-        _ if id.starts_with("profile_") => switch_profile(app, id.trim_start_matches("profile_")),
         "about" => crate::app_dialog::open_about(app),
         "quit" => quit(app),
         _ => {}
@@ -467,25 +415,6 @@ fn restart_from_tray(app: &AppHandle) {
                 crate::locale::text("重启服务", "Restart service"),
                 MessageDialogKind::Warning,
             );
-        }
-    });
-}
-
-/// 切换启动 profile：持久化 → 重启服务（新 profile 启动）。
-fn switch_profile(app: &AppHandle, name: &str) {
-    let state = app.state::<AppState>();
-    if state.config().profile == name {
-        return;
-    }
-    if let Err(e) = state.set_profile(name) {
-        crate::logging::log(&format!("profile: 切换失败：{e}"));
-        return;
-    }
-    crate::logging::log(&format!("profile: 已切换至 {name}，重启服务生效"));
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        if let Err(e) = crate::updater::restart_service(&handle) {
-            crate::logging::log(&format!("profile: 重启服务失败（已保存配置）：{e}"));
         }
     });
 }

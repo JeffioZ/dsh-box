@@ -280,7 +280,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
         ),
     });
 
-    // node：检测“当前实际使用的 Node”（DSHDesktop 便携优先，其次系统安装的 Node）。
+    // node：检测“当前实际使用的 Node”（DSHBox 便携优先，其次系统安装的 Node）。
     let node_cfg = config.clone();
     let node_handle = std::thread::spawn(move || {
         let managed = node_cfg.node_exe().exists();
@@ -369,7 +369,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
 /// 应用自身更新检查：GitHub Releases latest 的版本号对比。
 /// 检查失败（网络/仓库不存在/无 Release）静默返回 None，不打扰用户。
 fn check_app_update() -> Option<VersionInfo> {
-    const REPO: &str = "JeffioZ/dsh-desktop";
+    const REPO: &str = "JeffioZ/dsh-box";
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     // 查询失败仍返回带错误信息的行（前端显示"暂无法获取版本信息"，
     // hover tips 展示原因，与其他更新行统一）
@@ -387,7 +387,7 @@ fn check_app_update() -> Option<VersionInfo> {
     };
     let resp = match runtime::check_client()
         .get(&url)
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .call()
     {
         Ok(r) => r,
@@ -476,7 +476,7 @@ fn latest_pwsh_version() -> Result<String, String> {
 
     let metadata_result = runtime::check_client()
         .get("https://raw.githubusercontent.com/PowerShell/PowerShell/master/tools/metadata.json")
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .call()
         .map_err(|e| e.to_string())
         .and_then(|response| {
@@ -503,7 +503,7 @@ fn latest_pwsh_version() -> Result<String, String> {
 fn github_latest_stable() -> Result<String, String> {
     let response = runtime::check_client()
         .get("https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30")
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| format!("GitHub API: {e}"))?;
@@ -799,7 +799,7 @@ fn update_app_exe(app: &AppHandle, config: &crate::app_state::Config) -> Result<
     {
         let dir = config.root.join("exe-update");
         std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败：{e}"))?;
-        let target = dir.join("DSHDesktop.exe");
+        let target = dir.join("DSHBox.exe");
         // 预下载判定：仅当内存标记存在且文件通过 MZ 校验才算"已就绪"。
         // 残留的截断文件/上一轮已应用的旧文件（无标记或校验失败）一律
         // 清除并重新下载——否则会把旧版 exe 当"更新"应用（降级）或损坏文件直接应用。
@@ -841,7 +841,7 @@ fn download_app_exe(app: &AppHandle, target: &std::path::Path) -> Result<(), Str
 #[cfg(windows)]
 fn download_app_exe_inner(app: &AppHandle, target: &std::path::Path) -> Result<(), String> {
     const ASSET_URL: &str =
-        "https://github.com/JeffioZ/dsh-desktop/releases/latest/download/DSHDesktop-windows-x64.exe";
+        "https://github.com/JeffioZ/dsh-box/releases/latest/download/DSHBox-windows-x64.exe";
     // 1) 下载（流式写盘，1 小时整体预算，与 Node 归档下载同一客户端）
     emit_progress(
         app,
@@ -849,7 +849,7 @@ fn download_app_exe_inner(app: &AppHandle, target: &std::path::Path) -> Result<(
     );
     let resp = runtime::download_client()
         .get(ASSET_URL)
-        .header("User-Agent", "DSHDesktop")
+        .header("User-Agent", "DSHBox")
         .call()
         .map_err(|e| format!("下载失败：{e}"))?;
     // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
@@ -907,7 +907,7 @@ fn apply_downloaded_exe(app: &AppHandle, target: &std::path::Path) -> Result<(),
     // 4) 写替换脚本（进程退出后：等锁释放 → 备份当前 exe → 复制新版 → 启动；
     //    复制失败自动把备份移回，避免 exe 被移走留下损坏安装）
     let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
-    let backup = dir.join("DSHDesktop.exe.old");
+    let backup = dir.join("DSHBox.exe.old");
     let script = dir.join("replace.ps1");
     // PowerShell 单引号字符串内转义：' → ''
     let ps_quote = |s: &std::path::Path| s.to_string_lossy().replace('\'', "''");
@@ -997,7 +997,7 @@ pub fn prefetch_app_update(app: &AppHandle) {
             if std::fs::create_dir_all(&dir).is_err() {
                 return;
             }
-            let target = dir.join("DSHDesktop.exe");
+            let target = dir.join("DSHBox.exe");
             crate::logging::log(&format!(
                 "updater: 后台预下载应用更新 {}（当前 {}）",
                 info.latest, info.installed

@@ -1,4 +1,4 @@
-/* DSHDesktop 共享设计基础：数值与 dsh 设计系统对齐
+/* DSHBox 共享设计基础：数值与 dsh 设计系统对齐
    （client/ui-theme/src/styles/design-platform.css）
    - 深色：卡片 bluish-800 / 文字 bluish-50 / 次级 bluish-400
    - 浅色：卡片纯白 / 文字 bluish-1000 / 次级 bluish-600
@@ -154,50 +154,13 @@
 .dshd-row .ic svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .dshd-row .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dshd-row .dim { flex: none; font-size: 12px; color: var(--dshd-text-dim); }
-.dshd-row .arrow {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 16px;
-  height: 16px;
-  color: var(--dshd-text-dim);
-}
-.dshd-row .arrow::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  box-sizing: border-box;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: translateX(-1px) rotate(-45deg);
-  transition: transform var(--dshd-m-base) ease;
-}
-.dshd-row .arrow.expanded::before { transform: translateY(-1px) rotate(45deg); }
-.dshd-row .check { flex: none; width: 16px; color: var(--dshd-accent); font-size: 13px; line-height: 1; text-align: center; }
-.dshd-row.child { width: calc(100% - 12px); margin-left: 12px; padding-left: 8px; }
 
-/* 系统“减弱动态效果”：关闭箭头旋转、hover 过渡与子行动效 */
+/* 系统“减弱动态效果”：关闭 hover 过渡 */
 @media (prefers-reduced-motion: reduce) {
-  .dshd-row .arrow::before { transition: none; }
   .dshd-row, .dshd-btn, .dshd-x { transition: none; }
-  .dshd-row.child, .dshd-row.child-collapsing { animation: none; }
 }
 
 .dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
-
-/* 菜单子行展开/收起微动效：托盘菜单与标题栏主菜单共用。
-   展开时子行淡入下滑；收起时先淡出上滑（由 menu.js 延迟移除） */
-@keyframes dshd-child-in {
-  from { opacity: 0; transform: translateY(-6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.dshd-row.child { animation: dshd-child-in var(--dshd-m-fast) ease-out; }
-@keyframes dshd-child-out {
-  to { opacity: 0; transform: translateY(-4px); }
-}
-.dshd-row.child-collapsing { animation: dshd-child-out var(--dshd-m-fast) ease-in forwards; }
 
 /* 弹窗按钮 */
 .dshd-btn {
