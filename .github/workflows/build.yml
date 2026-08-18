@@ -111,25 +111,43 @@ jobs:
         if: matrix.cross != '' && github.event_name != 'pull_request'
         run: cargo build --locked --release --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml
 
-      # 打包为 zip：一步解压得到可执行本体，macOS 双击解压无 .tar.gz 的两层中间态；
+      # 打包为 zip：一步解压得到可执行本体，Linux 双击解压无 .tar.gz 的两层中间态；
       # zip 在 Unix 上记录可执行位，下载解压后可直接运行。
-      # 产物用面向用户的 asset 名（如 windows-x64 / macos-arm64 / linux-arm64），
+      # 产物用面向用户的 asset 名（如 windows-x64 / linux-arm64），
       # 而非 Rust target triple。
-      - name: Package artifact (native Unix)
-        if: runner.os != 'Windows' && github.event_name != 'pull_request'
+      - name: Package artifact (Linux)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         shell: bash
         run: |
           cd "src-tauri/target/${{ matrix.target }}/release"
           zip -q "DSHBox-${{ matrix.asset }}.zip" DSHBox
           mv "DSHBox-${{ matrix.asset }}.zip" "$GITHUB_WORKSPACE/"
 
-      - name: Package artifact (cross Unix)
+      # macOS：用 tauri CLI 把已构建的二进制打包为 .app 并生成 dmg（tauri bundle 只打包
+      # 不编译，复用上方 Release build 产物；--no-sign 显式跳过签名，产物未签名，
+      # Gatekeeper 首次运行需手动放行）。dmg 默认名为 <productName>_<ver>_<arch>.dmg
+      # （productName 含空格），重命名为统一 asset 名。
+      - name: Install JS toolchain (macOS bundle)
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        run: npm ci
+
+      - name: Bundle macOS app (native)
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          cd src-tauri
+          npx tauri bundle --no-sign --bundles dmg --target ${{ matrix.target }}
+          cd "target/${{ matrix.target }}/release/bundle/dmg"
+          mv "$(ls *.dmg | head -1)" "$GITHUB_WORKSPACE/DSHBox-${{ matrix.asset }}.dmg"
+
+      - name: Bundle macOS app (cross)
         if: matrix.cross != '' && github.event_name != 'pull_request'
         shell: bash
         run: |
-          cd "src-tauri/target/${{ matrix.cross }}/release"
-          zip -q "DSHBox-${{ matrix.cross-asset }}.zip" DSHBox
-          mv "DSHBox-${{ matrix.cross-asset }}.zip" "$GITHUB_WORKSPACE/"
+          cd src-tauri
+          npx tauri bundle --no-sign --bundles dmg --target ${{ matrix.cross }}
+          cd "target/${{ matrix.cross }}/release/bundle/dmg"
+          mv "$(ls *.dmg | head -1)" "$GITHUB_WORKSPACE/DSHBox-${{ matrix.cross-asset }}.dmg"
 
       - name: Rename Windows asset
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
@@ -141,9 +159,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: DSHBox-${{ matrix.asset }}
-          path: |
-            DSHBox-${{ matrix.asset }}.exe
-            DSHBox-${{ matrix.asset }}.zip
+          path: DSHBox-${{ matrix.asset }}.*
           if-no-files-found: warn
 
       - name: Upload artifact (cross)
@@ -151,8 +167,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: DSHBox-${{ matrix.cross-asset }}
-          path: |
-            DSHBox-${{ matrix.cross-asset }}.zip
+          path: DSHBox-${{ matrix.cross-asset }}.*
           if-no-files-found: warn
 
   # tag 触发（push v*）时：汇总五平台产物并自动发布 release。

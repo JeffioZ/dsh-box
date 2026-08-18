@@ -25,7 +25,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **单文件分发** | Windows 单个 exe、无控制台窗口，双击即用；macOS/Linux 解压即用 |
+| **单文件分发** | Windows 单个 exe、无控制台窗口，双击即用；macOS dmg 拖入 Applications；Linux 解压即用 |
 | **零依赖准备** | 自动检测并安装 Node.js 与 dsh；Windows 缺少 WebView2 时引导安装 |
 | **一键更新** | dsh 与 Node.js 事务化更新（失败自动回滚，被打断下次启动自动还原）；应用本体自更新（Windows） |
 | **服务自愈** | 单实例、看门狗自动恢复、端口冲突自动回退、页面挂起自动重载 |
@@ -56,16 +56,17 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应平台的产物：
 
 - Windows：直接运行 `DSHBox.exe`
-- macOS / Linux：解压 `.zip` 后运行 `DSHBox`
+- macOS：下载 `.dmg`，打开后把 **DeepSeek Harness Box** 拖入 Applications，再从启动台/Applications 启动
+- Linux：解压 `.zip` 后运行 `DSHBox`
 
 各平台产物以最新 Release 附件为准，GitHub Actions 也会产出各平台的构建产物。所有产物均未签名，系统安全策略可能要求手动允许。
 
 **macOS 首次运行被 Gatekeeper 拦截时**（提示"无法验证…是否包含恶意软件"）：
 
-1. 右键（或按住 `Ctrl` 点击）`DSHBox` → **打开** → 在弹窗中再次点击 **打开**，仅首次需要；
-2. 或在终端执行（`/path/to` 换成实际路径）：
+1. 右键（或按住 `Ctrl` 点击）应用图标 → **打开** → 在弹窗中再次点击 **打开**，仅首次需要；
+2. 或在终端执行（把应用拖入终端即可自动填入路径）：
    ```bash
-   xattr -dr com.apple.quarantine /path/to/DSHBox
+   xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness Box.app"
    ```
 3. 若仍被拦：系统设置 → 隐私与安全性 → 找到对应提示 → 点击"仍要打开"。
 
