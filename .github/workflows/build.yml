@@ -143,6 +143,8 @@ jobs:
             [ -z "$t" ] && continue
             npx tauri bundle --no-sign --bundles dmg --target "$t"
             arch="${t%%-*}"
+            # tauri 对 x86_64 target 的 dmg 后缀用 x64（macOS 惯例），非 target triple 原样
+            [ "$arch" = "x86_64" ] && arch="x64"
             dmg="target/$t/release/bundle/dmg/DeepSeek Harness Box_${ver}_${arch}.dmg"
             [ -f "$dmg" ] || { echo "::error::dmg 未生成: $dmg"; exit 1; }
             mv "$dmg" "$GITHUB_WORKSPACE/DSHBox-$a.dmg"
