@@ -72,7 +72,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 该提示源于产物未签名/未公证（见"平台支持"），与软件本身无关；签名公证后即可消除。
 
-首次运行会自动补齐运行环境——按需安装 Node.js 与 dsh 包——随后启动 `dsh web`（默认端口 3080）。Linux 还需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
+首次运行会自动补齐运行环境——按需安装 Node.js 与 dsh 包——随后启动 `dsh web`（默认端口 18080）。Linux 还需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
 
 **第一次启动的旅程**：
 
@@ -98,7 +98,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 ```json
 {
-  "port": 3080,
+  "port": 18080,
   "api_key": "sk-...",
   "api_base": "https://api.deepseek.com",
   "language": "zh-CN",

@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::processes::TreeGuard;
 
-/// 默认端口（与 dsh web 默认一致）。
-pub const DEFAULT_PORT: u16 = 3080;
+/// 默认端口。高位端口：避开 Windows Hyper-V/WSL 动态保留段（常见于 2914~3713
+/// 一带），保证开箱即用不冲突；被占用时启动流程仍会自动顺延（见 dsh.rs）。
+pub const DEFAULT_PORT: u16 = 18080;
 /// 应用数据根目录名；与 README 公布的各平台路径保持一致。
 #[cfg(windows)]
 pub const APP_DIR_NAME: &str = "DSHBox";

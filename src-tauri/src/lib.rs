@@ -1776,7 +1776,7 @@ mod url_tests {
             None
         ));
         assert!(!is_local_app_url(
-            &"http://tauri.localhost:3080/index.html".parse().unwrap(),
+            &"http://tauri.localhost:18080/index.html".parse().unwrap(),
             None
         ));
     }
