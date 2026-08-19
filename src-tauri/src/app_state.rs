@@ -80,6 +80,9 @@ pub struct Config {
     pub hide_stats_line: bool,
     /// 隐藏窗口底部自绘状态栏（会话统计与余额一并隐藏，默认显示）。
     pub hide_statusbar: bool,
+    /// 是否自动升级内置插件（dshmarket/dsh-file-drop，默认开启；
+    /// 首次预装引导不受此开关影响）。
+    pub auto_update_plugins: bool,
 }
 
 impl Config {
@@ -115,6 +118,7 @@ impl Config {
             hide_tool_calls: false,
             hide_stats_line: true,
             hide_statusbar: false,
+            auto_update_plugins: true,
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
@@ -150,6 +154,9 @@ impl Config {
                 }
                 if let Some(hide) = json.get("hide_statusbar").and_then(|v| v.as_bool()) {
                     cfg.hide_statusbar = hide;
+                }
+                if let Some(upd) = json.get("auto_update_plugins").and_then(|v| v.as_bool()) {
+                    cfg.auto_update_plugins = upd;
                 }
             }
         }
@@ -790,6 +797,19 @@ impl AppState {
             serde_json::Value::Bool(next),
         )?;
         self.lock_inner().config.hide_statusbar = next;
+        Ok(next)
+    }
+
+    /// 切换“自动升级内置插件”开关，持久化到 config.json，返回新值。
+    pub fn toggle_auto_update_plugins(&self) -> Result<bool, String> {
+        let config = self.config();
+        let next = !config.auto_update_plugins;
+        save_config_value(
+            &config.root,
+            "auto_update_plugins",
+            serde_json::Value::Bool(next),
+        )?;
+        self.lock_inner().config.auto_update_plugins = next;
         Ok(next)
     }
 

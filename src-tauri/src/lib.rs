@@ -1084,11 +1084,11 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-/// dev 构建自愈：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
+/// dev 构建：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
 /// 未监听时自动拉起 node scripts/serve-ui.mjs 并等待就绪（最多 5s）。
-/// 仅 dev 构建启用；返回 true 表示本次由本函数启动了服务器
-/// （调用方应在窗口创建后 reload 启动页——页面可能已在服务器就绪前
-/// 加载失败）。
+/// 仅 dev 构建启用；返回 true 表示本次由本函数启动了服务器。
+/// 必须在主窗口创建前调用：保证 webview 首次加载即成功，无需 reload
+/// （reload 会重置页面状态、导致启动面板重复显示/闪烁）。
 fn ensure_dev_ui_server(app: &AppHandle) -> bool {
     use std::net::TcpStream;
     use std::time::Duration;
@@ -1381,6 +1381,11 @@ pub fn run() {
             if app.config().build.dev_url.is_some() {
                 app_state::mark_dev_build();
             }
+            // dev 构建：先拉起 UI 静态服务器（同步等待就绪 ≤5s）再创建窗口——
+            // 主 webview 首次加载即成功，避免“加载失败 → 服务器就绪后 reload”
+            // 的白屏与页面闪烁（reload 会重置页面状态、启动面板重复显示）。
+            // 仅 dev 构建启用（dev_url 非 None），生产构建直接返回 false。
+            let dev_ui_ready = ensure_dev_ui_server(app.handle());
             // 手建主窗口（conf windows 为空）：带初始化脚本预设 dsh 深色主题，
             // 背景色跟随系统主题，与 dsh/loading 底色统一，消除启动与导航的明暗闪烁
             let navigation_app = app.handle().clone();
@@ -1597,19 +1602,15 @@ pub fn run() {
             }
             // 按 DPI 设置窗口图标（标题栏/任务栏 1:1 像素，避免系统缩放糊化）
             window::set_window_icon(app.handle());
-            // dev 构建自愈：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
-            // 服务器未监听时全部自绘 UI 白屏——自动拉起 node scripts/serve-ui.mjs
-            // 并等待就绪（仅 dev 构建启用，生产构建 devUrl 为 None 不受影响）。
-            // 返回 true = 本次刚启动服务器：主 webview 的启动页可能已在
-            // 服务器就绪前加载失败，窗口创建后 reload 自愈
-            let dev_ui_restarted = ensure_dev_ui_server(app.handle());
-            // dev 自愈刚拉起 UI 服务器：内置页面可能已在服务器就绪前
-            // 加载失败（白屏）——延迟 reload 全部内置窗口使页面重新加载
-            if dev_ui_restarted {
+            // dev 兜底：仅 dev 构建且服务器未就绪（冷启动慢、被安全软件
+            // 拦截后放行）时主 webview 可能白屏——延迟 reload 一次自愈；
+            // 生产构建 dev_url 为 None（ensure 恒返回 false）与正常 dev
+            // 路径（服务器已就绪）都不触发，不产生闪烁
+            if app.config().build.dev_url.is_some() && !dev_ui_ready {
                 let reload_handle = app.handle().clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(800));
-                    logging::log("dev-ui: 服务器已拉起，重载内置页面");
+                    std::thread::sleep(std::time::Duration::from_millis(3000));
+                    logging::log("dev-ui: 服务器未就绪，延迟重载内置页面兜底");
                     for (_, window) in reload_handle.webview_windows() {
                         for (_, wv) in window.webviews() {
                             let _ = wv.reload();

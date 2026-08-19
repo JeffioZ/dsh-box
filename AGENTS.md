@@ -39,7 +39,7 @@ cargo test --manifest-path src-tauri/Cargo.toml # 单测
 - **更新事务**：`update_txn.rs` 提供"备份 + 标记 + 中断恢复"原语；`updater.rs` 的 dsh/Node 更新与回滚都基于它。新增任何"替换文件"类操作（如 exe 自更新）必须复用该事务模式。
 - **进程树**：`processes.rs` 用 Windows Job / Unix 进程组守卫，退出时清理全部子进程，不留孤儿。
 - **启动流程**：`dsh.rs::boot_loop` → `boot_once`（Node/dsh 就绪 → 静默更新检查 `silent_check` → 启动 `dsh web` → `wait_ready` → 通知前端 `dsh-status` ready → `navigate`）。看门狗 `watchdog` 负责服务异常恢复。**新增"启动页步骤"（如首次配置）应插入 `boot_once` 的状态机，而不是另起线程抢状态。**
-- **内置插件市场**：`plugins.rs::start_market_bootstrap` 在 dsh 就绪后自动预装 npm 包 `dshmarket` 与 `dsh-file-drop`（均 MIT）并重启服务；预装仅首次引导执行（`market_bootstrapped` 标记，用户卸载后不自动重装），此后每 24h（`market_last_check` 门控）检查仍已安装包的 npm latest 落后则后台升级。全部走 `dsh plugin` CLI（合法通道③），失败静默重试，不阻塞启动。
+- **内置插件市场**：`plugins.rs::start_market_bootstrap` 在 dsh 就绪后自动预装 npm 包 `dshmarket` 与 `dsh-file-drop`（均 MIT）并重启服务；预装仅首次引导执行（按包记录 `market_bootstrapped_<pkg>` 标记，用户卸载后不自动重装），此后每 24h（`market_last_check` 门控 + 常驻循环，首次同步延迟 90s）检查仍已安装包的 npm latest 落后则后台升级。全部走 `dsh plugin` CLI（合法通道③），失败静默退避重试（通用 1h / supply-chain 冷却期与安全软件拦截 24h），不阻塞启动；pnpm virtual store 错位（`ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`）自动备份重建 node_modules 自愈；所有 pnpm 操作经 `run_dsh_plugin_auto` 的 `MARKET_PNPM_LOCK` 互斥。设置页可关自动升级（`auto_update_plugins`，引导不受影响），插件管理页可手动检查/更新（`plugin_updates`/`plugin_update`）。**内置身份与安装来源绑定**：用户主动卸载内置包（`plugins::remove`）会写 `market_user_removed_<pkg>` 标记，此后重装不再视为内置（无标签、不自动更新，仍可手动更新），强制下线清理亦豁免。**内置清单变更流程**：新增 = 加入 `MARKET_PKGS`（引导自动装）；普通下线 = 移出 `MARKET_PKGS`（停止维护，已装保留，用户自卸）；强制下线/撤回 = 移出 `MARKET_PKGS` 并加入 `MARKET_REMOVED`（下次启动自动卸载已装且仍为内置身份的包；同一包不得同时在两个清单）。
 - **主题跟随窗口**：主窗口/弹窗/托盘菜单首次创建与切换共用 `Config::resolve_dsh_theme`。
 - **单实例**：`tauri-plugin-single-instance`；重复启动把参数转给已运行实例。
 

@@ -216,6 +216,14 @@
     .pitem .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pitem .desc { font-size: 12px; color: var(--dshd-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pitem .ver { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
+    .pitem .pactions { display: flex; gap: 6px; flex: none; }
+    /* 内置插件标签：中性低调，单行不换行（紧凑标签不折行规则） */
+    .pitem .pbadge {
+      display: inline-block; margin-left: 6px; padding: 1px 6px;
+      font-size: 10px; line-height: 1.6; border-radius: 999px;
+      background: var(--dshd-pressed); color: var(--dshd-text-dim);
+      white-space: nowrap; vertical-align: middle; font-weight: 500;
+    }
     .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
     /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
     .dshd-btn.danger {
@@ -603,7 +611,7 @@
 
     // —— 设置（统一弹窗内：开机自启 / 隐藏工具调用 / 隐藏统计行） ——
     let settingsBusy = false;
-    const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar'];
+    const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'auto_update_plugins'];
     function settingsRow(key, nameKey, descKey) {
       return (
         '<label class="srow">' +
@@ -623,6 +631,7 @@
         settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
         settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
         settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
+        settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
         '</div>' +
         '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
       body.querySelectorAll('.sswitch').forEach((el) => {
@@ -718,11 +727,13 @@
         '<div class="psection hidden" id="p-results-sec">' +
         '<h3>' + esc(dshdT('pluginResults')) + ' <span class="pcount" id="p-results-count"></span></h3>' +
         '<ul class="plist" id="p-results"></ul></div>' +
-        '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
+        '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span>' +
+        ' <button type="button" class="dshd-btn small" id="p-builtin-check">' + esc(dshdT('pluginCheckUpdates')) + '</button></h3>' +
         '<ul class="plist" id="p-installed"></ul></div>';
       foot(dshdT('close'));
       $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
       $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(buildQuery($('p-query').value, activeCat)); });
+      $('p-builtin-check').addEventListener('click', refreshBuiltinStatus);
       document.querySelectorAll('.pcat-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('.pcat-btn').forEach((b) => {
@@ -750,6 +761,68 @@
         });
       });
       refreshPlugins();
+      refreshBuiltinStatus();
+    }
+    // —— 插件更新状态（检查更新覆盖全部已安装插件；内置标签 + 版本对比 + 按包更新） ——
+    let updateBusy = false;
+    // 检查更新序号：连点/并发时旧结果不覆盖新结果（仿 pluginSearchSeq）
+    let updateCheckSeq = 0;
+    // pkg → UpdateStatus：plugin_updates 的结果缓存，渲染已安装列表时使用
+    let updateStatus = new Map();
+    async function refreshBuiltinStatus() {
+      const seq = ++updateCheckSeq;
+      try {
+        const list = await invoke('plugin_updates');
+        if (openKind !== 'plugins' || seq !== updateCheckSeq) return;
+        updateStatus = new Map((list || []).map((s) => [s.pkg, s]));
+        await refreshPlugins();
+        // 冷却期内的新版已不计入 update_available：统计即“现在可更新”的数量
+        const updatable = (list || []).filter((s) => s.update_available).length;
+        if (updatable > 0) {
+          pluginStatus(dshdT('pluginUpdatesFound', { count: updatable }), '');
+        } else {
+          pluginStatus(dshdT('pluginUpdatesChecked'), 'ok');
+        }
+      } catch (e) {
+        if (openKind === 'plugins' && seq === updateCheckSeq) {
+          pluginStatus(dshdT('pluginUpdateFailed', { message: e }), 'err');
+        }
+      }
+    }
+    // 插件的更新状态描述（显示在行内 desc 位置；仅在有值得注意的状态时替换插件描述）
+    function updateStatusText(st) {
+      if (!st) return null;
+      if (st.error) return st.error;
+      if (!st.installed) return dshdT('pluginNotInstalled');
+      if (st.update_available) return dshdT('pluginUpdateAvailable');
+      return null; // 已是最新：保持插件描述，无箭头无按钮即暗示
+    }
+    async function doPluginUpdate(pkg) {
+      if (updateBusy) return;
+      updateBusy = true;
+      setPluginsBusy(true);
+      const checkBtn = $('p-builtin-check');
+      if (checkBtn) checkBtn.disabled = true;
+      pluginStatus(dshdT('pluginUpdating'));
+      try {
+        const st = await invoke('plugin_update', { name: pkg });
+        if (openKind !== 'plugins') return;
+        if (st && st.error) {
+          pluginStatus(dshdT('pluginUpdateFailed', { message: st.error }), 'err');
+        } else if (st && st.cooldown_until) {
+          pluginStatus(dshdT('pluginCooldown', { version: cleanVersion(st.latest) }), 'err');
+        } else {
+          pluginStatus(dshdT('pluginUpdated'), 'ok');
+        }
+        updateStatus = new Map(updateStatus).set(pkg, st);
+        await refreshPlugins();
+      } catch (e) {
+        pluginStatus(dshdT('pluginUpdateFailed', { message: e }), 'err');
+      } finally {
+        updateBusy = false;
+        setPluginsBusy(false);
+        if (checkBtn) checkBtn.disabled = false;
+      }
     }
     function pluginStatus(text, kind) {
       const el = $('p-status');
@@ -786,7 +859,7 @@
         button.disabled = busy;
       });
     }
-    function pluginItemRow(p, actions) {
+    function pluginItemRow(p, actions, verText, descText) {
       const li = document.createElement('li');
       li.className = 'pitem';
       // 包名首字母徽标（无图标源时的视觉锚点）
@@ -800,19 +873,30 @@
       info.className = 'info';
       const name = document.createElement('div');
       name.className = 'name';
-      name.textContent = p.name;
+      if (p.builtin) {
+        // 内置插件：包名 + 低调标签（单行不换行）
+        const txt = document.createElement('span');
+        txt.textContent = p.name;
+        const badge = document.createElement('span');
+        badge.className = 'pbadge';
+        badge.textContent = dshdT('pluginBuiltin');
+        name.append(txt, badge);
+      } else {
+        name.textContent = p.name;
+      }
       name.dataset.truncTip = '';
       const desc = document.createElement('div');
       desc.className = 'desc';
-      desc.textContent = p.description || '';
+      // 内置插件行传入更新状态文本（新版本/冷却中/失败等），否则显示插件描述
+      desc.textContent = descText != null ? descText : (p.description || '');
       // 截断才提示（显示完整无额外信息则不设 title）
       desc.dataset.truncTip = '';
       info.append(name, desc);
       li.append(info);
-      if (p.version) {
+      if (p.version || verText) {
         const ver = document.createElement('span');
         ver.className = 'ver';
-        ver.textContent = cleanVersion(p.version);
+        ver.textContent = verText || cleanVersion(p.version);
         li.append(ver);
       }
       li.append(actions);
@@ -837,6 +921,27 @@
         return;
       }
       for (const p of list) {
+        const actions = document.createElement('div');
+        actions.className = 'pactions';
+        // 检查过的插件行：状态文本 + 版本对比 + 更新按钮（冷却期/失败时无按钮）
+        let verText = null;
+        let descText = null;
+        const st = updateStatus.get(p.name);
+        if (st) {
+          descText = updateStatusText(st);
+          if (st.latest && st.installed && st.update_available) {
+            verText = cleanVersion(st.installed) + ' → ' + cleanVersion(st.latest);
+          }
+          if (st.update_available && !st.cooldown_until && !st.error) {
+            const up = document.createElement('button');
+            up.type = 'button';
+            up.className = 'dshd-btn plugin-action';
+            up.textContent = dshdT('pluginUpdate');
+            up.disabled = updateBusy || pluginsBusy;
+            up.addEventListener('click', () => doPluginUpdate(p.name));
+            actions.append(up);
+          }
+        }
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'dshd-btn danger plugin-action';
@@ -852,7 +957,41 @@
           } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
           finally { setPluginsBusy(false); await refreshPlugins(); }
         });
-        ul.append(pluginItemRow(p, btn));
+        actions.append(btn);
+        ul.append(pluginItemRow(p, actions, verText, descText));
+      }
+      // 已卸载的内置包：保持可见（未安装 + 安装按钮），避免失去重装入口
+      for (const [name, st] of updateStatus) {
+        if (!st || !st.builtin) continue;
+        if (list.some((p) => p.name === name)) continue;
+        const actions = document.createElement('div');
+        actions.className = 'pactions';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dshd-btn plugin-action';
+        btn.textContent = dshdT('pluginInstall');
+        btn.disabled = pluginsBusy;
+        btn.addEventListener('click', async () => {
+          if (pluginsBusy) return;
+          setPluginsBusy(true);
+          pluginStatus(dshdT('pluginInstalling', { name }));
+          try {
+            await invoke('plugin_install', { name });
+            pluginStatus(dshdT('pluginInstalled', { name }), 'ok');
+          } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
+          finally {
+            setPluginsBusy(false);
+            await refreshPlugins();
+            await refreshBuiltinStatus();
+          }
+        });
+        actions.append(btn);
+        ul.append(pluginItemRow(
+          { name, version: (st && st.latest) || '', description: '', builtin: true },
+          actions,
+          null,
+          (st && st.error) || dshdT('pluginNotInstalled')
+        ));
       }
       applyTruncationTips($('body'));
     }

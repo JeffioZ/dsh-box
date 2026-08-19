@@ -212,6 +212,27 @@ pub async fn plugin_remove(
     crate::plugins::remove(&app, &name)
 }
 
+/// 检查内置插件（dshmarket/dsh-file-drop）是否有新版本（只读）。
+#[tauri::command]
+pub async fn plugin_updates(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::UpdateStatus>, String> {
+    ensure_local_origin(&webview)?;
+    crate::plugins::check_updates(&app)
+}
+
+/// 手动升级单个插件（绕过退避与门控；成功后自动重启服务）。
+#[tauri::command]
+pub async fn plugin_update(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<crate::plugins::UpdateStatus, String> {
+    ensure_local_origin(&webview)?;
+    crate::plugins::update_pkg(&app, &name)
+}
+
 // ---------- 自绘标题栏（titlebar 子 webview 调用） ----------
 
 #[tauri::command]
@@ -305,6 +326,7 @@ pub struct SettingsState {
     pub hide_tool_calls: bool,
     pub hide_stats_line: bool,
     pub hide_statusbar: bool,
+    pub auto_update_plugins: bool,
 }
 
 fn settings_state(app: &AppHandle) -> SettingsState {
@@ -314,6 +336,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         hide_tool_calls: config.hide_tool_calls,
         hide_stats_line: config.hide_stats_line,
         hide_statusbar: config.hide_statusbar,
+        auto_update_plugins: config.auto_update_plugins,
     }
 }
 
@@ -358,6 +381,11 @@ pub fn settings_set(
             }
             // 即时生效：重新同步三区块边界（隐藏时状态区 0 高、主区到底）。
             crate::titlebar::sync_bounds(&app);
+        }
+        "auto_update_plugins" => {
+            if state.config().auto_update_plugins != value {
+                state.toggle_auto_update_plugins()?;
+            }
         }
         _ => return Err(crate::locale::text("未知设置项。", "Unknown setting.").into()),
     }
@@ -490,6 +518,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         plugin_search,
         plugin_install,
         plugin_remove,
+        plugin_updates,
+        plugin_update,
         crate::balance::api_balance,
         titlebar_minimize,
         titlebar_toggle_maximize,

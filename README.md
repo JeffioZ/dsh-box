@@ -233,9 +233,10 @@ DSHBox 默认预装两个社区插件（经 `dsh plugin` CLI 安装；`dsh-file-
 - [dsh-market](https://github.com/dsh-market/dsh-market)（npm 包 `dshmarket`）——dsh 内的可视化插件市场：社区插件目录浏览、搜索、一键安装、主题切换与备份恢复。
 - [dsh-file-drop](https://github.com/dannyvan/dsh-file-drop)（npm 包 `dsh-file-drop`）——拖拽/点击文件插入对话：Linux 经 uri-list 直取原始路径，Windows/macOS 走插件自带的工作区上传兜底。
 
-**自动安装**：dsh 服务就绪后自动安装未装的内置包并重启服务生效；仅首次引导执行（`market_bootstrapped` 标记）。
-**自动更新**：每 24 小时检查一次 npm 最新版本，落后则后台升级并重启服务；检查与升级均静默失败重试，不阻塞使用。
+**自动安装**：dsh 服务就绪后自动安装未装的内置包并重启服务生效；仅首次引导执行（按包记录 `market_bootstrapped_<pkg>` 标记）。
+**自动更新**：每 24 小时检查一次 npm 最新版本，落后则后台升级并重启服务；检查与升级均静默失败重试，不阻塞使用。可在「设置 → 自动更新内置插件」关闭自动升级（首次预装引导不受影响），或随时在「插件管理」页手动「检查更新 / 更新」。
 **移除**：卸载任一内置包后（`dsh plugin --profile web remove <pkg>`），DSHBox 不会自动重装；更新检查也仅作用于仍已安装的包。
+**安全软件兼容**：插件安装/升级通过 Node.js 调用 pnpm 执行。若安全软件（如火绒）拦截 node.exe 并弹窗询问，请在信任区添加 DSHBox 数据目录（Windows 默认 `%LOCALAPPDATA%\DSHBox`）或其中的 `node\node.exe`；未放行时自动升级会退避重试（24 小时内不重复打扰），可改用「插件管理」页手动更新。
 市场内的插件均为第三方代码，安装前请确认来源可信；列表收录不等于安全背书（见上游 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的免责声明）。
 
 ## 致谢
