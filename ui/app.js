@@ -4,6 +4,13 @@
 
 const $ = (id) => document.getElementById(id);
 
+/// onboarding 面板是否可见（未保存/未跳过）：期间 boot 后台推进但不应
+/// 让状态区/更新区/整体淡出干扰配置面板。
+const onboardingActive = () => {
+  const box = $('ob-box');
+  return !!(box && !box.classList.contains('hidden'));
+};
+
 const PHASE_KEYS = {
   'starting': 'starting',
   'installing-node': 'installingNode',
@@ -40,8 +47,10 @@ function setStatus(phase, message, detail) {
   if (phase === 'ready') {
     spinner.classList.add('hidden');
     fill.classList.add('done');
-    // 整体淡出后由后端 navigate 进入 dsh 界面（与 WebView 背景色衔接，消除白闪）
-    document.body.classList.add('fade-out');
+    // onboarding 未完成时跳过整体淡出：ready 可能在面板显示期间到达
+    // （服务复用/并发路径下 get_status 直接返回 Ready），淡出会让配置
+    // 面板视觉消失而 boot 仍在等待用户操作；保存后面板隐藏即恢复正常
+    if (!onboardingActive()) document.body.classList.add('fade-out');
   }
   else if (phase === 'error') { spinner.classList.add('hidden'); fill.classList.add('err'); }
   else {
@@ -142,7 +151,11 @@ async function initOnboarding() {
       r.addEventListener('change', () => {
         if (!r.checked) return;
         const lang = r.value === 'en' ? 'en' : 'zh-CN';
+        // 面板文案即时预览（前端 i18n）
         window.dshdSetLanguage && window.dshdSetLanguage(lang);
+        // Rust 侧同步预览语言并立即重推状态栏统计（状态栏文本由 Rust
+        // 生成，前端无法重译；不持久化，保存时才正式应用）
+        window.__TAURI__.core.invoke('preview_language', { language: lang }).catch(() => {});
       });
     });
     document.querySelectorAll('input[name="ob-theme"]').forEach((r) => {
@@ -157,10 +170,22 @@ async function initOnboarding() {
 
 async function submitOnboarding(skip) {
   if (onboardingSaving) return;
-  onboardingSaving = true;
   const box = $('ob-box');
   const start = $('ob-start');
   const skipButton = $('ob-skip');
+  const errBox = $('ob-error');
+  // 格式校验（不占用 saving 状态）：非空 key 必须以 sk- 开头，否则提示并
+  // 聚焦输入框；留空仍允许（之后在 dsh 设置页配置）
+  if (!skip) {
+    const key = $('ob-apikey').value.trim();
+    if (key && !/^sk-/.test(key)) {
+      errBox.textContent = dshdT('apiKeyFormatHint');
+      errBox.classList.remove('hidden');
+      $('ob-apikey').focus();
+      return;
+    }
+  }
+  onboardingSaving = true;
   start.disabled = true;
   skipButton.disabled = true;
   box.setAttribute('aria-busy', 'true');
@@ -177,12 +202,21 @@ async function submitOnboarding(skip) {
   try {
     await window.__TAURI__.core.invoke('save_onboarding', { payload });
     $('ob-box').classList.add('hidden');
-    $('ob-error').classList.add('hidden');
+    errBox.classList.add('hidden');
+    // 用最新状态 + 当前语言刷新状态区。注意：快照的 message/detail 是
+    // 语言切换前生成的 Rust 旧语言文本（首次安装场景保存时 boot 仍在
+    // 安装/启动阶段），直接显示会"语言不跟随"——剥离后由 phaseText/
+    // stepLine 按当前语言重译固定文案，进度数字与语言无关保留。
+    // 失败时回退给 Ready 事件自然刷新
+    try {
+      const st = await window.__TAURI__.core.invoke('get_status');
+      renderStatus({ ...st, message: '', detail: '' });
+    } catch (e) { /* 忽略：后续事件到达会刷新 */ }
     // boot 将立即继续：恢复启动状态区显示（保存前为聚焦面板而隐藏）
     $('status').classList.remove('hidden');
   } catch (e) {
-    $('ob-error').textContent = dshdT('saveFailed') + ': ' + e;
-    $('ob-error').classList.remove('hidden');
+    errBox.textContent = dshdT('saveFailed') + ': ' + e;
+    errBox.classList.remove('hidden');
   } finally {
     onboardingSaving = false;
     start.disabled = false;
@@ -191,7 +225,15 @@ async function submitOnboarding(skip) {
   }
 }
 
-function renderUpdate(result) {  lastUpdateResult = result;
+function renderUpdate(result) {
+  lastUpdateResult = result;
+  // onboarding 未完成时不显示更新区（静默检查事件不应干扰配置面板）：
+  // 快照已存，保存后由后续事件或语言切换重渲染正常展示；
+  // 若面板显示前已有结果（服务复用场景），先隐藏避免与面板同卡堆叠
+  if (onboardingActive()) {
+    $('update-box').classList.add('hidden');
+    return;
+  }
   const box = $('update-box');
   const line = $('update-text');
   const applyBtn = $('btn-update-apply');
@@ -274,9 +316,15 @@ function bind() {
 async function init() {
   dshdApplyI18n();
   bind();
-  initOnboarding();
+  // 先等 onboarding 面板显示（含磁盘读状态），再拉取/监听状态：
+  // 否则服务已就绪时 get_status 先返回 ready，而面板未显示导致
+  // onboardingActive()=false → setStatus 触发整体淡出 → 页面透明但
+  // boot 仍在等用户操作（白屏卡死）。initOnboarding 内部已 catch。
+  await initOnboarding();
   window.addEventListener('dshd-language-changed', () => {
-    if (lastStatusPayload) renderStatus(lastStatusPayload);
+    // 快照的 message/detail 是 Rust 按旧语言生成的文本，重渲染时必须剥离，
+    // 由 phaseText/stepLine 按当前语言重译固定文案（进度数字语言无关保留）
+    if (lastStatusPayload) renderStatus({ ...lastStatusPayload, message: '', detail: '' });
     if (lastUpdateResult) renderUpdate(lastUpdateResult);
   });
   // 启动页为内置界面，禁用 WebView2 默认右键菜单
@@ -285,7 +333,12 @@ async function init() {
   await listen('dsh-status', (e) => renderStatus(e.payload));
   await listen('update-result', (e) => renderUpdate(e.payload));
   await listen('update-progress', (e) => {
-    if (e.payload && e.payload.message) $('update-text').textContent = e.payload.message;
+    if (e.payload && e.payload.message) {
+      // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
+      // 且 Rust 文本是旧语言快照，语言切换后不重译）
+      if (onboardingActive()) return;
+      $('update-text').textContent = e.payload.message;
+    }
   });
   try {
     const payload = await window.__TAURI__.core.invoke('get_status');

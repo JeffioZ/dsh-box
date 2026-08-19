@@ -37,19 +37,15 @@ body.fade-out { opacity: 0; }
 .stage { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
 .card { width: min(420px, 86vw); display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .logo-wrap {
-  width: 84px; height: 84px; border-radius: 22px;
-  background: var(--blue);
+  width: 84px; height: 84px;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 12px 40px rgba(77, 107, 254, .35);
-  /* 品牌呼吸光晕：启动等待期的视觉重心（减弱动态效果时关闭） */
-  animation: logo-breathe 2.8s ease-in-out infinite;
+  /* 蓝底与圆角由 app-icon.svg 自身提供（与标题栏/关于弹窗同款完整图标）；
+     此处仅作居中容器。不叠加动画/光晕：图标缩放与 box-shadow 沿圆角外扩
+     会让圆角外泛色、视觉不干净 */
 }
-@keyframes logo-breathe {
-  0%, 100% { box-shadow: 0 12px 40px rgba(77, 107, 254, .32); transform: scale(1); }
-  50% { box-shadow: 0 14px 56px rgba(77, 107, 254, .55); transform: scale(1.02); }
+.logo {
+  width: 84px; height: 84px;
 }
-.logo { width: 52px; height: 52px; }
-.logo path { fill: #fff; }
 .title { font-size: 22px; font-weight: 600; letter-spacing: .2px; margin-top: 6px; }
 .tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 8px; }
 
@@ -163,6 +159,10 @@ body.fade-out { opacity: 0; }
 .ob-primary { width: 100%; height: 38px; font-size: 14px; font-weight: 500; }
 .ob-skip-btn {
   background: none; border: none; color: var(--muted); font-size: 12.5px;
+  /* button 的 font 默认不继承 UA 样式（Arial + line-height normal），
+     中英文行盒随字体变化（中文 fallback 行盒更高），导致切换语言时
+     按钮高度差 5px、卡片整体位移；显式继承字体并固定行高使其一致 */
+  font-family: inherit; line-height: 1.4;
   cursor: pointer; padding: 4px; align-self: center; border-radius: 6px;
   transition: color var(--dshd-m-fast) ease;
 }
@@ -181,7 +181,6 @@ body.fade-out { opacity: 0; }
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
 @media (prefers-color-scheme: light) {
   body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
-  .logo-wrap { box-shadow: 0 12px 40px rgba(77, 107, 254, .25); }
   .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
   .btn:hover { background: #e6e8ef; }
   .btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
@@ -195,7 +194,6 @@ body.fade-out { opacity: 0; }
   body { transition: none; }
   .spinner { animation: none; }
   .bar-fill { animation: none; transition: none; }
-  .logo-wrap { animation: none; }
   .error-box.reveal { animation: none; }
 }
 </style>
@@ -204,7 +202,10 @@ body.fade-out { opacity: 0; }
   <main class="stage">
     <div class="card">
       <div class="logo-wrap" aria-hidden="true">
-        <img class="logo" src="assets/favicon.svg" alt="" />
+        <!-- 用 app-icon.svg（蓝底白鲸，固定 fill）：favicon.svg 的鲸鱼为
+             fill="#000" 且仅媒体查询变白，而 <img> 内 SVG 是独立文档，
+             外部 CSS 与 Tauri 窗口强制主题都不生效 → 黑鲸 -->
+        <img class="logo" src="assets/app-icon.svg" alt="" />
       </div>
       <h1 class="title">DeepSeek Harness Box</h1>
       <p class="tagline" data-i18n="tagline">本地智能体 · 一键启航</p>
@@ -212,7 +213,7 @@ body.fade-out { opacity: 0; }
       <div id="ob-box" class="ob-box hidden">
         <div class="ob-head">
           <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
-          <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后可在桌面端设置中随时调整。</p>
+          <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后随时可改。</p>
         </div>
         <div class="ob-section">
           <div class="ob-sec-label">API</div>

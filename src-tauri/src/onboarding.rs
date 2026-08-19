@@ -80,11 +80,17 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         .filter(|k| !k.is_empty())
     {
         save_credentials_api_key(&config, key)?;
-        app_state::save_config_value(
+        // config.json 的 api_key 仅为外壳余额查询的便捷副本：写入失败只记
+        // 日志不阻断（凭据已写入 dsh 文件，balance 会回退到凭据文件解析）
+        if let Err(e) = app_state::save_config_value(
             &config.root,
             "api_key",
             serde_json::Value::String(key.to_string()),
-        )?;
+        ) {
+            crate::logging::log(&format!(
+                "onboarding: config.json 写入 api_key 失败（凭据已保存）：{e}"
+            ));
+        }
         credentials_changed = true;
     }
 

@@ -107,6 +107,23 @@ pub fn preview_theme(app: AppHandle, webview: tauri::Webview, theme: String) -> 
     Ok(())
 }
 
+/// 首次配置界面的语言实时预览：切换内存语言并立即重推状态栏统计
+/// （不写 config、不持久化）——保存时由 onboarding::save 正式应用。
+#[tauri::command]
+pub fn preview_language(
+    app: AppHandle,
+    webview: tauri::Webview,
+    language: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    if !matches!(language.as_str(), "zh-CN" | "en") {
+        return Err(crate::locale::text("未知语言。", "Unknown language.").into());
+    }
+    // apply_language 内部：set_preference + 全窗口重译 + 状态栏统计重推
+    crate::tray::apply_language(&app, &language);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn check_updates(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
@@ -468,6 +485,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         save_onboarding,
         onboarding_shown,
         preview_theme,
+        preview_language,
         plugin_list,
         plugin_search,
         plugin_install,
