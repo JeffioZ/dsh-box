@@ -161,6 +161,8 @@ var css = [
   '.__dshd_cm_i{transition:none;}}',
   '.__dshd_cm_l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}',
   '.__dshd_cm_ic{width:16px;height:16px;flex:none;display:block;}',
+  ' .__dshd_cm_ic svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;',
+  'stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}',
   '.__dshd_cm_k{color:var(--dsw-alias-label-tertiary,#adb2b8);font-size:12px;}',
   '.__dshd_cm_ar{font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;',
   'font-size:12px;color:var(--dsw-alias-label-tertiary,#adb2b8);margin-left:6px;line-height:1;}',
@@ -398,6 +400,30 @@ var PH_APP = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20w
 function placeholderFor(spec) {
   return spec && spec.slice(0, 5) === 'file:' ? PH_FILE : PH_APP;
 }
+// 内置 stroke 图标（与托盘/标题栏菜单同风格，随文字颜色 currentColor；
+// 真实文件/应用图标走 img + 异步加载）。`ic:` 前缀引用。
+var ICON_SVGS = {
+  cut: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><path d="M8.12 8.12 12 12"></path><path d="M20 4 8.12 15.88"></path><circle cx="6" cy="18" r="3"></circle><path d="M14.8 14.8 20 20"></path></svg>',
+  copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+  paste: '<svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
+  select: '<svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M20 16v2a2 2 0 0 1-2 2h-2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M8.5 8.5h7v7h-7z"></path></svg>',
+  save: '<svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></svg>',
+  link: '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>',
+  image: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>',
+  globe: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3c3 3.4 3 14 0 18"></path><path d="M12 3c-3 3.4-3 14 0 18"></path></svg>',
+  apps: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>'
+};
+// 图标 HTML：内置 stroke 图标内联渲染（颜色随文字），文件/应用图标走
+// 占位图 + 异步加载（真实图标加载完成后原地替换）
+function iconHtml(spec) {
+  if (!spec) return '';
+  if (spec.slice(0, 3) === 'ic:') {
+    var svg = ICON_SVGS[spec.slice(3)];
+    return svg ? '<span class="__dshd_cm_ic" aria-hidden="true">' + svg + '</span>' : '';
+  }
+  return '<img class="__dshd_cm_ic" alt="" src="' + placeholderFor(spec) + '" />';
+}
 function loadIcon(img, spec) {
   var url;
   if (spec.slice(0, 5) === 'file:') {
@@ -425,10 +451,8 @@ function openSub(parentNode, list) {
   list.forEach(function (it, i) {
     if (it.sep) { html += '<div class="__dshd_cm_sep" role="separator"></div>'; }
     else {
-      var ic = it.icon
-        ? '<img class="__dshd_cm_ic" alt="" src="' + placeholderFor(it.icon) + '" />'
-        : '';
-      html += '<div class="__dshd_cm_i" role="menuitem" tabindex="-1" data-i="' + i + '">' + ic
+      html += '<div class="__dshd_cm_i" role="menuitem" tabindex="-1" data-i="' + i + '">'
+        + iconHtml(it.icon)
         + '<span class="__dshd_cm_l">' + it.label + '</span></div>';
     }
   });
@@ -436,8 +460,8 @@ function openSub(parentNode, list) {
   menuEl.appendChild(subEl);
   subEl.querySelectorAll('.__dshd_cm_i').forEach(function (node) {
     var it = subItems[Number(node.getAttribute('data-i'))];
-    if (it && it.icon) {
-      var img = node.querySelector('.__dshd_cm_ic');
+    if (it && it.icon && it.icon.slice(0, 3) !== 'ic:') {
+      var img = node.querySelector('img.__dshd_cm_ic');
       if (img) loadIcon(img, it.icon);
     }
   });
@@ -479,13 +503,10 @@ function show(x, y, list) {
       var dis = it.enabled === false ? ' __dshd_cm_d' : '';
       var ariaDisabled = it.enabled === false ? ' aria-disabled="true"' : '';
       var subAttrs = it.sub ? ' aria-haspopup="menu" aria-expanded="false"' : '';
-      var ic = it.icon
-        ? '<img class="__dshd_cm_ic" alt="" src="' + placeholderFor(it.icon) + '" />'
-        : '';
       var tail = it.sub ? '<span class="__dshd_cm_ar">&#xE76C;</span>'
         : (it.key ? '<span class="__dshd_cm_k">' + it.key + '</span>' : '');
       html += '<div class="__dshd_cm_i' + dis + '" role="menuitem" tabindex="-1"' + ariaDisabled + subAttrs
-        + ' data-i="' + i + '">' + ic
+        + ' data-i="' + i + '">' + iconHtml(it.icon)
         + '<span class="__dshd_cm_l">' + it.label + '</span>' + tail + '</div>';
     }
   });
@@ -493,8 +514,8 @@ function show(x, y, list) {
   document.body.appendChild(menuEl);
   menuEl.querySelectorAll('.__dshd_cm_i').forEach(function (node) {
     var it = items[Number(node.getAttribute('data-i'))];
-    if (it && it.icon) {
-      var img = node.querySelector('.__dshd_cm_ic');
+    if (it && it.icon && it.icon.slice(0, 3) !== 'ic:') {
+      var img = node.querySelector('img.__dshd_cm_ic');
       if (img) loadIcon(img, it.icon);
     }
   });
@@ -561,6 +582,9 @@ function fileMenu(f, p) {
   var abs = isAbsPath(p);
   var items = [{
     label: T('打开文件', 'Open file'), icon: 'file:' + p,
+    // 相对路径解析失败且非 dsh 按钮时无法打开（Rust open 动作要求绝对路径），
+    // 禁用而非静默无反应
+    enabled: f.viaButton || abs,
     act: function () {
       if (f.viaButton) { f.el.click(); } // dsh 后端解析相对路径
       else if (abs) { req('open', p); }
@@ -585,24 +609,24 @@ function fileMenu(f, p) {
     }
     if (subs.length) {
       subs.push({ sep: true });
-      subs.push({ label: T('选择其他应用…', 'Choose another app…'), act: function () { req('openwith', p, ''); } });
+      subs.push({ label: T('选择其他应用…', 'Choose another app…'), icon: 'ic:apps', act: function () { req('openwith', p, ''); } });
       items.push({ label: T('打开方式', 'Open with'), sub: subs });
     }
   }
   items.push({ sep: true });
   if (abs) {
-    items.push({ label: T('另存为…', 'Save as…'), act: function () { req('saveas', p); } });
+    items.push({ label: T('另存为…', 'Save as…'), icon: 'ic:save', act: function () { req('saveas', p); } });
   }
-  items.push({ label: T('复制路径', 'Copy path'), act: function () { writeClip(p); } });
+  items.push({ label: T('复制路径', 'Copy path'), icon: 'ic:link', act: function () { writeClip(p); } });
   if (abs && isTextLike(p)) {
-    items.push({ label: T('复制文件内容', 'Copy file contents'), act: function () { copyContent(p); } });
+    items.push({ label: T('复制文件内容', 'Copy file contents'), icon: 'ic:copy', act: function () { copyContent(p); } });
   }
   if (abs) {
     // 文件管理器名称随平台：macOS 为 Finder，Windows 为资源管理器，其余为文件管理器
     var fmLabel = IS_MAC
       ? T('在 Finder 中显示', 'Show in Finder')
       : (IS_WIN ? T('在资源管理器中打开', 'Show in File Explorer') : T('在文件管理器中打开', 'Show in file manager'));
-    items.push({ label: fmLabel, act: function () { req('reveal', p); } });
+    items.push({ label: fmLabel, icon: 'ic:folder', act: function () { req('reveal', p); } });
   }
   return items;
 }
@@ -645,11 +669,11 @@ function onCtx(e) {
       : el.textContent.trim().length > 0);
     var m = MOD();
     show(e.clientX, e.clientY, [
-      { label: T('剪切', 'Cut'), key: m + '+X', enabled: hasSel, act: function () { execOn(el, 'cut'); } },
-      { label: T('复制', 'Copy'), key: m + '+C', enabled: hasSel, act: function () { execOn(el, 'copy'); } },
-      { label: T('粘贴', 'Paste'), key: m + '+V', act: function () { pasteInto(el); } },
+      { label: T('剪切', 'Cut'), icon: 'ic:cut', key: m + '+X', enabled: hasSel, act: function () { execOn(el, 'cut'); } },
+      { label: T('复制', 'Copy'), icon: 'ic:copy', key: m + '+C', enabled: hasSel, act: function () { execOn(el, 'copy'); } },
+      { label: T('粘贴', 'Paste'), icon: 'ic:paste', key: m + '+V', act: function () { pasteInto(el); } },
       { sep: true },
-      { label: T('全选', 'Select all'), key: m + '+A', enabled: hasContent, act: function () {
+      { label: T('全选', 'Select all'), icon: 'ic:select', key: m + '+A', enabled: hasContent, act: function () {
         el.focus();
         if (el.select) { el.select(); } else { document.execCommand('selectAll'); }
       } }
@@ -660,7 +684,7 @@ function onCtx(e) {
   if (img) {
     e.preventDefault();
     show(e.clientX, e.clientY, [
-      { label: T('复制图片', 'Copy image'), act: function () { copyImage(img); } }
+      { label: T('复制图片', 'Copy image'), icon: 'ic:image', act: function () { copyImage(img); } }
     ]);
     return;
   }
@@ -670,8 +694,8 @@ function onCtx(e) {
     if (/^https?:/i.test(href)) {
       e.preventDefault();
       show(e.clientX, e.clientY, [
-        { label: T('复制链接', 'Copy link'), act: function () { writeClip(href); } },
-        { label: T('在浏览器中打开', 'Open in browser'), act: function () { req('browse', href); } }
+        { label: T('复制链接', 'Copy link'), icon: 'ic:link', act: function () { writeClip(href); } },
+        { label: T('在浏览器中打开', 'Open in browser'), icon: 'ic:globe', act: function () { req('browse', href); } }
       ]);
       return;
     }
@@ -680,7 +704,7 @@ function onCtx(e) {
   if (sel && sel.toString()) {
     e.preventDefault();
     show(e.clientX, e.clientY, [
-      { label: T('复制', 'Copy'), key: MOD() + '+C', act: function () { document.execCommand('copy'); } }
+      { label: T('复制', 'Copy'), icon: 'ic:copy', key: MOD() + '+C', act: function () { document.execCommand('copy'); } }
     ]);
   } else {
     e.preventDefault(); // 无选区：静默屏蔽默认菜单

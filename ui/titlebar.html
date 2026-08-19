@@ -49,7 +49,9 @@ body.window-inactive .tb-btn { color: #5b5c66; }
 .main-menu-wrap { position: relative; height: 100%; display: inline-flex; align-items: center; }
 .main-menu-panel {
   /* 定位规则与余额浮层统一：入口下方 0 间距、右缘对齐 */
-  position: absolute; top: var(--tb-overlay-top); right: 0; width: 264px; padding: 4px;
+  /* 宽度与 Windows 自绘托盘菜单窗口（tray_menu.rs::menu_size）保持一致：
+     220px，改动需同步两处 */
+  position: absolute; top: var(--tb-overlay-top); right: 0; width: 220px; padding: 4px;
   box-sizing: border-box; z-index: 10;
   /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px）：标题栏页面无基础字号，
      不显式设置会落到浏览器默认 16px，与托盘菜单产生字号差 */

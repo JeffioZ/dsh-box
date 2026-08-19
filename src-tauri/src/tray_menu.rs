@@ -54,46 +54,57 @@ impl TrayMenuItem {
 
 /// 托盘与标题栏共用的菜单模型。标题栏版本不含窗口内已有的动作
 /// （打开应用与余额入口）。
+///
+/// 分组：打开/访问 → 服务维护 → 管理与查询 → 关于/退出（危险动作
+/// 与常规动作分离）。托盘比标题栏多“打开”与“查询 API 余额…”。
 pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
-    let mut rows = vec![
-        TrayMenuItem::row_icon(
+    let mut rows = Vec::new();
+    // 打开/访问
+    if tray_surface {
+        rows.push(TrayMenuItem::row_icon(
             "open",
             "window",
-            &format!(
-                "{} {}",
-                crate::locale::text("打开", "Open"),
-                crate::APP_TITLE
-            ),
-        ),
-        TrayMenuItem::row_icon(
-            "open_browser",
-            "globe",
-            crate::locale::text("在浏览器中打开", "Open in browser"),
-        ),
-        TrayMenuItem::sep(),
-        TrayMenuItem::row_icon(
-            "restart",
-            "restart",
-            crate::locale::text("重启服务", "Restart service"),
-        ),
-        TrayMenuItem::row_icon(
-            "check_update",
-            "download",
-            crate::locale::text("检查更新…", "Check for updates…"),
-        ),
-        TrayMenuItem::row_icon(
-            "plugins",
-            "puzzle",
-            crate::locale::text("插件管理…", "Plugin manager…"),
-        ),
-        TrayMenuItem::sep(),
-        TrayMenuItem::row_icon(
-            "settings",
-            "gear",
-            crate::locale::text("桌面端设置…", "Desktop settings…"),
-        ),
-    ];
+            crate::locale::text("打开", "Open"),
+        ));
+    }
+    rows.push(TrayMenuItem::row_icon(
+        "open_browser",
+        "globe",
+        crate::locale::text("在浏览器中打开", "Open in browser"),
+    ));
     rows.push(TrayMenuItem::sep());
+    // 服务维护
+    rows.push(TrayMenuItem::row_icon(
+        "restart",
+        "restart",
+        crate::locale::text("重启服务", "Restart service"),
+    ));
+    rows.push(TrayMenuItem::row_icon(
+        "check_update",
+        "download",
+        crate::locale::text("检查更新…", "Check for updates…"),
+    ));
+    rows.push(TrayMenuItem::sep());
+    // 管理与查询
+    if tray_surface {
+        rows.push(TrayMenuItem::row_icon(
+            "balance",
+            "wallet",
+            crate::locale::text("查询 API 余额…", "Check API balance…"),
+        ));
+    }
+    rows.push(TrayMenuItem::row_icon(
+        "plugins",
+        "puzzle",
+        crate::locale::text("插件管理…", "Plugin manager…"),
+    ));
+    rows.push(TrayMenuItem::row_icon(
+        "settings",
+        "gear",
+        crate::locale::text("桌面端设置…", "Desktop settings…"),
+    ));
+    rows.push(TrayMenuItem::sep());
+    // 关于/退出
     rows.push(TrayMenuItem::row_icon(
         "about",
         "info",
@@ -104,18 +115,6 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         "exit",
         crate::locale::text("退出", "Quit"),
     ));
-    if tray_surface {
-        rows.insert(
-            1,
-            TrayMenuItem::row_icon(
-                "balance",
-                "wallet",
-                crate::locale::text("查询 API 余额…", "Check API balance…"),
-            ),
-        );
-    } else {
-        rows.remove(0);
-    }
     rows
 }
 
@@ -124,8 +123,11 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
 #[cfg(windows)]
 const SHADOW_PAD: f64 = 0.0;
 
-/// 菜单窗口尺寸（含四周阴影边距）：卡片内边距 4×2 + 行高 40
-/// + 分隔线 9（与 dsh 菜单条目同规格），宽 264 容纳最长条目。
+/// 菜单窗口尺寸（含四周阴影边距）：卡片内边距 4×2、行高 40、
+/// 分隔线 9（与 dsh 菜单条目同规格）；宽 220 与 dsh 菜单卡宽 218
+/// 同规格，容纳最长条目（含图标/内边距约 180px）。
+/// 注意：Windows 自绘托盘菜单宽度与 ui/titlebar.html 的 .main-menu-panel
+/// （220px）保持一致，改动需同步两处。
 ///
 /// 卡片无描边（透明窗口模型，边界由圆角/底色/阴影承担），高度不含边框；
 /// body 为 border-box，高度必须包含内边距，否则末行 hover 会被裁掉。
@@ -137,7 +139,7 @@ fn menu_size() -> (f64, f64) {
             .iter()
             .map(|r| if r.sep { 9.0 } else { 40.0 })
             .sum::<f64>();
-    (264.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
+    (220.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
 }
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
@@ -338,4 +340,56 @@ pub(crate) fn watch_outside_click(app: AppHandle, label: &'static str, rect: (i3
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 固化托盘菜单分组顺序（空串 = 分隔线）。tray.rs 的 macOS/Linux
+    /// 原生菜单手写顺序必须与此保持一致，改动需同步两处。
+    #[test]
+    fn tray_menu_grouping_order() {
+        let rows = items(true);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "open",
+                "open_browser",
+                "",
+                "restart",
+                "check_update",
+                "",
+                "balance",
+                "plugins",
+                "settings",
+                "",
+                "about",
+                "quit",
+            ]
+        );
+    }
+
+    /// 标题栏主菜单：不含托盘专属项（打开应用、查询余额），分组同托盘。
+    #[test]
+    fn titlebar_menu_grouping_order() {
+        let rows = items(false);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "open_browser",
+                "",
+                "restart",
+                "check_update",
+                "",
+                "plugins",
+                "settings",
+                "",
+                "about",
+                "quit",
+            ]
+        );
+    }
 }

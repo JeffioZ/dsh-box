@@ -93,17 +93,19 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
+    // 顺序与 tray_menu::items(true) 保持一致：打开/访问 → 服务维护 →
+    // 管理与查询 → 关于/退出
     Menu::with_items(
         app,
         &[
             &open_item,
-            &balance_item,
             &browser_item,
             &sep1,
             &restart_item,
             &check_item,
-            &plugins_item,
             &sep2,
+            &balance_item,
+            &plugins_item,
             &settings_item,
             &sep3,
             &about_item,
@@ -171,6 +173,9 @@ pub(crate) fn apply_language(app: &AppHandle, language: &str) {
     if let (Some(tray), Ok(menu)) = (app.tray_by_id("main-tray"), native_menu(app)) {
         let _ = tray.set_menu(Some(menu));
     }
+    // 状态栏统计文本由 Rust 按当前语言生成（含量词/单位），语言切换后立即
+    // 重推一次，不等下一个 5s 轮询周期（statusbar 前端无法重译 Rust 快照）
+    crate::stats::refresh_once(app.clone());
 }
 
 /// 把 dsh 的主题偏好（light|dark|system）应用到外壳各窗口：
