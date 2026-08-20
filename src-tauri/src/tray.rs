@@ -131,7 +131,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 托盘菜单项动作分发（自绘菜单 tray_menu_choose 与 macOS/Linux 原生菜单共用）。
+/// 托盘菜单项动作分发（自绘菜单 menu_choose 与 macOS/Linux 原生菜单共用）。
 pub(crate) fn run_action(app: &AppHandle, id: &str) {
     match id {
         "open" => show_main(app),
@@ -180,9 +180,9 @@ pub(crate) fn apply_language(app: &AppHandle, language: &str) {
 
 /// 把 dsh 的主题偏好（light|dark|system）应用到外壳各窗口：
 /// 显式 light/dark 覆盖 WebView 的配色（CSS prefers-color-scheme 跟随），
-/// system 恢复跟随系统。set_theme 后各窗口背景色同步对齐——主窗口用导航
-/// 底色，弹窗/托盘菜单用卡片底色（窗口边距与淡出中性帧必须与卡片同色，
-/// 否则露出旧主题的色环）。
+/// system 恢复跟随系统。主窗口同步实体导航底色；弹窗/托盘菜单是透明宿主，
+/// 只切换 theme 让内容层令牌更新，绝不在运行期重设窗口背景色（会触发
+/// WebView2 透明合成层重建并产生闪烁）。
 pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
     let resolved = match theme {
         "light" => Some(tauri::Theme::Light),
@@ -200,21 +200,13 @@ pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
         };
         let _ = main.set_background_color(Some(color));
     }
-    // 弹窗与托盘菜单：不透明窗口，窗口底色随主题同步（卡片同色，
-    // 圆角由 Win11 系统裁剪，圆角外区域显示底色）
+    // 弹窗与托盘菜单：透明宿主只更新 prefers-color-scheme。
     for label in [
         crate::app_dialog::APP_DIALOG_WINDOW,
         crate::tray_menu::TRAY_MENU_WINDOW,
     ] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.set_theme(resolved);
-            let light = window.theme().ok() == Some(tauri::Theme::Light);
-            let color = if light {
-                crate::CARD_BG_LIGHT
-            } else {
-                crate::CARD_BG_DARK
-            };
-            let _ = window.set_background_color(Some(color));
         }
     }
 }

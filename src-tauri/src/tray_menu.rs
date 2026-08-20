@@ -15,6 +15,9 @@ use crate::app_state::AppState;
 /// 托盘菜单窗口 label。
 pub const TRAY_MENU_WINDOW: &str = "tray-menu";
 
+#[cfg(windows)]
+static TRAY_MENU_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 菜单条目（sep=true 渲染分隔线）。
 #[derive(serde::Serialize, Clone)]
 pub struct TrayMenuItem {
@@ -118,35 +121,49 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows
 }
 
-/// 窗口四周的阴影边距：不透明窗口下卡片直接占满窗口（圆角由 Win11
-/// 系统裁剪），无阴影空间。透明窗口渲染在本机 WebView2 下不可见
-/// （is_visible=true 但内容透明），已回退不透明方案。
+/// 透明宿主窗口的自绘阴影余量。与 tray-menu.html 的 body padding 同步；
+/// 菜单使用标题栏主菜单的 0 4px 12px 阴影，底部多留位移空间。
 #[cfg(windows)]
-const SHADOW_PAD: f64 = 0.0;
+const SHADOW_SIDES: f64 = 16.0;
+#[cfg(windows)]
+const SHADOW_TOP: f64 = 12.0;
+#[cfg(windows)]
+const SHADOW_BOTTOM: f64 = 20.0;
+#[cfg(windows)]
+const MENU_CARD_WIDTH: f64 = 220.0;
 
-/// 菜单窗口尺寸（含四周阴影边距）：卡片内边距 4×2、行高 40、
-/// 分隔线 9（与 dsh 菜单条目同规格）；宽 220 与 dsh 菜单卡宽 218
-/// 同规格，容纳最长条目（含图标/内边距约 180px）。
+/// 菜单卡片尺寸：1px 描边、4px 内边距、行高 40、分隔线 9；宽 220
+/// 与标题栏主菜单完全一致，容纳最长条目（含图标/内边距约 180px）。
 /// 注意：Windows 自绘托盘菜单宽度与 ui/titlebar.html 的 .main-menu-panel
 /// （220px）保持一致，改动需同步两处。
-///
-/// 卡片无描边（透明窗口模型，边界由圆角/底色/阴影承担），高度不含边框；
-/// body 为 border-box，高度必须包含内边距，否则末行 hover 会被裁掉。
 #[cfg(windows)]
-fn menu_size() -> (f64, f64) {
+fn menu_card_size() -> (f64, f64) {
     let rows = items(true);
-    let height = 8.0
+    let height = 10.0
         + rows
             .iter()
             .map(|r| if r.sep { 9.0 } else { 40.0 })
             .sum::<f64>();
-    (220.0 + SHADOW_PAD * 2.0, height + SHADOW_PAD * 2.0)
+    (MENU_CARD_WIDTH, height)
+}
+
+/// 原生窗口尺寸 = 菜单卡片 + 自绘阴影透明余量。
+#[cfg(windows)]
+fn menu_size() -> (f64, f64) {
+    let (width, height) = menu_card_size();
+    (
+        width + SHADOW_SIDES * 2.0,
+        height + SHADOW_TOP + SHADOW_BOTTOM,
+    )
 }
 
 /// 启动时预创建（隐藏）：此后只定位/显示/隐藏，不再创建销毁。
 #[cfg(windows)]
 pub fn precreate(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    TRAY_MENU_READY.store(false, Ordering::Release);
     let (w, h) = menu_size();
+    let theme = app.state::<AppState>().config().resolve_dsh_theme();
     // 导航白名单与主窗口一致：菜单内容只允许加载内置页面
     let navigation_app = app.clone();
     match tauri::WebviewWindowBuilder::new(
@@ -159,39 +176,40 @@ pub fn precreate(app: &AppHandle) {
     .inner_size(w, h)
     .resizable(false)
     .decorations(false)
+    // 与统一弹窗相同：透明性只在创建时设置一次。运行期重设背景色会让
+    // WebView2 重建合成层，产生方底、闪烁或整窗透明。
+    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .transparent(true)
+    .shadow(false)
+    .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
     .on_navigation(move |url| {
         let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
+        if allowed {
+            TRAY_MENU_READY.store(false, Ordering::Release);
+        }
         if !allowed {
             crate::logging::log(&format!("tray-menu: 已拦截非白名单导航 {url}"));
         }
         allowed
     })
+    .on_page_load(|_webview, payload| {
+        let finished = payload.event() == tauri::webview::PageLoadEvent::Finished;
+        TRAY_MENU_READY.store(finished, Ordering::Release);
+        if finished {
+            crate::logging::log("tray-menu: 页面已就绪");
+        }
+    })
     .build()
     {
         Ok(win) => {
-            // 不透明窗口 + 卡片色背景：圆角由 Win11 系统裁剪（Win10 直角）
-            let theme = app.state::<AppState>().config().resolve_dsh_theme();
-            let light = if theme == Some(tauri::Theme::Light) {
-                true
-            } else if theme == Some(tauri::Theme::Dark) {
-                false
-            } else {
-                win.theme().ok() == Some(tauri::Theme::Light)
-            };
             if let Some(theme) = theme {
                 let _ = win.set_theme(Some(theme));
             }
-            let color = if light {
-                crate::CARD_BG_LIGHT
-            } else {
-                crate::CARD_BG_DARK
-            };
-            let _ = win.set_background_color(Some(color));
             #[cfg(windows)]
-            crate::window::enable_system_rounded_corners(&win);
+            crate::window::disable_system_rounded_corners(&win);
         }
         Err(e) => {
             crate::logging::log(&format!("tray-menu: 窗口预创建失败：{e}"));
@@ -202,6 +220,35 @@ pub fn precreate(app: &AppHandle) {
 /// 在光标处弹出菜单（调用方已在主线程）。`at` 为屏幕物理坐标。
 #[cfg(windows)]
 pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
+    open_menu_when_ready(app, at, 0);
+}
+
+#[cfg(windows)]
+fn open_menu_when_ready(app: &AppHandle, at: (f64, f64), attempt: u8) {
+    use std::sync::atomic::Ordering;
+    // 首次页面尚未完成加载时不展示透明空窗；保留最后一次右键请求，最多等待
+    // 1 秒。新请求会推进代次，使旧重试自动失效。
+    if !TRAY_MENU_READY.load(Ordering::Acquire) {
+        if attempt >= 25 {
+            crate::logging::log("tray-menu: 页面 1s 内未就绪，取消本次显示");
+            return;
+        }
+        let gen = bump_popup_gen();
+        let scheduler = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            if POPUP_GEN.load(Ordering::Relaxed) != gen {
+                return;
+            }
+            let handle = scheduler.clone();
+            let _ = scheduler.run_on_main_thread(move || {
+                if POPUP_GEN.load(Ordering::Relaxed) == gen {
+                    open_menu_when_ready(&handle, at, attempt + 1);
+                }
+            });
+        });
+        return;
+    }
     // 打开菜单时即时比对 dsh 设置（语言/主题）：用户在 dsh 里刚切换过，
     // 这次打开立即生效，不等 3s 轮询
     crate::tray::check_dsh_settings_now(app);
@@ -209,70 +256,114 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
         crate::logging::log("tray-menu: 窗口不存在（预创建失败？）");
         return;
     };
+    // 新一代打开使尚未执行的退场隐藏失效；窗口当前可见时先静默收起，
+    // 避免透明宿主在重新定位过程中被用户看到横跨屏幕移动。
+    bump_popup_gen();
+    if win.is_visible().unwrap_or(false) {
+        let _ = win.hide();
+        let _ = win.eval("window.__dshdReset && window.__dshdReset()");
+    }
+    let (card_width, card_height) = menu_card_size();
     let (width, height) = menu_size();
-    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
-    // 定位：仿 Windows 托盘菜单——菜单右下角贴点击点（向上/向左展开），放不下再翻转。
-    // 关键：事件坐标是物理像素，窗口尺寸是逻辑像素——统一用目标显示器的缩放
-    // 换算成逻辑坐标再计算（200% DPI 下混用会导致菜单位置偏移、鼠标落在菜单内）
-    let monitors = app.available_monitors().unwrap_or_default();
-    let target = monitors.iter().find_map(|m| {
-        let wa = m.work_area();
-        let (px, py) = (wa.position.x as f64, wa.position.y as f64);
-        let (pw, ph) = (wa.size.width as f64, wa.size.height as f64);
-        (at.0 >= px && at.0 < px + pw && at.1 >= py && at.1 < py + ph).then_some((
-            px,
-            py,
-            pw,
-            ph,
-            m.scale_factor(),
-        ))
-    });
-    let (x, y) = match target {
-        Some((px, py, _pw, _ph, scale)) => {
-            // at 是物理像素，px/py 是物理工作区；统一用物理计算，
-            // 最后换回逻辑坐标传给 set_position(Logical)。
-            let cx = at.0;
-            let cy = at.1;
-            let win_w = width * scale;
-            let win_h = height * scale;
-            // 右下角贴点击点、向上展开，留 2/6px 物理空隙
-            let mut x = cx - win_w + 2.0 * scale;
-            let mut y = cy - win_h - 6.0 * scale;
-            if x < px {
-                x = cx - 2.0 * scale;
-            }
-            if y < py {
-                y = cy + 6.0 * scale;
-            }
-            (x.max(px) / scale, y.max(py) / scale)
-        }
-        None => {
-            // 托盘图标在任务栏，任务栏在工作区外——普通右键命中此分支；
-            // 用主显示器 scale 做物理→逻辑换算，位置贴光标右上角
-            crate::logging::log(&format!(
-                "tray-menu: 光标不在已枚举工作区 光标=({:.0},{:.0})",
-                at.0, at.1
-            ));
-            let scale = app
-                .primary_monitor()
-                .ok()
-                .flatten()
-                .map(|m| m.scale_factor())
-                .unwrap_or(1.0);
-            // 物理坐标 → 逻辑（除以 scale）；set_position 用 Logical
-            (
-                (at.0 - width * scale + 2.0 * scale) / scale,
-                (at.1 - height * scale - 6.0 * scale) / scale,
-            )
-        }
+    // 托盘点击点位于任务栏，通常不在 monitor.work_area() 内；直接按点找到
+    // 所在显示器，并全程使用物理像素，避免隐藏窗口按旧屏幕 DPI 二次换算。
+    let monitor = app
+        .monitor_from_point(at.0, at.1)
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let (x, y, physical_width, physical_height, scale, opens_up) = if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area();
+        let physical_width = (width * scale).round() as u32;
+        let physical_height = (height * scale).round() as u32;
+        let physical_card_width = (card_width * scale).round();
+        let physical_card_height = (card_height * scale).round();
+        let shadow_left = SHADOW_SIDES * scale;
+        let shadow_top = SHADOW_TOP * scale;
+        let left = area.position.x as f64;
+        let top = area.position.y as f64;
+        let right = left + area.size.width as f64;
+        let bottom = top + area.size.height as f64;
+        let win_w = physical_width as f64;
+        let win_h = physical_height as f64;
+        // 先按视觉卡片定位，再向外扩出透明阴影窗口；这样阴影余量不会改变
+        // 菜单相对托盘图标的锚点。
+        let preferred_card_x = at.0 - physical_card_width + 2.0 * scale;
+        let card_x = if preferred_card_x - shadow_left < left {
+            at.0 - 2.0 * scale
+        } else {
+            preferred_card_x
+        };
+        let preferred_card_y = at.1 - physical_card_height - 6.0 * scale;
+        let opens_up = preferred_card_y - shadow_top >= top;
+        let card_y = if opens_up {
+            preferred_card_y
+        } else {
+            at.1 + 6.0 * scale
+        };
+        let x = (card_x - shadow_left)
+            .clamp(left, (right - win_w).max(left))
+            .round() as i32;
+        let y = (card_y - shadow_top)
+            .clamp(top, (bottom - win_h).max(top))
+            .round() as i32;
+        (x, y, physical_width, physical_height, scale, opens_up)
+    } else {
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let physical_width = (width * scale).round() as u32;
+        let physical_height = (height * scale).round() as u32;
+        (
+            (at.0 - card_width * scale + 2.0 * scale - SHADOW_SIDES * scale).round() as i32,
+            (at.1 - card_height * scale - 6.0 * scale - SHADOW_TOP * scale).round() as i32,
+            physical_width,
+            physical_height,
+            scale,
+            true,
+        )
     };
     crate::logging::log(&format!(
-        "tray-menu: 点击=({:.0},{:.0}) 菜单=({x:.0},{y:.0}) 尺寸=({width:.0}x{height:.0})",
-        at.0, at.1
+        "tray-menu: 点击=({:.0},{:.0}) 菜单=({x},{y}) 尺寸=({physical_width}x{physical_height}) scale={scale:.2}",
+        at.0, at.1,
     ));
-    let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
-    // 先显示再发事件：隐藏窗口收不到 emit 的内容，事件仅作即时更新，
-    // 页面另有 __dshdRefresh（Rust eval 直呼）作为确定性兜底
+    if let Err(e) = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        x, y,
+    ))) {
+        crate::logging::log(&format!("tray-menu: 定位失败：{e}"));
+    }
+    if let Err(e) = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        physical_width,
+        physical_height,
+    ))) {
+        crate::logging::log(&format!("tray-menu: 设置尺寸失败：{e}"));
+    }
+    // 与统一弹窗一致：等待异步几何真正生效。否则第一次打开会先按预创建
+    // 位置/尺寸绘制一帧，再跳到托盘附近；第二次因几何已热身才看似正常。
+    for _ in 0..30 {
+        let position_ok = win
+            .outer_position()
+            .map(|p| p.x == x && p.y == y)
+            .unwrap_or(false);
+        let size_ok = win
+            .inner_size()
+            .map(|s| s.width == physical_width && s.height == physical_height)
+            .unwrap_or(false);
+        if position_ok && size_ok {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // 几何等待期间可能有旧退场刚启动；再次推进代次，确保其延迟隐藏失效。
+    bump_popup_gen();
+    // 隐藏窗口内先同步填入菜单并复位入场初态，show 的首帧不会先出现空底板。
+    let rows = items(true);
+    let json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
+    let direction = if opens_up { "up" } else { "down" };
+    let _ = win.eval(format!(
+        "window.__dshdOpen && window.__dshdOpen({json}, {direction:?})"
+    ));
+    let _ = win.set_ignore_cursor_events(false);
     if let Err(e) = win.show() {
         crate::logging::log(&format!("tray-menu: show 失败：{e}"));
     } else {
@@ -281,43 +372,56 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
             win.is_visible().unwrap_or(false)
         ));
     }
-    // 点击外部收起（物理矩形）——必须在 show 之后启动：监控线程首查
-    // is_visible，若在 show 前启动可能读到 false 提前退出，菜单"看似没显示"
-    bump_popup_gen();
-    let scale = win.scale_factor().unwrap_or(1.0);
-    if let Ok(size) = win.inner_size() {
-        // 位置是逻辑坐标（乘缩放换物理）；inner_size 本身已是物理像素
-        let (x0, y0) = ((x * scale) as i32, (y * scale) as i32);
-        #[cfg(windows)]
-        {
-            let (x1, y1) = (x0 + size.width as i32, y0 + size.height as i32);
-            watch_outside_click(app.clone(), TRAY_MENU_WINDOW, (x0, y0, x1, y1));
-        }
-    }
-    if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", items(true)) {
+    // 点击外部收起按视觉卡片矩形判定，透明阴影区域不算菜单内部。
+    let card_x = x + (SHADOW_SIDES * scale).round() as i32;
+    let card_y = y + (SHADOW_TOP * scale).round() as i32;
+    let card_w = (card_width * scale).round() as i32;
+    let card_h = (card_height * scale).round() as i32;
+    watch_outside_click(
+        app.clone(),
+        TRAY_MENU_WINDOW,
+        (card_x, card_y, card_x + card_w, card_y + card_h),
+    );
+    if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", rows) {
         crate::logging::log(&format!("tray-menu: 事件下发失败：{e}"));
     }
-    let _ = win.eval("window.__dshdRefresh && window.__dshdRefresh()");
     let _ = win.set_focus();
 }
 
-/// 隐藏菜单窗口（失焦/选中后）。无动效（此前尝试淡出，托盘窗口
-/// show/hide 时机与动画交互不理想，保持原生即时隐藏）。
+/// 播放退场动效后隐藏。代次校验确保快速重开可中断旧动效，最终状态不依赖
+/// transitionend（页面卡顿/减弱动态效果均不会留下可见窗口）。
 pub fn hide_menu(app: &AppHandle) {
-    bump_popup_gen();
-    if let Some(w) = app.get_webview_window(TRAY_MENU_WINDOW) {
-        let _ = w.hide();
+    use std::sync::atomic::Ordering;
+    let gen = bump_popup_gen();
+    let Some(w) = app.get_webview_window(TRAY_MENU_WINDOW) else {
+        return;
+    };
+    if !w.is_visible().unwrap_or(false) {
+        return;
     }
-}
-
-/// 托盘菜单项动作分发（与旧原生菜单一致，tray_menu_choose 调用）。
-pub fn run_action(app: &AppHandle, id: &str) {
-    // 菜单延迟 ~180ms 收起：让按压高亮清晰可见（原生菜单的选中反馈节奏）
+    let _ = w.eval("window.__dshdClose && window.__dshdClose()");
+    // 退场期间立即穿透鼠标，透明宿主不会为了 90ms 动效阻塞底层交互；
+    // 快速重开会在 show 前恢复命中。
+    let _ = w.set_ignore_cursor_events(true);
     let handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(180));
-        hide_menu(&handle);
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        let h2 = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            if POPUP_GEN.load(Ordering::Relaxed) != gen {
+                return;
+            }
+            if let Some(w) = h2.get_webview_window(TRAY_MENU_WINDOW) {
+                let _ = w.hide();
+                let _ = w.eval("window.__dshdReset && window.__dshdReset()");
+            }
+        });
     });
+}
+
+/// 两处自绘菜单的动作分发（menu_choose 调用）。
+pub fn run_action(app: &AppHandle, id: &str) {
+    // 菜单页面共用同一套 70ms 按压反馈与关闭状态机；后端只负责立即分发动作。
     crate::tray::run_action(app, id);
 }
 
@@ -325,10 +429,10 @@ pub fn run_action(app: &AppHandle, id: &str) {
 
 static POPUP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 每次弹窗打开/关闭时递增：旧的外部点击监视线程据此退出，避免误关新弹窗。
-pub(crate) fn bump_popup_gen() {
+/// 每次弹窗打开/关闭时递增：旧监视线程与延迟隐藏据此失效，避免误关新弹窗。
+pub(crate) fn bump_popup_gen() -> u64 {
     use std::sync::atomic::Ordering;
-    POPUP_GEN.fetch_add(1, Ordering::Relaxed);
+    POPUP_GEN.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// 外部点击监视：光标在弹窗矩形外按下任意鼠标键即隐藏。
@@ -341,23 +445,13 @@ pub(crate) fn watch_outside_click(app: AppHandle, label: &'static str, rect: (i3
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let gen = POPUP_GEN.load(Ordering::Relaxed);
     std::thread::spawn(move || {
-        // 托盘菜单由右键触发：弹出时右键通常仍按住（GetAsyncKeyState 一直为
-        // true），若立即按"按键按下 + 光标在外"判定会瞬间误收菜单（菜单
-        // 一 出就消失）。改为：先等所有鼠标按键都释放，再从"按键按下沿"
-        // 检测真正的外部点击——右键菜单的标准收起语义。
+        // 初始视为按住：忽略触发菜单的那次右键，待全部松开后只响应下一次
+        // 鼠标按下沿，避免菜单刚显示就被同一次右键误收起。
+        let mut was_down = true;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(70));
+            std::thread::sleep(std::time::Duration::from_millis(20));
             if POPUP_GEN.load(Ordering::Relaxed) != gen {
                 return;
-            }
-            // 等全部按键释放（0x01 左 / 0x02 右 / 0x04 中）
-            let any_down = unsafe {
-                GetAsyncKeyState(0x01) < 0
-                    || GetAsyncKeyState(0x02) < 0
-                    || GetAsyncKeyState(0x04) < 0
-            };
-            if any_down {
-                continue; // 仍按住（含触发菜单的右键），不判定
             }
             let Some(w) = app.get_webview_window(label) else {
                 return;
@@ -365,20 +459,23 @@ pub(crate) fn watch_outside_click(app: AppHandle, label: &'static str, rect: (i3
             if !w.is_visible().unwrap_or(false) {
                 return;
             }
+            let any_down = unsafe {
+                GetAsyncKeyState(0x01) < 0
+                    || GetAsyncKeyState(0x02) < 0
+                    || GetAsyncKeyState(0x04) < 0
+            };
+            let pressed = any_down && !was_down;
+            was_down = any_down;
+            if !pressed {
+                continue;
+            }
             let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
             unsafe { GetCursorPos(&mut pt) };
             let (x0, y0, x1, y1) = rect;
             if pt.x < x0 || pt.x >= x1 || pt.y < y0 || pt.y >= y1 {
-                let down = unsafe {
-                    GetAsyncKeyState(0x01) < 0
-                        || GetAsyncKeyState(0x02) < 0
-                        || GetAsyncKeyState(0x04) < 0
-                };
-                if down {
-                    crate::logging::log("tray-menu: 检测到外部点击，收起菜单");
-                    let _ = w.hide();
-                    return;
-                }
+                crate::logging::log("tray-menu: 检测到外部点击，收起菜单");
+                hide_menu(&app);
+                return;
             }
         }
     });
@@ -433,5 +530,14 @@ mod tests {
                 "quit",
             ]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transparent_window_reserves_exact_shadow_margins() {
+        let (card_width, card_height) = menu_card_size();
+        let (window_width, window_height) = menu_size();
+        assert_eq!(window_width - card_width, SHADOW_SIDES * 2.0);
+        assert_eq!(window_height - card_height, SHADOW_TOP + SHADOW_BOTTOM);
     }
 }

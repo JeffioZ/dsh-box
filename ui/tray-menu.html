@@ -4,21 +4,21 @@
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="common.css" />
   <style>
-    /* 托盘菜单：不透明窗口（底色=卡片色），圆角由 Win11 系统裁剪
-       （DWM 圆角属性），Win10 为直角；卡片无圆角/阴影自绘。
-       展示/消失为原生菜单式即时切换：该窗口对可见性事件不可靠，
-       入场/退场动效曾引发空白与抖动问题，故不做。
-       hover 过渡与语言子菜单展开收起动效（纯 CSS，common.css）保留。 */
+    /* 与普通弹窗相同：透明宿主窗口只负责承载，卡片背景、圆角、阴影与
+       动效均由内容层绘制。阴影余量须与 tray_menu.rs 的常量同步。 */
     html, body { height: 100%; overflow: hidden; }
-    /* box-sizing 必须显式声明（border-box），卡片占满窗口；无阴影边距。
-       不透明窗口，圆角由 Win11 系统裁剪（Win10 直角）。 */
     * { box-sizing: border-box; }
-    body { padding: 0; background: transparent; }
+    body {
+      display: flex; padding: 12px 16px 20px; background: transparent;
+    }
+    #card {
+      flex: 1; min-width: 0; min-height: 0;
+    }
     #list { display: flex; flex-direction: column; }
   </style>
 </head>
 <body class="dshd-body">
-  <div class="dshd-card">
+  <div id="card" class="dshd-card dshd-menu-surface dshd-menu-motion">
     <div id="list" role="menu" data-i18n-aria-label="appMenu"></div>
   </div>
   <script src="common.js"></script>
@@ -29,10 +29,36 @@
     const { listen } = window.__TAURI__.event;
     const currentWindow = window.__TAURI__.window.getCurrentWindow();
 
+    const card = document.getElementById('card');
+    const menuMotion = dshdCreateMenuMotion(card);
     const menu = dshdCreateMenu(document.getElementById('list'), {
-      onChoose: (id) => invoke('menu_choose', { id }).catch(() => {}),
-      onEscape: () => currentWindow.hide(),
+      onChoose: (id) => {
+        // 与主菜单一致：动作立即分发，70ms 按压反馈后再开始关闭。
+        invoke('menu_choose', { id }).catch(() => {});
+        menuMotion.afterPress(() => {
+          invoke('tray_menu_close').catch(() => currentWindow.hide());
+        });
+      },
+      onEscape: () => invoke('tray_menu_close').catch(() => currentWindow.hide()),
     });
+
+    function applyOpen(items, direction) {
+      menu.setItems(items);
+      if (document.activeElement && document.activeElement !== document.body) {
+        document.activeElement.blur();
+      }
+      // 隐藏状态完成内容与初态准备；show 后下一绘制帧只改变 opacity/transform。
+      // 快速重开会先取消旧帧，最终语义状态不依赖 transitionend。
+      menuMotion.open(direction === 'down' ? '-3px' : '3px');
+    }
+
+    function applyClose() {
+      menuMotion.close();
+    }
+
+    function resetSurface() {
+      menuMotion.reset();
+    }
 
     async function refresh() {
       try {
@@ -51,7 +77,11 @@
         }
       }
     }
-    // Rust 在窗口 show 后 eval 调用本函数：隐藏窗口收不到 emit 时的兜底
+    // Rust 在 show 前同步直呼：首帧即为正确内容与透明动画初态。
+    window.__dshdOpen = applyOpen;
+    window.__dshdClose = applyClose;
+    window.__dshdReset = resetSurface;
+    // 旧事件链与页面首次加载仍可刷新，作为 IPC/极早右键场景的兜底。
     window.__dshdRefresh = refresh;
 
     listen('tray-menu-open', (e) => menu.setItems(e.payload));

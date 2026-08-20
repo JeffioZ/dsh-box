@@ -47,6 +47,9 @@
   --dshd-warning: #d29922;
   --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
   --dshd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
+  /* 标题栏主菜单与独立托盘菜单共用同一层级阴影。 */
+  --dshd-menu-shadow: 0 1px 3px rgba(0, 0, 0, .24),
+    0 4px 12px rgba(0, 0, 0, .32);
 
   /* 字号层级（正文基准 13px，与 dsh 界面一致） */
   --dshd-fs-xs: 11px;
@@ -77,6 +80,10 @@
   --dshd-m-slow: 200ms;
   --dshd-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dshd-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /* 主菜单/托盘菜单共享节奏：按压反馈后退场，退出短于进入。 */
+  --dshd-menu-enter-duration: 110ms;
+  --dshd-menu-press-delay: 70ms;
+  --dshd-menu-exit-duration: 90ms;
 
   /* —— 统一动画系统（分场景） —— */
   /* 多态控件（按钮/条目/开关/输入）：hover/active/pressed 背景色过渡 */
@@ -86,7 +93,7 @@
   /* 弹窗/菜单这类浮层：入场（温和缩放渐入）/退场（淡出） */
   --dshd-anim-pop-in: opacity .18s var(--dshd-ease-out),
     transform .18s var(--dshd-ease-out);
-  --dshd-anim-pop-out: opacity 90ms var(--dshd-ease-in);
+  --dshd-anim-pop-out: opacity var(--dshd-menu-exit-duration) var(--dshd-ease-in);
   /* 循环动画：旋转/进度 */
   --dshd-anim-spin: .8s linear infinite;
   /* 错误/提示浮现 */
@@ -127,6 +134,7 @@
     --dshd-warning: #9a6700;
     --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
     --dshd-scroll-thumb-hover: rgba(38, 49, 72, 0.4);
+    --dshd-menu-shadow: 0 4px 12px rgba(0, 0, 0, .10);
   }
 }
 
@@ -140,15 +148,55 @@
   user-select: none;
 }
 
-/* 自绘卡片：窗口不透明、底色为卡片同色；圆角由 Win11 系统裁剪
-   （DWMWA_WINDOW_CORNER_PREFERENCE），Win10 为直角。
-   卡片本身不再自绘圆角/阴影——透明窗口的逐像素合成对半透明像素
-   有缺陷（圆角抗锯齿透明间隙、阴影黑边），已弃用该路线。 */
+/* 通用卡片基础；具体浮层按各自层级覆盖圆角与阴影。 */
 .dshd-card {
   box-sizing: border-box;
   border-radius: 0;
   background: var(--dshd-card);
   padding: 4px;
+}
+
+/* 标题栏主菜单与独立托盘菜单的共享表面。窗口承载方式不同，但视觉规格
+   必须来自同一处，避免圆角、描边、阴影再次分叉。 */
+.dshd-menu-surface {
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--dshd-card);
+  border: 1px solid var(--dshd-border);
+  border-radius: var(--dshd-r-sm);
+  box-shadow: var(--dshd-menu-shadow);
+}
+
+/* 两种菜单宿主共用的可中断动效状态机。宿主只需设置进入方向变量，并在
+   关闭完成后分别缩回子 WebView 或隐藏原生窗口。 */
+.dshd-menu-motion {
+  --dshd-menu-enter-y: -3px;
+  opacity: 0;
+  transform: translateY(var(--dshd-menu-enter-y));
+  pointer-events: none;
+  transition: none;
+  will-change: opacity, transform;
+}
+.dshd-menu-motion.dshd-menu-open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition: opacity var(--dshd-menu-enter-duration) var(--dshd-ease-out),
+    transform var(--dshd-menu-enter-duration) var(--dshd-ease-out);
+}
+.dshd-menu-motion.dshd-menu-closing {
+  opacity: 0;
+  transform: translateY(0);
+  pointer-events: none;
+  transition: opacity var(--dshd-menu-exit-duration) var(--dshd-ease-in);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dshd-menu-motion,
+  .dshd-menu-motion.dshd-menu-open,
+  .dshd-menu-motion.dshd-menu-closing {
+    transform: none;
+    transition: none;
+  }
 }
 
 /* WebView2/Chromium 与 Firefox 风格均覆盖；仅溢出时出现，不预留空槽。 */
@@ -172,8 +220,7 @@
 .dshd-scroll::-webkit-scrollbar-corner { background: transparent; }
 
 /* 菜单条目：min-h40 / pad 8-10 / 图标 16 / 分隔间距 8。
-   圆角取同心值：Win11 系统窗口圆角约 8px - 卡片内边距 4 = 4，
-   首末行 hover 弧度与窗口圆角视觉对齐（Win10 直角窗口下轻微圆角高亮同样自然） */
+   条目 4px 圆角与菜单表面 7px 圆角、4px 内边距保持同心观感。 */
 .dshd-row {
   display: flex;
   align-items: center;

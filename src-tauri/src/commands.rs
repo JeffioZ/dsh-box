@@ -317,6 +317,15 @@ pub fn menu_choose(app: AppHandle, webview: tauri::Webview, id: String) -> Resul
     Ok(())
 }
 
+/// 托盘菜单通过 Escape 请求关闭；统一走 Rust 生命周期，确保外部点击、
+/// 菜单选择与键盘关闭都使用同一退场动画和竞态保护。
+#[tauri::command]
+pub fn tray_menu_close(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::tray_menu::hide_menu(&app);
+    Ok(())
+}
+
 // ---------- 设置页（统一弹窗内三开关） ----------
 
 /// 设置页开关状态快照。
@@ -530,6 +539,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         titlebar_expand,
         menu_get,
         menu_choose,
+        tray_menu_close,
         app_dialog_open_balance,
         app_dialog_refresh_balance,
         app_dialog_get,

@@ -228,6 +228,83 @@ function dshdSetLanguage(language) {
   }));
 }
 
+function dshdCssDurationMs(name, fallback) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return raw.endsWith('s') && !raw.endsWith('ms') ? value * 1000 : value;
+}
+
+/** 主菜单与托盘菜单共用的可中断动效状态机。 */
+function dshdCreateMenuMotion(surface) {
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let openFrame = 0;
+  let closeTimer = 0;
+  let pressTimer = 0;
+
+  function cancelOpenFrame() {
+    cancelAnimationFrame(openFrame);
+    openFrame = 0;
+  }
+
+  function clearTimers() {
+    clearTimeout(closeTimer);
+    clearTimeout(pressTimer);
+    closeTimer = 0;
+    pressTimer = 0;
+  }
+
+  function open(enterY) {
+    cancelOpenFrame();
+    clearTimers();
+    surface.style.setProperty('--dshd-menu-enter-y', enterY || '-3px');
+    surface.classList.remove('dshd-menu-open', 'dshd-menu-closing');
+    void surface.offsetWidth;
+    if (reducedMotion.matches) {
+      surface.classList.add('dshd-menu-open');
+      return;
+    }
+    openFrame = requestAnimationFrame(() => {
+      openFrame = 0;
+      surface.classList.add('dshd-menu-open');
+    });
+  }
+
+  function close(onClosed) {
+    cancelOpenFrame();
+    clearTimers();
+    surface.classList.remove('dshd-menu-open');
+    surface.classList.add('dshd-menu-closing');
+    const delay = reducedMotion.matches
+      ? 0
+      : dshdCssDurationMs('--dshd-menu-exit-duration', 90);
+    closeTimer = setTimeout(() => {
+      closeTimer = 0;
+      surface.classList.remove('dshd-menu-closing');
+      if (onClosed) onClosed();
+    }, delay);
+  }
+
+  function afterPress(callback) {
+    clearTimeout(pressTimer);
+    const delay = reducedMotion.matches
+      ? 0
+      : dshdCssDurationMs('--dshd-menu-press-delay', 70);
+    pressTimer = setTimeout(() => {
+      pressTimer = 0;
+      callback();
+    }, delay);
+  }
+
+  function reset() {
+    cancelOpenFrame();
+    clearTimers();
+    surface.classList.remove('dshd-menu-open', 'dshd-menu-closing');
+  }
+
+  return { open, close, afterPress, reset };
+}
+
 /** HTML 转义（文本插入 innerHTML 前调用）。 */
 function dshdEsc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({

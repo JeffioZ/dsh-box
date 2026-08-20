@@ -774,10 +774,6 @@ document.addEventListener('keydown', function (e) {
 pub(crate) const DARK_BG: tauri::window::Color = tauri::window::Color(0x15, 0x15, 0x17, 0xFF);
 /// 浅色主题的统一底色（与 dsh 浅色主题 body 背景纯白一致）。
 pub(crate) const LIGHT_BG: tauri::window::Color = tauri::window::Color(0xFF, 0xFF, 0xFF, 0xFF);
-/// 自绘托盘菜单/弹窗的统一深色卡片底色（与 dsh 菜单卡片 bluish-800 一致）。
-pub(crate) const CARD_BG_DARK: tauri::window::Color = tauri::window::Color(0x35, 0x36, 0x38, 0xFF);
-/// 自绘托盘菜单/弹窗的统一浅色卡片底色（纯白）。
-pub(crate) const CARD_BG_LIGHT: tauri::window::Color = tauri::window::Color(0xFF, 0xFF, 0xFF, 0xFF);
 
 /// 向启动页广播状态（不确定进度）。
 pub fn emit_status(app: &AppHandle, phase: BootPhase, message: &str, detail: &str) {

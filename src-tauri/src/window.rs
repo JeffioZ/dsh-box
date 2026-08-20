@@ -103,25 +103,6 @@ fn save_now(app: &AppHandle) {
     }
 }
 
-/// 启用系统圆角裁剪（DWMWCP_ROUND，仅 Win11 生效）：托盘菜单等不透明
-/// 窗口用系统裁剪圆角（Win10 为直角，无害）。
-#[cfg(windows)]
-pub(crate) fn enable_system_rounded_corners(win: &tauri::WebviewWindow) {
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
-    };
-    let Ok(hwnd) = win.hwnd() else { return };
-    let preference = DWMWCP_ROUND;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd.0,
-            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-            &preference as *const _ as *const core::ffi::c_void,
-            std::mem::size_of::<i32>() as u32,
-        );
-    }
-}
-
 /// 禁用系统圆角裁剪（DWMWCP_DONOTROUND）：透明窗口自绘圆角时必须关闭，
 /// 否则系统 8px 圆角会叠加在内容圆角四角上（视觉错位）。
 #[cfg(windows)]

@@ -5,6 +5,9 @@ const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
 let mainMenuOpen = false;
 let mainMenu = null;
+let mainMenuMotion = null;
+let mainMenuRequest = 0;
+let mainMenuSelectionPending = false;
 
 function initPlatform() {
   const platform = (navigator.userAgentData && navigator.userAgentData.platform)
@@ -25,12 +28,8 @@ function initPlatform() {
 function syncOverlayHeight() {
   const content = mainMenuOpen && $('main-menu-panel') ? $('main-menu-panel').offsetHeight : 0;
   const height = content > 0 ? 36 + content + 24 : 36;
-  invoke('titlebar_expand', { expand: height > 36, height }).catch(() => {});
+  return invoke('titlebar_expand', { expand: height > 36, height }).catch(() => {});
 }
-
-// 收起时推迟收缩 webview：淡出动画（140/160ms）期间立即收缩会把
-// 正在淡出的面板硬裁切，裁切边贴着标题栏分隔线，产生“衔接处闪烁”
-let overlaySyncTimer = null;
 
 async function refreshMainMenu() {
   try {
@@ -41,7 +40,9 @@ async function refreshMainMenu() {
 }
 
 function setMainMenuOpen(open, focusMenu = false) {
+  const request = ++mainMenuRequest;
   mainMenuOpen = Boolean(open);
+  if (!mainMenuOpen) mainMenuSelectionPending = false;
   $('main-menu-wrap').classList.toggle('open', mainMenuOpen);
   $('btn-menu').setAttribute('aria-expanded', String(mainMenuOpen));
   $('main-menu-panel').setAttribute('aria-hidden', String(!mainMenuOpen));
@@ -52,23 +53,32 @@ function setMainMenuOpen(open, focusMenu = false) {
     // 双重重绘正是标题栏文案偶发闪烁的来源。
     // 鼠标打开菜单时不转移焦点（会打断按钮的 :active 态引起闪烁，
     // 原生菜单鼠标点开也不转移）；键盘激活由 focusMenu 在渲染完成后聚焦。
-    refreshMainMenu().then(() => {
+    refreshMainMenu().then(async () => {
+      if (request !== mainMenuRequest || !mainMenuOpen) return;
+      await syncOverlayHeight();
+      if (request !== mainMenuRequest || !mainMenuOpen) return;
+      mainMenuMotion.open('-3px');
       if (focusMenu) mainMenu.focusFirst();
-      syncOverlayHeight();
     });
+    return;
   }
-  clearTimeout(overlaySyncTimer);
-  if (!mainMenuOpen) overlaySyncTimer = setTimeout(syncOverlayHeight, 200);
+  // 先完成共用的 90ms 纯淡出，再收缩标题栏 WebView，避免硬裁切阴影。
+  mainMenuMotion.close(() => {
+    if (request === mainMenuRequest && !mainMenuOpen) syncOverlayHeight();
+  });
 }
 
 function bindMainMenu() {
+  mainMenuMotion = dshdCreateMenuMotion($('main-menu-panel'));
   mainMenu = dshdCreateMenu($('main-menu-list'), {
-    onChoose: async (id) => {
-      try {
-        await invoke('menu_choose', { id });
-      } finally {
+    onChoose: (id) => {
+      // 语义动作立即分发，不依赖动画完成；仅视觉关闭统一保留 70ms 按压反馈。
+      mainMenuSelectionPending = true;
+      invoke('menu_choose', { id }).catch(() => {});
+      mainMenuMotion.afterPress(() => {
+        mainMenuSelectionPending = false;
         setMainMenuOpen(false);
-      }
+      });
     },
     onEscape: () => {
       setMainMenuOpen(false);
@@ -143,7 +153,8 @@ async function init() {
     maxCheckTimer = setTimeout(refreshMaxState, 150);
   });
   window.addEventListener('blur', () => {
-    if (mainMenuOpen) setMainMenuOpen(false);
+    // 菜单动作可能立即打开弹窗并令标题栏失焦；此时仍保留完整按压反馈。
+    if (mainMenuOpen && !mainMenuSelectionPending) setMainMenuOpen(false);
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && mainMenuOpen) {
