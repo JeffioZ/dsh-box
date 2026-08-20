@@ -65,8 +65,8 @@ pub struct Config {
     pub port: u16,
     /// 应用数据根目录（node/、dsh/、logs/、config.json 所在处）。
     pub root: PathBuf,
-    /// 给 dsh 子进程的 DSH_HOME（固定为独立的 ~/.dsh-box，与官方 dsh CLI
-    /// 及第三方桌面壳隔离；可用 DSH_BOX_DSH_HOME 覆盖）。
+    /// 给 dsh 子进程的 DSH_HOME（默认官方 ~/.dsh，与官方 dsh CLI 互通；
+    /// 尊重官方 DSH_HOME 环境变量覆盖）。
     pub dsh_home: Option<PathBuf>,
     /// 手动指定的 DeepSeek API Key（未指定时从 dsh 凭据/环境变量读取）。
     pub api_key: Option<String>,
@@ -98,13 +98,13 @@ impl Config {
             .filter(|p| *p > 0)
             .unwrap_or(DEFAULT_PORT);
         let dsh_home = Some(
-            std::env::var("DSH_BOX_DSH_HOME")
+            std::env::var("DSH_HOME")
                 .ok()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     dirs::home_dir()
-                        .map(|home| home.join(".dsh-box"))
-                        .unwrap_or_else(|| std::env::temp_dir().join("dsh-box"))
+                        .map(|home| home.join(".dsh"))
+                        .unwrap_or_else(|| std::env::temp_dir().join("dsh"))
                 }),
         );
         let api_base = "https://api.deepseek.com".into();
@@ -236,12 +236,12 @@ impl Config {
         format!("http://127.0.0.1:{}", self.port)
     }
 
-    /// dsh 主目录（DSH_HOME）：固定为独立的 ~/.dsh-box（DSH_BOX_DSH_HOME 覆盖），
-    /// 与官方 dsh CLI 及第三方桌面壳隔离。
+    /// dsh 主目录（DSH_HOME）：默认官方 ~/.dsh，与官方 dsh CLI 互通；
+    /// 尊重 DSH_HOME 环境变量覆盖。
     pub fn dsh_home(&self) -> PathBuf {
         self.dsh_home.clone().unwrap_or_else(|| {
             dirs::home_dir()
-                .map(|home| home.join(".dsh-box"))
+                .map(|home| home.join(".dsh"))
                 .unwrap_or_else(std::env::temp_dir)
         })
     }

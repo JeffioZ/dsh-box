@@ -119,7 +119,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 |---|---|
 | `DSH_BOX_ROOT` | 覆盖数据根目录 |
 | `DSH_BOX_PORT` | 覆盖监听端口 |
-| `DSH_BOX_DSH_HOME` | 覆盖 dsh 主目录（`DSH_HOME`） |
+| `DSH_HOME` | 覆盖 dsh 主目录（官方语义，默认 `~/.dsh`，与官方 dsh CLI 互通） |
 | `DSH_BOX_API_KEY` | 覆盖 API Key |
 | `DSH_BOX_API_BASE` | 覆盖 API 基地址 |
 | `DSHD_LANG` | 固定界面语言（`zh-CN` / `en`，重启后生效，优先级最高） |
@@ -130,7 +130,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 
 ### API Key
 
-解析顺序：`DSH_BOX_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，即 `~/.dsh-box/.credentials.yaml`）。
+解析顺序：`DSH_BOX_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，即 `~/.dsh/.credentials.yaml`）。
 
 > `config.json` 中的 API Key 以明文保存在当前用户的数据目录内，请勿提交到仓库或发送给他人。
 
