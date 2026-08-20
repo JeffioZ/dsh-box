@@ -120,7 +120,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
             return Ok(());
         }
         emit_status(app, BootPhase::Ready, ready, "");
-        std::thread::sleep(Duration::from_millis(320));
+        // 给前端 ready 事件送达 + 启动页淡出（0.3s）留足时间，
+        // 避免淡出未播完就被 navigate 替换（“直接进入 dsh”的跳变感）
+        std::thread::sleep(Duration::from_millis(500));
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
@@ -161,7 +163,9 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
             return Ok(());
         }
         emit_status(app, BootPhase::Ready, ready, "");
-        std::thread::sleep(Duration::from_millis(320));
+        // 给前端 ready 事件送达 + 启动页淡出（0.3s）留足时间，
+        // 避免淡出未播完就被 navigate 替换（“直接进入 dsh”的跳变感）
+        std::thread::sleep(Duration::from_millis(500));
         navigate(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());

@@ -8,19 +8,35 @@
 :root {
   --dshd-bg: #151517;
   --dshd-card: #353638;
+  /* 弹窗/悬浮层面板背景：dsh bg-layer-2（bluish-850 #2c2c2e）——
+     与卡片（菜单）色区分，dsh 弹窗面板用 layer-2 */
+  --dshd-overlay: #2c2c2e;
   --dshd-text: #f9fafb;
-  --dshd-text-dim: #adb2b8;
+  /* 次级文字：dsh label-secondary（深色 bluish-300 #cfd3d6） */
+  --dshd-text-dim: #cfd3d6;
   --dshd-border: rgba(255, 255, 255, 0.06);
   --dshd-border-strong: #3a3a46;
   --dshd-hover: rgba(255, 255, 255, 0.08);
   --dshd-pressed: rgba(255, 255, 255, 0.14);
-  --dshd-accent: #4d6bfe;
-  --dshd-accent-hover: #4160e6;
-  --dshd-accent-pressed: #3957cf;
-  /* 承载白字的实心强调面：比品牌强调色略深，普通文字对比度 ≥ 4.5:1。 */
-  --dshd-accent-surface: #4160e6;
-  --dshd-accent-surface-hover: #3957cf;
-  --dshd-accent-surface-pressed: #304ab9;
+  /* 选中态：dsh button-ghost-active-fill 中性灰（深色 bluish-750 #43454a /
+     浅色 bluish-100 #ebedf2），非重点色交互（导航/分类/分段选中）；
+     品牌蓝只用于 accent 点缀与 primary 按钮 */
+  --dshd-selected: #43454a;
+  --dshd-selected-hover: #4d4f55;
+  --dshd-selected-text: #f9fafb;
+  /* 滑块开关：dshmarket 规范（38×22、未选中 bg-layer-2、选中成功绿 #16a34a） */
+  --dshd-switch-bg: #2c2c2e;
+  --dshd-switch-on: #16a34a;
+  /* 品牌强调色：dsh deepseek 色板（design-platform.css）
+     - accent 450 #5686fe：图标/链接/焦点环/开关选中（深色底对比 ≥4.5）
+     - accent-surface 600 #4868b2：承载白字的实心强调面（白字对比 5.4:1 ≥4.5；
+       500 #4176e6 仅 4.24:1 不达标，故 surface 用 600 级） */
+  --dshd-accent: #5686fe;
+  --dshd-accent-hover: #679efe;
+  --dshd-accent-pressed: #4176e6;
+  --dshd-accent-surface: #4868b2;
+  --dshd-accent-surface-hover: #3f5c99;
+  --dshd-accent-surface-pressed: #33539f;
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
   --dshd-error: #f85149;
@@ -40,10 +56,11 @@
   --dshd-fs-lg: 20px;
   --dshd-fs-xl: 22px;
 
-  /* 圆角层级 */
-  --dshd-r-sm: 8px;
+  /* 圆角层级（dsh 设计系统：菜单 7 / 卡片 10 / 面板 12 / 按钮 18 pill） */
+  --dshd-r-sm: 7px;
   --dshd-r-md: 10px;
   --dshd-r-lg: 12px;
+  --dshd-r-btn: 18px;
   --dshd-r-pill: 999px;
 
   /* 间距层级（4px 基准） */
@@ -60,18 +77,49 @@
   --dshd-m-slow: 200ms;
   --dshd-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dshd-ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* —— 统一动画系统（分场景） —— */
+  /* 多态控件（按钮/条目/开关/输入）：hover/active/pressed 背景色过渡 */
+  --dshd-anim-state: background-color var(--dshd-m-fast) var(--dshd-ease-out),
+    color var(--dshd-m-fast) var(--dshd-ease-out),
+    border-color var(--dshd-m-fast) var(--dshd-ease-out);
+  /* 弹窗/菜单这类浮层：入场（温和缩放渐入）/退场（淡出） */
+  --dshd-anim-pop-in: opacity .18s var(--dshd-ease-out),
+    transform .18s var(--dshd-ease-out);
+  --dshd-anim-pop-out: opacity 90ms var(--dshd-ease-in);
+  /* 循环动画：旋转/进度 */
+  --dshd-anim-spin: .8s linear infinite;
+  /* 错误/提示浮现 */
+  --dshd-anim-reveal: opacity .11s var(--dshd-ease-out),
+    transform .11s var(--dshd-ease-out);
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     --dshd-bg: #f7f8fa;
     --dshd-card: #ffffff;
+    --dshd-overlay: #eef0f4;
     --dshd-text: #0f1115;
-    --dshd-text-dim: #656a73;
+    /* 次级文字：dsh label-secondary（浅色 bluish-700 #61666b） */
+    --dshd-text-dim: #61666b;
     --dshd-border: rgba(0, 0, 0, 0.06);
     --dshd-border-strong: #d9dce3;
     --dshd-hover: rgba(38, 49, 72, 0.06);
     --dshd-pressed: rgba(38, 49, 72, 0.1);
+    /* 浅色选中态：bluish-100 #ebedf2 */
+    --dshd-selected: #ebedf2;
+    --dshd-selected-hover: #e1e5ee;
+    --dshd-selected-text: #0f1115;
+    --dshd-switch-bg: #eef0f4;
+    /* 浅色主题强调色：整体用 deepseek 500/600 级（450 在白底仅 3.4:1 不足）
+       - accent 500 #4176e6：焦点环/图标/开关（非文本 ≥3:1）
+       - accent-surface 600 #4868b2：白字实心面（≥4.5） */
+    --dshd-accent: #4176e6;
+    --dshd-accent-hover: #3d63c8;
+    --dshd-accent-pressed: #33539f;
+    --dshd-accent-surface: #4868b2;
+    --dshd-accent-surface-hover: #3f5c99;
+    --dshd-accent-surface-pressed: #33539f;
     --dshd-error: #b42318;
     --dshd-error-text: #b42318;
     --dshd-success: #1a7f37;
@@ -84,7 +132,10 @@
 
 .dshd-body {
   margin: 0;
-  font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* dsh 字体栈（dsw-font-family）：系统 UI 优先 + 中文回退 */
+  font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
   color: var(--dshd-text);
   user-select: none;
 }
@@ -143,7 +194,7 @@
 }
 .dshd-row:hover { background: var(--dshd-hover); }
 /* hover 淡入淡出：与标题栏控件/余额 chip 的过渡一致（全局统一的微动效节奏） */
-.dshd-row { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
+.dshd-row { transition: var(--dshd-anim-state); }
 .dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
 .dshd-row.danger:hover { background: var(--dshd-danger); color: #fff; }
@@ -168,7 +219,8 @@
   height: 30px;
   padding: 0 14px;
   border: 1px solid var(--dshd-border);
-  border-radius: 10px;
+  /* dsh 按钮圆角：18px pill（design-platform.css） */
+  border-radius: var(--dshd-r-btn);
   background: transparent;
   color: var(--dshd-text);
   font: inherit;
@@ -178,9 +230,9 @@
 .dshd-btn:hover { background: var(--dshd-hover); }
 .dshd-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
 .dshd-btn:active { background: var(--dshd-pressed); }
-.dshd-btn { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease; }
-/* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），与分类 pill 同高 */
-.dshd-btn.small { height: 24px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.dshd-btn { transition: var(--dshd-anim-state); }
+/* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角与主按钮一致（18px pill） */
+.dshd-btn.small { height: 24px; padding: 0 10px; font-size: 12px; border-radius: var(--dshd-r-btn); }
 .dshd-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
 .dshd-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
 .dshd-btn.primary:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
@@ -192,11 +244,15 @@
 .dshd-head {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--dshd-border);
-  font-size: 14px;
-  font-weight: 600;
+  /* dsh 设置弹窗头部：54px 高、无分隔线（dsh 面板头部与内容同底）；
+     动作按钮右对齐（dsh header 的 actions 为 margin-left:auto） */
+  height: 54px;
+  padding: 20px 14px 8px 10px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
 }
 .dshd-head .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dshd-x {
@@ -204,7 +260,8 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 10px;
+  /* dsh 设置弹窗关闭按钮：28px 圆形 */
+  border-radius: 28px;
   background: transparent;
   color: var(--dshd-text-dim);
   font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
@@ -215,13 +272,4 @@
 .dshd-x:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 .dshd-x:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-x:active { background: var(--dshd-pressed); }
-.dshd-x { transition: background-color var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease; }
-
-/* 弹窗页脚 */
-.dshd-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--dshd-border);
-}
+.dshd-x { transition: var(--dshd-anim-state); }

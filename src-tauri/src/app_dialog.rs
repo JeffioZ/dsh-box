@@ -18,8 +18,40 @@ pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 /// 680 宽（导航 152 + 内容 528）、480 高——列表页（插件/会话文件）内容在
 /// 内容区滚动浏览，轻量页（余额/设置/关于）不再因统一高度而大片留空。
 /// 高度不做按 kind 切换（切换时窗口跳变观感差），统一折中。
-fn dialog_size(_kind: &str) -> (f64, f64) {
-    (680.0, 480.0)
+/// 自绘阴影余量（dsh shadow-lv3：上扩 20px、下 12px+32px、左右 32px 扩散）：
+/// 透明窗口 = 卡片 + 阴影空间，阴影由 dialog.html 卡片层自绘；
+/// 余量不足会被窗口边缘硬切（视觉不自然）。
+const SHADOW_TOP: f64 = 24.0;
+const SHADOW_BOTTOM: f64 = 48.0;
+const SHADOW_SIDES: f64 = 36.0;
+
+/// 弹窗卡片逻辑高度：dsh 设置弹窗规格 min(800px, dsh 本体视口高-48)。
+/// dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏与状态栏），
+/// 而非整个主窗口高度——直接取主窗口高度会偏大。
+fn dialog_card_height(app: &AppHandle) -> f64 {
+    crate::main_window(app)
+        .and_then(|w| {
+            let size = w.inner_size().ok()?;
+            let scale = w.scale_factor().ok()?;
+            let total = size.height as f64 / scale;
+            // 标题栏 + 状态栏（隐藏状态栏时为 0，与 sync_bounds 口径一致）
+            let status_h = if app.state::<AppState>().config().hide_statusbar {
+                0.0
+            } else {
+                crate::titlebar::STATUSBAR_HEIGHT
+            };
+            Some(total - crate::titlebar::TITLEBAR_HEIGHT - status_h)
+        })
+        .map(|h| (h - 48.0).clamp(480.0, 800.0))
+        .unwrap_or(640.0)
+}
+
+/// 弹窗窗口尺寸 = 卡片 800×h + 阴影余量。
+fn dialog_size(app: &AppHandle) -> (f64, f64) {
+    (
+        800.0 + SHADOW_SIDES * 2.0,
+        dialog_card_height(app) + SHADOW_TOP + SHADOW_BOTTOM,
+    )
 }
 
 fn main_is_presented(main: &tauri::Window) -> bool {
@@ -40,51 +72,77 @@ pub fn precreate(app: &AppHandle) {
     // 导航白名单与主窗口一致：弹窗内容只允许加载内置页面（IPC 另有来源
     // 校验兜底，此处堵住内容本身被导航到任意远程地址的口子）
     let navigation_app = app.clone();
-    match tauri::WebviewWindowBuilder::new(
+    // 弹窗窗口 = 卡片 800×min(800, 视口高-48) + 自绘阴影余量
+    // （dsh-client-ui-settings-general：width 800 / height min(800px, 100vh-48px)）
+    let (dialog_w, dialog_h) = dialog_size(app);
+    // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
+    // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
+    let initial_pos = crate::main_window(app).and_then(|w| {
+        let scale = w.scale_factor().ok()?;
+        let pos = w.outer_position().ok()?;
+        let size = w.outer_size().ok()?;
+        let mlx = pos.x as f64 / scale;
+        let mly = pos.y as f64 / scale;
+        let mlw = size.width as f64 / scale;
+        let mlh = size.height as f64 / scale;
+        let status_h = if app.state::<AppState>().config().hide_statusbar {
+            0.0
+        } else {
+            crate::titlebar::STATUSBAR_HEIGHT
+        };
+        let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
+        let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
+        let dx = mlx + (mlw - (dialog_w - SHADOW_SIDES * 2.0)) / 2.0 - SHADOW_SIDES;
+        let dy =
+            content_y + (content_h - (dialog_h - SHADOW_TOP - SHADOW_BOTTOM)) / 2.0 - SHADOW_TOP;
+        Some((dx, dy))
+    });
+    let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         APP_DIALOG_WINDOW,
         WebviewUrl::App("dialog.html".into()),
     )
     .title(crate::APP_TITLE)
-    .inner_size(680.0, 480.0)
-    .initialization_script(crate::locale::init_script())
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(false)
-    .on_navigation(move |url| {
-        let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
-        if !allowed {
-            crate::logging::log(&format!("app-dialog: 已拦截非白名单导航 {url}"));
-        }
-        allowed
-    })
-    .build()
+    .inner_size(dialog_w, dialog_h);
+    if let Some((dx, dy)) = initial_pos {
+        builder = builder.position(dx, dy);
+    }
+    match builder
+        .initialization_script(crate::locale::init_script())
+        .resizable(false)
+        .decorations(false)
+        // 透明背景在创建时设置一次：show 时重置会强制 WebView2 合成刷新，
+        // 导致"展示完成后闪一下"（分层窗口合成重建）
+        .background_color(tauri::window::Color(0, 0, 0, 0))
+        // 透明窗口 + 内容自绘 24px 圆角（与 dsh 设置弹窗一致；系统圆角仅 8px
+        // 且不可调档）。旧版 WebView2 的透明合成有抗锯齿缺陷，现代版本已修复；
+        // 若再遇黑边/透明间隙，回退系统圆角方案。
+        .transparent(true)
+        // 透明窗口关闭系统阴影：Win11 的 DWM 阴影（8px 圆角）会盖在自绘
+        // 24px 圆角内容外，看起来像一圈 native 边框
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .on_navigation(move |url| {
+            let allowed =
+                crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
+            if !allowed {
+                crate::logging::log(&format!("app-dialog: 已拦截非白名单导航 {url}"));
+            }
+            allowed
+        })
+        .build()
     {
         Ok(win) => {
-            // 不透明窗口 + 卡片色背景：透明窗口的逐像素合成对圆角抗锯齿
-            // 像素有缺陷（透明间隙/黑边/方块角），此路线已弃用；
-            // 圆角交给 Win11 系统裁剪（Win10 直角），主题按 dsh 偏好固定
+            // 透明窗口：背景色由 dialog.html 的卡片层自绘（含 24px 圆角），
+            // 窗口本身不设背景色；关闭系统圆角裁剪避免与自绘圆角叠加
             let theme = app.state::<AppState>().config().resolve_dsh_theme();
-            let light = if theme == Some(tauri::Theme::Light) {
-                true
-            } else if theme == Some(tauri::Theme::Dark) {
-                false
-            } else {
-                win.theme().ok() == Some(tauri::Theme::Light)
-            };
             if let Some(theme) = theme {
                 let _ = win.set_theme(Some(theme));
             }
-            let color = if light {
-                crate::CARD_BG_LIGHT
-            } else {
-                crate::CARD_BG_DARK
-            };
-            let _ = win.set_background_color(Some(color));
             #[cfg(windows)]
-            crate::window::enable_system_rounded_corners(&win);
+            crate::window::disable_system_rounded_corners(&win);
         }
         Err(e) => {
             crate::logging::log(&format!("app-dialog: 窗口预创建失败：{e}"));
@@ -94,18 +152,48 @@ pub fn precreate(app: &AppHandle) {
 
 /// 定位并显示（调用方已在主线程）。
 fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
-    let Some(win) = app.get_webview_window(APP_DIALOG_WINDOW) else {
-        crate::logging::log("app-dialog: 窗口不存在（预创建失败？）");
-        return;
+    let win = match app.get_webview_window(APP_DIALOG_WINDOW) {
+        Some(w) => w,
+        None => {
+            // 兜底：窗口被销毁或创建失败（如主窗口恢复前用户极早打开），
+            // 现场重建——创建参数即几何，无异步跳变
+            crate::logging::log("app-dialog: 窗口不存在，现场重建");
+            precreate(app);
+            let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) else {
+                crate::logging::log("app-dialog: 窗口重建失败");
+                return;
+            };
+            w
+        }
     };
     // 代次 +1：若上次关闭的延迟隐藏尚未执行，令其失效，避免误藏本次弹窗
     app.state::<AppState>().bump_dialog_gen();
-    let (ww, wh) = dialog_size(kind);
+    let (ww, wh) = dialog_size(app);
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(ww, wh)));
+    // 等待尺寸生效（异步 IPC）：弹窗预创建于 setup 早期（主窗口尚未恢复尺寸），
+    // 第一次 show 时几何与预创建不同——若立即 show，首帧按旧几何显示后跳到
+    // 新几何，造成"位置不对 + 闪一下"；等待生效后再显示可消除
+    for _ in 0..30 {
+        let ok = win
+            .inner_size()
+            .map(|s| {
+                let scale = win.scale_factor().unwrap_or(1.0);
+                (s.width as f64 / scale - ww).abs() < 1.0
+                    && (s.height as f64 / scale - wh).abs() < 1.0
+            })
+            .unwrap_or(false);
+        if ok {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut target_pos: Option<(f64, f64)> = None;
     let main = crate::main_window(app);
     let main_presented = main.as_ref().is_some_and(main_is_presented);
     if main_presented {
-        // 主窗口正常显示时沿用原行为，相对主窗口居中。
+        // 主窗口正常显示时相对主窗口居中。
+        // 注意按卡片视觉中心对齐：窗口含不对称阴影空间（上 24/下 48/左右 36），
+        // 直接按窗口矩形居中会让卡片视觉中心偏下。
         if let Some(main) = main.as_ref() {
             if let (Ok(mp), Ok(ms)) = (main.outer_position(), main.outer_size()) {
                 let scale = main.scale_factor().unwrap_or(1.0);
@@ -113,14 +201,30 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
                 let mly = mp.y as f64 / scale;
                 let mlw = ms.width as f64 / scale;
                 let mlh = ms.height as f64 / scale;
+                // dsh 弹窗对齐的是主窗口内容区（去标题栏/状态栏），非整个窗口
+                let status_h = if app.state::<AppState>().config().hide_statusbar {
+                    0.0
+                } else {
+                    crate::titlebar::STATUSBAR_HEIGHT
+                };
+                let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
+                let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
+                let card_w = ww - SHADOW_SIDES * 2.0;
+                let card_h = wh - SHADOW_TOP - SHADOW_BOTTOM;
+                let dx = mlx + (mlw - card_w) / 2.0 - SHADOW_SIDES;
+                let dy = content_y + (content_h - card_h) / 2.0 - SHADOW_TOP;
+                crate::logging::log(&format!(
+                    "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
+                ));
+                target_pos = Some((dx, dy));
                 let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    mlx + (mlw - ww) / 2.0,
-                    mly + (mlh - wh) / 2.0,
+                    dx, dy,
                 )));
             }
         }
     } else {
-        // 仅托盘运行时，按鼠标所在屏幕的工作区居中（避开任务栏）。
+        // 仅托盘运行时（主窗口不可见/最小化），按鼠标所在屏幕的工作区居中
+        crate::logging::log("app-dialog: 主窗口不可见/最小化，屏幕居中");
         let monitor = app
             .cursor_position()
             .ok()
@@ -129,18 +233,48 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
         if let Some(monitor) = monitor {
             let scale = monitor.scale_factor();
             let area = monitor.work_area();
-            let width = (ww * scale).round() as u32;
-            let height = (wh * scale).round() as u32;
-            let x = area.position.x + (area.size.width.saturating_sub(width) / 2) as i32;
-            let y = area.position.y + (area.size.height.saturating_sub(height) / 2) as i32;
+            // 卡片视觉居中（窗口含不对称阴影空间，需按卡片尺寸计算并补偿偏移）
+            let card_w = ((ww - SHADOW_SIDES * 2.0) * scale).round() as u32;
+            let card_h = ((wh - SHADOW_TOP - SHADOW_BOTTOM) * scale).round() as u32;
+            let x = area.position.x + (area.size.width.saturating_sub(card_w) / 2) as i32
+                - (SHADOW_SIDES * scale) as i32;
+            let y = area.position.y + (area.size.height.saturating_sub(card_h) / 2) as i32
+                - (SHADOW_TOP * scale) as i32;
             let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                width, height,
+                (ww * scale).round() as u32,
+                (wh * scale).round() as u32,
             )));
+            target_pos = Some((x as f64 / scale, y as f64 / scale));
             let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
                 x, y,
             )));
         } else {
             let _ = win.center();
+        }
+    }
+    // 等位置生效（异步 IPC）：首帧若按窗口默认位置显示再跳到目标位置，
+    // 会闪一下且位置"不对"（第二次起窗口已在目标位置所以正常）
+    if let Some((tx, ty)) = target_pos {
+        for _ in 0..30 {
+            let ok = win
+                .outer_position()
+                .map(|p| {
+                    let scale = win.scale_factor().unwrap_or(1.0);
+                    (p.x as f64 / scale - tx).abs() < 1.0 && (p.y as f64 / scale - ty).abs() < 1.0
+                })
+                .unwrap_or(false);
+            if ok {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if let Ok(p) = win.outer_position() {
+            let scale = win.scale_factor().unwrap_or(1.0);
+            crate::logging::log(&format!(
+                "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
+                p.x as f64 / scale,
+                p.y as f64 / scale
+            ));
         }
     }
     // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。

@@ -106,6 +106,9 @@ pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
     let window = app.get_window(MAIN_WINDOW).expect("主窗口不存在");
     let navigation_app = app.clone();
     let child = WebviewBuilder::new(STATUSBAR_LABEL, WebviewUrl::App("statusbar.html".into()))
+        // 禁用后台节流：状态栏实时更新（会话统计/余额），失焦节流会导致
+        // 首次渲染滞后（loading 界面先出、状态栏后出的跳跃感）
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .initialization_script(crate::locale::init_script())
         .on_navigation(move |url| {
             let allowed =

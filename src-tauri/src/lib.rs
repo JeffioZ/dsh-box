@@ -142,18 +142,19 @@ var css = [
   '.__dshd_cm{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
   'background:var(--dsw-specific-menu,#353638);',
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.06));',
-  'border-radius:12px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px rgba(0,0,0,.4));',
-  'font:14px/22px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;',
+  // dsh 菜单圆角 7px（compact list）+ dsh 字体栈
+  'border-radius:7px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px rgba(0,0,0,.4));',
+  'font:14px/22px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;',
   'color:var(--dsw-alias-label-primary,#f9fafb);user-select:none;',
   'animation:dshd-cm-in .11s ease-out;}',
   '@keyframes dshd-cm-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}',
-  '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:10px;cursor:default;white-space:nowrap;',
+  '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:7px;cursor:default;white-space:nowrap;',
   'display:flex;align-items:center;gap:8px;box-sizing:border-box;',
   // hover 淡入淡出：与托盘/标题栏菜单、弹窗按钮的过渡节奏一致
   'transition:background-color .12s ease,color .12s ease;}',
   '.__dshd_cm_i:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));}',
   '.__dshd_cm_i:focus{outline:none;}',
-  '.__dshd_cm.__dshd_cm_kbd .__dshd_cm_i:focus{outline:2px solid var(--dsw-brand-color-primary,#4d6bfe);outline-offset:-2px;}',
+  '.__dshd_cm.__dshd_cm_kbd .__dshd_cm_i:focus{outline:2px solid var(--dsw-brand-color-primary,#5686fe);outline-offset:-2px;}',
   '.__dshd_cm_i:active{background:rgba(255,255,255,.14);}',
   '.__dshd_cm_i.__dshd_cm_p{background:rgba(255,255,255,.14);}',
   '.__dshd_cm_i.__dshd_cm_d{opacity:.4;pointer-events:none;}',
@@ -1413,6 +1414,10 @@ pub fn run() {
             .center()
             .visible(false)
             .background_color(DARK_BG)
+            // 禁用后台节流：失焦时 WebView2 暂停渲染，loading 进度条动画
+            // 会停摆（首次设置停留后"卡住不动、恢复时一闪而过"），
+            // 状态栏等实时更新的子页面也会滞后
+            .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
             // Windows 上默认的 drag-drop handler 会禁用页面 HTML5 拖放
             // （破坏 dsh 页面自身的拖放与 dsh-file-drop 插件），显式关闭
             .disable_drag_drop_handler()
@@ -1548,6 +1553,10 @@ pub fn run() {
                     let _ = win.center();
                 }
             }
+            // 主窗口几何恢复完成：此时创建自绘弹窗，初始尺寸/位置即最终值
+            // （避免预创建于 setup 早期导致首次打开时的几何异步跳变）
+            crate::logging::log("boot: 主窗口几何就绪，预创建弹窗");
+            app_dialog::precreate(app.handle());
             // 启动后越界兜底收敛：show 时系统会对窗口几何做一次协商（本机观察
             // 约 +14w/+9h，随后稳定），协商后的尺寸即最终值——不再按保存值
             // “重新应用”：中途再 set 一次会被系统再次协商拉回，形成 loading
@@ -1651,9 +1660,9 @@ pub fn run() {
                     titlebar::repaint_pulse(&handle);
                 });
             }
-            // 自绘弹窗与（Windows）托盘菜单窗口：启动时预创建（隐藏），
-            // 此后只定位/显示/隐藏——绝不在事件回调里新建/销毁 WebView 窗口
-            app_dialog::precreate(app.handle());
+            // 托盘菜单窗口：启动时预创建（隐藏）。自绘弹窗移至主窗口几何
+            // 恢复完成之后创建（见窗口恢复段）——创建时主窗口几何已知，
+            // 弹窗初始几何即正确，消除首次打开时"位置不对 + 闪烁"
             #[cfg(windows)]
             tray_menu::precreate(app.handle());
             // 标题栏余额常驻显示：后台每 5 分钟刷新一次
@@ -1678,6 +1687,15 @@ pub fn run() {
                 logging::log("启动: --minimized 静默进托盘");
             } else if let Some(win) = main_window(app.handle()) {
                 let _ = win.show();
+                // 状态栏首帧即数据：窗口显示后再推一次统计/余额。
+                // 立即 emit 时状态栏子 webview 尚未首帧，事件丢失/迟到；
+                // 延迟 150ms 覆盖子 webview 首帧渲染后再更新（消除 chip 闪烁）
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    stats::refresh_once(handle.clone());
+                    balance::refresh_once(handle);
+                });
             }
             // 启动静默期：恢复/协商产生的几何事件不落盘（3s 内），
             // 避免系统微调后的尺寸被持久化、逐次启动累积变大

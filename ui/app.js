@@ -128,43 +128,78 @@ function renderStatus(payload) {
 // —— 首次使用配置 ——
 
 let onboardingSaving = false;
+let obLangSel = null;
+let obThemeSel = null;
+
+// dsh 风格下拉（语言/主题）：trigger + 列表，选中态 ghost-active-fill
+function setupSelect(selId, onChange) {
+  const root = $(selId);
+  if (!root) return null;
+  const trigger = root.querySelector('.dshd-select-trigger');
+  const list = root.querySelector('.dshd-select-list');
+  const valueEl = root.querySelector('.dshd-select-value');
+  let value = '';
+  const labelOf = (v) => {
+    const opt = list.querySelector('[data-value="' + v + '"]');
+    return opt ? opt.textContent : v;
+  };
+  const setValue = (v, fire) => {
+    value = v;
+    valueEl.textContent = labelOf(v);
+    list.querySelectorAll('li').forEach((li) => {
+      li.setAttribute('aria-selected', li.dataset.value === v ? 'true' : 'false');
+    });
+    if (fire && onChange) onChange(v);
+  };
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = list.hidden;
+    list.hidden = !open;
+    trigger.setAttribute('aria-expanded', String(open));
+  });
+  list.querySelectorAll('li').forEach((li) => {
+    li.addEventListener('click', () => {
+      setValue(li.dataset.value, true);
+      list.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+    });
+  });
+  document.addEventListener('click', (e) => {
+    if (!root.contains(e.target)) {
+      list.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+    }
+  });
+  return { get: () => value, set: (v) => setValue(v, false) };
+}
 
 async function initOnboarding() {
   try {
     const st = await window.__TAURI__.core.invoke('get_onboarding_state');
     if (!st || !st.needs_onboarding) return;
-    document.querySelectorAll('input[name="ob-lang"]').forEach((r) => {
-      r.checked = r.value === (st.language === 'en' ? 'en' : 'zh-CN');
+    // 语言/主题下拉：选中即预览（保存时才持久化）
+    obLangSel = setupSelect('ob-lang', (lang) => {
+      window.dshdSetLanguage && window.dshdSetLanguage(lang);
+      window.__TAURI__.core.invoke('preview_language', { language: lang }).catch(() => {});
     });
-    document.querySelectorAll('input[name="ob-theme"]').forEach((r) => {
-      r.checked = r.value === (st.theme || 'system');
+    obThemeSel = setupSelect('ob-theme', (theme) => {
+      window.__TAURI__.core.invoke('preview_theme', { theme }).catch(() => {});
     });
+    if (obLangSel) obLangSel.set(st.language === 'en' ? 'en' : 'zh-CN');
+    if (obThemeSel) obThemeSel.set(st.theme || 'system');
     $('ob-autostart').checked = !!st.autostart;
     $('ob-box').classList.remove('hidden');
+    // 首次显示用 opacity 渐入（重排不可避免，但避免"整块跳出"的突兀感）；
+    // status 隐藏前先让面板进场，避免内容闪跳
+    $('ob-box').style.opacity = '0';
+    requestAnimationFrame(() => {
+      $('ob-box').style.transition = 'opacity .18s ease-out';
+      $('ob-box').style.opacity = '1';
+    });
     // onboarding 模式下聚焦配置面板：隐藏启动状态区
     $('status').classList.add('hidden');
     // 回报面板已显示：boot 等待切换为无限等待（无 60 秒兜底）
     window.__TAURI__.core.invoke('onboarding_shown').catch(() => {});
-    // 语言/主题实时预览：选中即生效（自然过渡由分段控件的选中动画承接；
-    // 保存时才持久化——主题只切窗口不写 settings）
-    document.querySelectorAll('input[name="ob-lang"]').forEach((r) => {
-      r.addEventListener('change', () => {
-        if (!r.checked) return;
-        const lang = r.value === 'en' ? 'en' : 'zh-CN';
-        // 面板文案即时预览（前端 i18n）
-        window.dshdSetLanguage && window.dshdSetLanguage(lang);
-        // Rust 侧同步预览语言并立即重推状态栏统计（状态栏文本由 Rust
-        // 生成，前端无法重译；不持久化，保存时才正式应用）
-        window.__TAURI__.core.invoke('preview_language', { language: lang }).catch(() => {});
-      });
-    });
-    document.querySelectorAll('input[name="ob-theme"]').forEach((r) => {
-      r.addEventListener('change', () => {
-        if (!r.checked) return;
-        // 跟随系统：清除强制主题回系统深浅色（preview_theme 处理）
-        window.__TAURI__.core.invoke('preview_theme', { theme: r.value }).catch(() => {});
-      });
-    });
   } catch (e) { /* 后端未就绪时忽略 */ }
 }
 
@@ -191,8 +226,8 @@ async function submitOnboarding(skip) {
   box.setAttribute('aria-busy', 'true');
   const payload = {
     skip,
-    language: (document.querySelector('input[name="ob-lang"]:checked') || {}).value,
-    theme: (document.querySelector('input[name="ob-theme"]:checked') || {}).value,
+    language: obLangSel ? obLangSel.get() : 'zh-CN',
+    theme: obThemeSel ? obThemeSel.get() : 'system',
     autostart: $('ob-autostart').checked,
   };
   if (!skip) {

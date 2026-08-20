@@ -10,7 +10,8 @@
        入场/退场动效曾引发空白与抖动问题，故不做。
        hover 过渡与语言子菜单展开收起动效（纯 CSS，common.css）保留。 */
     html, body { height: 100%; overflow: hidden; }
-    /* box-sizing 必须显式声明（border-box），卡片占满窗口；无阴影边距 */
+    /* box-sizing 必须显式声明（border-box），卡片占满窗口；无阴影边距。
+       不透明窗口，圆角由 Win11 系统裁剪（Win10 直角）。 */
     * { box-sizing: border-box; }
     body { padding: 0; background: transparent; }
     #list { display: flex; flex-direction: column; }

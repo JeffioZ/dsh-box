@@ -182,6 +182,13 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
     });
 }
 
+/// 立即查询并广播一次余额（状态栏首帧数据，不等 5 分钟轮询周期）。
+pub(crate) fn refresh_once(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let payload = query_balance(&state.config());
+    let _ = app.emit("balance-updated", payload);
+}
+
 #[tauri::command]
 pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayload {
     if let Err(error) = crate::commands::ensure_local_origin(&webview) {

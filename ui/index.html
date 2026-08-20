@@ -24,9 +24,12 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
 body {
+  /* dsh 字体栈（dsw-font-family） */
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
   background: radial-gradient(1200px 600px at 50% -10%, #1b1b26 0%, var(--bg) 60%);
   color: var(--text);
-  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   display: flex; align-items: center; justify-content: center;
   user-select: none; overflow: hidden;
   /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪 */
@@ -34,32 +37,38 @@ body {
 }
 /* 就绪后由 app.js 添加：内容淡出，露出与 dsh 界面一致的深色背景 */
 body.fade-out { opacity: 0; }
-.stage { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
-.card { width: min(420px, 86vw); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.stage {
+  width: 100%; height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 20px;
+  /* 小屏兜底：内容超高时可滚动（卡片 margin:auto 在 flex 中仍居中，
+     溢出时顶部可达） */
+  overflow-y: auto;
+}
+.card { width: min(420px, 86vw); display: flex; flex-direction: column; align-items: center; gap: 8px; margin: auto; }
 .logo-wrap {
-  width: 84px; height: 84px;
+  width: 56px; height: 56px;
   display: flex; align-items: center; justify-content: center;
   /* 蓝底与圆角由 app-icon.svg 自身提供（与标题栏/关于弹窗同款完整图标）；
      此处仅作居中容器。不叠加动画/光晕：图标缩放与 box-shadow 沿圆角外扩
      会让圆角外泛色、视觉不干净 */
 }
 .logo {
-  width: 84px; height: 84px;
+  width: 56px; height: 56px;
 }
-.title { font-size: 22px; font-weight: 600; letter-spacing: .2px; margin-top: 6px; }
-.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 8px; }
+.title { font-size: 20px; font-weight: 600; letter-spacing: .2px; margin-top: 4px; }
+.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 6px; }
 
-.status { width: 100%; margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+.status { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
 .status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
 .status-detail { text-align: center; font-size: 12px; color: var(--muted); min-height: 16px; }
 .bar { height: 4px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
-.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #8aa2ff); transition: width .45s ease; animation: slide 1.4s linear infinite; }
+.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #679efe); transition: width .45s ease; animation: slide 1.4s linear infinite; }
 .bar-fill.determinate { animation: none; }
 .bar-fill.done { width: 100%; animation: none; }
 .bar-fill.err { width: 100%; background: var(--red); animation: none; }
 @keyframes slide { 0% { margin-left: -20%; } 100% { margin-left: 110%; } }
 
-.spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin var(--dshd-anim-spin); }
 /* 用 visibility 而非 display 隐藏：占位保留，就绪/失败切换时文字不跳动 */
 .spinner.hidden { visibility: hidden; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -80,8 +89,9 @@ body.fade-out { opacity: 0; }
 
 .btn {
   background: #23232b; color: var(--text); border: 1px solid var(--line);
-  border-radius: var(--dshd-r-md); padding: 7px 16px; font-size: 13px; cursor: pointer;
-  transition: background var(--dshd-m-base), border-color var(--dshd-m-base);
+  /* dsh 按钮圆角 18px pill */
+  border-radius: var(--dshd-r-btn); padding: 7px 16px; font-size: 13px; cursor: pointer;
+  transition: var(--dshd-anim-state);
 }
 .btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
@@ -102,12 +112,13 @@ body.fade-out { opacity: 0; }
 .ob-box {
   width: 100%;
   max-width: 480px;
-  margin-top: 18px;
+  margin-top: 12px;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 26px 28px;
-  display: flex; flex-direction: column; gap: 20px;
+  /* dsh 弹窗圆角 24px */
+  border-radius: 24px;
+  padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 16px;
   text-align: left;
   box-shadow: 0 8px 32px rgba(0, 0, 0, .28);
 }
@@ -120,39 +131,74 @@ body.fade-out { opacity: 0; }
 .ob-label { font-size: 13px; color: var(--muted); }
 .ob-input {
   height: 38px; background: var(--dshd-hover); border: 1px solid var(--line);
-  border-radius: 10px; padding: 0 12px; color: var(--text); font-size: 13px;
-  outline: none; transition: border-color var(--dshd-m-fast) ease, box-shadow var(--dshd-m-fast) ease;
+  border-radius: 10px; padding: 0 12px; color: var(--text); font-size: 14px;
+  outline: none; transition: var(--dshd-anim-state);
 }
 .ob-input:hover { border-color: var(--dshd-text-dim); background: var(--dshd-pressed); }
-.ob-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(77, 107, 254, .18); }
+.ob-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(86, 134, 254, .18); }
 .ob-hint { font-size: 11.5px; color: var(--muted); }
 .ob-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.ob-seg {
-  display: inline-flex; background: var(--dshd-hover);
-  border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px;
+/* —— dsh 设置下拉：trigger 容器默认态（border-l2 + bg-layer-2），
+   12px 圆角、14px/22px；列表 7px 圆角；选中项勾选标记 + ghost-active-fill —— */
+.dshd-select { position: relative; }
+.dshd-select-trigger {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 32px; min-width: 112px; padding: 0 10px 0 12px;
+  border: 1px solid var(--dshd-border); border-radius: 12px;
+  background: var(--dshd-hover); color: var(--text);
+  font: inherit; font-size: 14px; line-height: 22px; cursor: pointer; outline: none;
+  transition: var(--dshd-anim-state);
 }
-.ob-seg-opt { position: relative; cursor: pointer; user-select: none; }
-.ob-seg-opt input { position: absolute; opacity: 0; width: 0; height: 0; }
-.ob-seg-opt span {
-  display: block; padding: 5px 14px; border-radius: 7px; font-size: 12.5px;
-  color: var(--muted); transition: background var(--dshd-m-fast) ease, color var(--dshd-m-fast) ease;
+.dshd-select-trigger:hover { border-color: var(--dshd-border-strong); }
+.dshd-select-trigger:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.dshd-select-value { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dshd-select-arrow {
+  width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted);
 }
-.ob-seg-opt:hover span { color: var(--text); }
-.ob-seg-opt input:checked + span { background: var(--blue-surface); color: #fff; font-weight: 500; }
-.ob-seg-opt input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ob-switch { position: relative; width: 40px; height: 22px; flex: none; }
+/* compactList：min-width 164、padding 2、7px 圆角、1px border-inverted、
+   背景 = dsh 菜单色（specific-menu） */
+.dshd-select-list {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
+  min-width: 140px; margin: 0; padding: 4px; list-style: none;
+  border: 1px solid var(--dshd-border); border-radius: 7px;
+  background: var(--dshd-card); color: var(--text);
+  box-shadow: 0 0 1px 0 rgba(0, 0, 0, .2), 0 0 4px 0 rgba(0, 0, 0, .02), 0 12px 32px 0 rgba(0, 0, 0, .08);
+}
+.dshd-select-list[hidden] { display: none; }
+.dshd-select-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 5px; font-size: 14px; line-height: 22px;
+  cursor: pointer; white-space: nowrap;
+  transition: var(--dshd-anim-state);
+}
+.dshd-select-list li:hover { background: var(--dshd-hover); }
+/* 勾选标记：右侧（dsh 下拉勾在文字右侧），margin-left:auto 推至行尾 */
+.dshd-select-list li::after {
+  content: ""; width: 14px; height: 14px; flex: none;
+  margin-left: auto;
+}
+.dshd-select-list li[aria-selected="true"]::after {
+  content: "✓"; color: var(--dshd-selected-text); font-size: 12px; line-height: 14px;
+  text-align: center;
+}
+/* 选中：dsh ghost-active-fill（bluish-750 深色） + label-primary */
+.dshd-select-list li[aria-selected="true"] { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
+.ob-switch { position: relative; width: 38px; height: 22px; flex: none; }
 .ob-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .ob-track {
   display: block; width: 100%; height: 100%; border-radius: 999px;
-  background: var(--dshd-pressed); border: 1px solid var(--line);
-  transition: background var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease;
+  /* dshmarket 开关：未选中 bg-layer-2 + border-l2 */
+  background: var(--dshd-switch-bg); border: 1px solid var(--dshd-border-strong);
+  transition: var(--dshd-anim-state);
 }
 .ob-track::before {
   content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; border-radius: 50%; background: var(--muted);
-  transition: transform var(--dshd-m-fast) ease, background var(--dshd-m-fast) ease;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: var(--dshd-anim-state);
 }
-.ob-switch input:checked + .ob-track { background: var(--blue); border-color: var(--blue); }
+.ob-switch input:checked + .ob-track { background: var(--dshd-switch-on); border-color: var(--dshd-switch-on); }
 .ob-switch input:checked + .ob-track::before { transform: translate(18px, -50%); background: #fff; }
 .ob-switch input:focus-visible + .ob-track { outline: 2px solid var(--blue); outline-offset: 2px; }
 .ob-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
@@ -164,7 +210,7 @@ body.fade-out { opacity: 0; }
      按钮高度差 5px、卡片整体位移；显式继承字体并固定行高使其一致 */
   font-family: inherit; line-height: 1.4;
   cursor: pointer; padding: 4px; align-self: center; border-radius: 6px;
-  transition: color var(--dshd-m-fast) ease;
+  transition: color var(--dshd-m-fast) var(--dshd-ease-out);
 }
 .ob-skip-btn:hover { color: var(--text); }
 .ob-skip-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -173,10 +219,10 @@ body.fade-out { opacity: 0; }
 @media (prefers-color-scheme: light) {
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
   .ob-input { background: #fff; }
-  .ob-input:focus { box-shadow: 0 0 0 3px rgba(77, 107, 254, .14); }
+  .ob-input:focus { box-shadow: 0 0 0 3px rgba(86, 134, 254, .14); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ob-seg-opt span, .ob-input, .ob-track, .ob-track::before, .ob-skip-btn { transition: none; }
+  .ob-input, .ob-track, .ob-track::before, .ob-skip-btn { transition: none; }
 }
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
 @media (prefers-color-scheme: light) {
@@ -227,17 +273,29 @@ body.fade-out { opacity: 0; }
           <div class="ob-sec-label" data-i18n="preferences">偏好设置</div>
           <div class="ob-row">
             <span class="ob-label" data-i18n="language">语言</span>
-            <div class="ob-seg" role="radiogroup" data-i18n-aria-label="language">
-              <label class="ob-seg-opt"><input type="radio" name="ob-lang" value="zh-CN" checked /><span>中文</span></label>
-              <label class="ob-seg-opt"><input type="radio" name="ob-lang" value="en" /><span>English</span></label>
+            <div class="dshd-select" id="ob-lang">
+              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="dshd-select-value">中文</span>
+                <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+              </button>
+              <ul class="dshd-select-list" role="listbox" data-i18n-aria-label="language" hidden>
+                <li role="option" data-value="zh-CN" aria-selected="true">中文</li>
+                <li role="option" data-value="en" aria-selected="false">English</li>
+              </ul>
             </div>
           </div>
           <div class="ob-row">
             <span class="ob-label" data-i18n="theme">主题</span>
-            <div class="ob-seg" role="radiogroup" data-i18n-aria-label="theme">
-              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="light" /><span data-i18n="themeLight">浅色</span></label>
-              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="dark" /><span data-i18n="themeDark">深色</span></label>
-              <label class="ob-seg-opt"><input type="radio" name="ob-theme" value="system" checked /><span data-i18n="themeSystem">跟随系统</span></label>
+            <div class="dshd-select" id="ob-theme">
+              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="dshd-select-value">跟随系统</span>
+                <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+              </button>
+              <ul class="dshd-select-list" role="listbox" data-i18n-aria-label="theme" hidden>
+                <li role="option" data-value="light" aria-selected="false" data-i18n="themeLight">浅色</li>
+                <li role="option" data-value="dark" aria-selected="false" data-i18n="themeDark">深色</li>
+                <li role="option" data-value="system" aria-selected="true" data-i18n="themeSystem">跟随系统</li>
+              </ul>
             </div>
           </div>
           <label class="ob-row ob-switch-row">

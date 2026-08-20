@@ -118,8 +118,9 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows
 }
 
-/// 窗口四周的阴影边距。暂为 0：透明窗口下无阴影，卡片直接占满窗口
-/// （圆角外的四个角透明）；如后续恢复阴影方案再调大。
+/// 窗口四周的阴影边距：不透明窗口下卡片直接占满窗口（圆角由 Win11
+/// 系统裁剪），无阴影空间。透明窗口渲染在本机 WebView2 下不可见
+/// （is_visible=true 但内容透明），已回退不透明方案。
 #[cfg(windows)]
 const SHADOW_PAD: f64 = 0.0;
 
@@ -171,9 +172,7 @@ pub fn precreate(app: &AppHandle) {
     .build()
     {
         Ok(win) => {
-            // 不透明窗口 + 卡片色背景：透明窗口的逐像素合成对圆角抗锯齿
-            // 像素有缺陷（透明间隙/黑边/方块角），此路线已弃用；
-            // 圆角交给 Win11 系统裁剪（Win10 直角），主题按 dsh 偏好固定
+            // 不透明窗口 + 卡片色背景：圆角由 Win11 系统裁剪（Win10 直角）
             let theme = app.state::<AppState>().config().resolve_dsh_theme();
             let light = if theme == Some(tauri::Theme::Light) {
                 true
@@ -230,29 +229,60 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
     });
     let (x, y) = match target {
         Some((px, py, _pw, _ph, scale)) => {
-            let cx = at.0 / scale;
-            let cy = at.1 / scale;
-            // 右下角贴点击点、向上展开，并在光标下方留 6px 空隙：
-            // 光标停留在托盘图标上而非悬停在菜单行上（原生托盘菜单同款落位），
-            // 也避免重开时某行被 hover 高亮误认为“选中态”
-            let mut x = cx - width + 2.0;
-            let mut y = cy - height - 6.0;
-            if x < px / scale {
-                x = cx - 2.0;
+            // at 是物理像素，px/py 是物理工作区；统一用物理计算，
+            // 最后换回逻辑坐标传给 set_position(Logical)。
+            let cx = at.0;
+            let cy = at.1;
+            let win_w = width * scale;
+            let win_h = height * scale;
+            // 右下角贴点击点、向上展开，留 2/6px 物理空隙
+            let mut x = cx - win_w + 2.0 * scale;
+            let mut y = cy - win_h - 6.0 * scale;
+            if x < px {
+                x = cx - 2.0 * scale;
             }
-            if y < py / scale {
-                y = cy + 6.0;
+            if y < py {
+                y = cy + 6.0 * scale;
             }
-            (x.max(px / scale), y.max(py / scale))
+            (x.max(px) / scale, y.max(py) / scale)
         }
-        None => (at.0 - width + 2.0, at.1 - height - 6.0),
+        None => {
+            // 托盘图标在任务栏，任务栏在工作区外——普通右键命中此分支；
+            // 用主显示器 scale 做物理→逻辑换算，位置贴光标右上角
+            crate::logging::log(&format!(
+                "tray-menu: 光标不在已枚举工作区 光标=({:.0},{:.0})",
+                at.0, at.1
+            ));
+            let scale = app
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map(|m| m.scale_factor())
+                .unwrap_or(1.0);
+            // 物理坐标 → 逻辑（除以 scale）；set_position 用 Logical
+            (
+                (at.0 - width * scale + 2.0 * scale) / scale,
+                (at.1 - height * scale - 6.0 * scale) / scale,
+            )
+        }
     };
     crate::logging::log(&format!(
         "tray-menu: 点击=({:.0},{:.0}) 菜单=({x:.0},{y:.0}) 尺寸=({width:.0}x{height:.0})",
         at.0, at.1
     ));
     let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
-    // 点击外部收起（物理矩形）
+    // 先显示再发事件：隐藏窗口收不到 emit 的内容，事件仅作即时更新，
+    // 页面另有 __dshdRefresh（Rust eval 直呼）作为确定性兜底
+    if let Err(e) = win.show() {
+        crate::logging::log(&format!("tray-menu: show 失败：{e}"));
+    } else {
+        crate::logging::log(&format!(
+            "tray-menu: 已显示 is_visible={}",
+            win.is_visible().unwrap_or(false)
+        ));
+    }
+    // 点击外部收起（物理矩形）——必须在 show 之后启动：监控线程首查
+    // is_visible，若在 show 前启动可能读到 false 提前退出，菜单"看似没显示"
     bump_popup_gen();
     let scale = win.scale_factor().unwrap_or(1.0);
     if let Ok(size) = win.inner_size() {
@@ -264,9 +294,6 @@ pub fn open_menu(app: &AppHandle, at: (f64, f64)) {
             watch_outside_click(app.clone(), TRAY_MENU_WINDOW, (x0, y0, x1, y1));
         }
     }
-    // 先显示再发事件：隐藏窗口收不到 emit 的内容，事件仅作即时更新，
-    // 页面另有 __dshdRefresh（Rust eval 直呼）作为确定性兜底
-    let _ = win.show();
     if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", items(true)) {
         crate::logging::log(&format!("tray-menu: 事件下发失败：{e}"));
     }
@@ -313,30 +340,45 @@ pub(crate) fn watch_outside_click(app: AppHandle, label: &'static str, rect: (i3
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let gen = POPUP_GEN.load(Ordering::Relaxed);
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(70));
-        if POPUP_GEN.load(Ordering::Relaxed) != gen {
-            return; // 弹窗已关闭或重新打开
-        }
-        let Some(w) = app.get_webview_window(label) else {
-            return;
-        };
-        if !w.is_visible().unwrap_or(false) {
-            return;
-        }
-        let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut pt) };
-        let (x0, y0, x1, y1) = rect;
-        if pt.x < x0 || pt.x >= x1 || pt.y < y0 || pt.y >= y1 {
-            let down = unsafe {
+    std::thread::spawn(move || {
+        // 托盘菜单由右键触发：弹出时右键通常仍按住（GetAsyncKeyState 一直为
+        // true），若立即按"按键按下 + 光标在外"判定会瞬间误收菜单（菜单
+        // 一 出就消失）。改为：先等所有鼠标按键都释放，再从"按键按下沿"
+        // 检测真正的外部点击——右键菜单的标准收起语义。
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(70));
+            if POPUP_GEN.load(Ordering::Relaxed) != gen {
+                return;
+            }
+            // 等全部按键释放（0x01 左 / 0x02 右 / 0x04 中）
+            let any_down = unsafe {
                 GetAsyncKeyState(0x01) < 0
                     || GetAsyncKeyState(0x02) < 0
                     || GetAsyncKeyState(0x04) < 0
             };
-            if down {
-                crate::logging::log("tray-menu: 检测到外部点击，收起菜单");
-                let _ = w.hide();
+            if any_down {
+                continue; // 仍按住（含触发菜单的右键），不判定
+            }
+            let Some(w) = app.get_webview_window(label) else {
                 return;
+            };
+            if !w.is_visible().unwrap_or(false) {
+                return;
+            }
+            let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+            unsafe { GetCursorPos(&mut pt) };
+            let (x0, y0, x1, y1) = rect;
+            if pt.x < x0 || pt.x >= x1 || pt.y < y0 || pt.y >= y1 {
+                let down = unsafe {
+                    GetAsyncKeyState(0x01) < 0
+                        || GetAsyncKeyState(0x02) < 0
+                        || GetAsyncKeyState(0x04) < 0
+                };
+                if down {
+                    crate::logging::log("tray-menu: 检测到外部点击，收起菜单");
+                    let _ = w.hide();
+                    return;
+                }
             }
         }
     });

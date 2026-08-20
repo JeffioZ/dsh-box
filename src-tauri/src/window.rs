@@ -103,10 +103,8 @@ fn save_now(app: &AppHandle) {
     }
 }
 
-/// Win11 系统圆角：无边框窗口默认直角，与自绘卡片设计冲突。
-/// DWMWA_WINDOW_CORNER_PREFERENCE 仅 Win11 生效，系统按 DWM 圆角
-/// 裁剪窗口形状（无半透明合成的抗锯齿缺陷）；Win10 调用失败无害，
-/// 保持直角。
+/// 启用系统圆角裁剪（DWMWCP_ROUND，仅 Win11 生效）：托盘菜单等不透明
+/// 窗口用系统裁剪圆角（Win10 为直角，无害）。
 #[cfg(windows)]
 pub(crate) fn enable_system_rounded_corners(win: &tauri::WebviewWindow) {
     use windows_sys::Win32::Graphics::Dwm::{
@@ -114,6 +112,25 @@ pub(crate) fn enable_system_rounded_corners(win: &tauri::WebviewWindow) {
     };
     let Ok(hwnd) = win.hwnd() else { return };
     let preference = DWMWCP_ROUND;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+/// 禁用系统圆角裁剪（DWMWCP_DONOTROUND）：透明窗口自绘圆角时必须关闭，
+/// 否则系统 8px 圆角会叠加在内容圆角四角上（视觉错位）。
+#[cfg(windows)]
+pub(crate) fn disable_system_rounded_corners(win: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+    let Ok(hwnd) = win.hwnd() else { return };
+    let preference = DWMWCP_DONOTROUND;
     unsafe {
         let _ = DwmSetWindowAttribute(
             hwnd.0,

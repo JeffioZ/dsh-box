@@ -21,7 +21,10 @@ html, body { height: 100%; overflow: hidden; }
 body {
   background: transparent;
   color: var(--dshd-text);
-  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* dsh 字体栈（dsw-font-family） */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
   user-select: none;
 }
 /* 窗口失焦：品牌文字与窗口按钮变暗，与系统窗口失焦标题栏一致；
@@ -53,11 +56,14 @@ body.window-inactive .tb-btn { color: #5b5c66; }
      220px，改动需同步两处 */
   position: absolute; top: var(--tb-overlay-top); right: 0; width: 220px; padding: 4px;
   box-sizing: border-box; z-index: 10;
-  /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px）：标题栏页面无基础字号，
-     不显式设置会落到浏览器默认 16px，与托盘菜单产生字号差 */
-  font: 14px/22px "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px + dsh 字体栈）：
+     标题栏页面无基础字号，不显式设置会落到浏览器默认 16px */
+  font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
   background: var(--dshd-card); border: 1px solid var(--dshd-border);
-  border-radius: var(--dshd-r-lg);
+  /* dsh 菜单圆角 7px（compact list） */
+  border-radius: var(--dshd-r-sm);
   box-shadow: var(--tb-overlay-shadow);
   opacity: 0; transform: translateY(-3px); pointer-events: none;
   transition: opacity var(--dshd-m-fast) ease, transform var(--dshd-m-fast) ease;

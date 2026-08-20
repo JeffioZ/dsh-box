@@ -8,5 +8,15 @@ fn main() {
     // tauri-codegen 嵌入 frontendDist（../ui）资源时同样没有跟踪声明：
     // 补上目录级跟踪，改 UI 文件后 release 构建自动重新嵌入资源
     println!("cargo:rerun-if-changed=../ui");
-    tauri_build::build()
+    println!("cargo:rerun-if-changed=app.manifest.xml");
+    // 自定义 Windows 应用清单：默认清单缺 dpiAwareness，高 DPI 屏（150%+）
+    // 下窗口尺寸被系统虚拟化（逻辑像素按 96 DPI 解释），弹窗/主窗口偏小
+    let mut windows = tauri_build::WindowsAttributes::new();
+    windows = windows.app_manifest(include_str!("app.manifest.xml"));
+    if let Err(error) =
+        tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
+    {
+        eprintln!("{error:#}");
+        std::process::exit(1);
+    }
 }
