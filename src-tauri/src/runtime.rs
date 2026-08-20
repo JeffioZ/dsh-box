@@ -109,15 +109,27 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
             }
         }
     }
-    let resp = check_client().get(NODEJS_INDEX).call().map_err(|e| {
-        format!(
-            "{}: {e}",
-            crate::locale::text(
-                "获取 Node 版本信息失败",
-                "Failed to retrieve Node.js version information"
-            )
-        )
-    })?;
+    let resp = check_client()
+        .get(NODEJS_INDEX)
+        .call()
+        .or_else(|official_err| {
+            // 官方 index.json 失败（国内网络常见）→ 兜底 npmmirror 镜像
+            crate::logging::log(&format!(
+                "runtime: Node 版本索引官方失败（{official_err}），改走 npmmirror 镜像"
+            ));
+            check_client()
+                .get(&format!("{NODE_MIRROR_BASE}/index.json"))
+                .call()
+                .map_err(|mirror_err| {
+                    format!(
+                        "{}: 官方 {official_err}；镜像 {mirror_err}",
+                        crate::locale::text(
+                            "获取 Node 版本信息失败",
+                            "Failed to retrieve Node.js version information"
+                        )
+                    )
+                })
+        })?;
     let json: serde_json::Value = resp.into_body().read_json().map_err(|e| {
         format!(
             "{}: {e}",
