@@ -336,6 +336,8 @@ pub struct SettingsState {
     pub hide_stats_line: bool,
     pub hide_statusbar: bool,
     pub auto_update_plugins: bool,
+    /// dsh 更新通道："latest" 或 "next"
+    pub dsh_update_channel: String,
 }
 
 fn settings_state(app: &AppHandle) -> SettingsState {
@@ -346,6 +348,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         hide_stats_line: config.hide_stats_line,
         hide_statusbar: config.hide_statusbar,
         auto_update_plugins: config.auto_update_plugins,
+        dsh_update_channel: config.dsh_update_channel.clone(),
     }
 }
 
@@ -396,9 +399,29 @@ pub fn settings_set(
                 state.toggle_auto_update_plugins()?;
             }
         }
+        // 更新通道字段不改走 bool 开关逻辑（settings_set 的 value 是 bool，
+        // 通道是字符串二选一），由 set_dsh_channel command 处理
         _ => return Err(crate::locale::text("未知设置项。", "Unknown setting.").into()),
     }
     crate::logging::log(&format!("settings: {key}={value}"));
+    Ok(settings_state(&app))
+}
+
+/// 切换 dsh 内核更新通道（latest/next），持久化到 config.json。
+#[tauri::command]
+pub fn set_dsh_channel(
+    app: AppHandle,
+    webview: tauri::Webview,
+    channel: String,
+) -> Result<SettingsState, String> {
+    ensure_local_origin(&webview)?;
+    if !matches!(channel.as_str(), "latest" | "next") {
+        return Err(crate::locale::text("未知更新通道。", "Unknown update channel.").into());
+    }
+    let state = app.state::<AppState>();
+    if state.config().dsh_update_channel != channel {
+        state.set_dsh_update_channel(&channel)?;
+    }
     Ok(settings_state(&app))
 }
 
@@ -552,5 +575,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         app_dialog_open_settings,
         settings_get,
         settings_set,
+        set_dsh_channel,
     ]
 }

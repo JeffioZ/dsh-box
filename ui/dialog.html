@@ -192,6 +192,26 @@
     .srow-txt { flex: 1; min-width: 0; }
     .srow-name { display: block; font-size: 13px; font-weight: 500; }
     .srow-desc { display: block; margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dshd-text-dim); }
+    /* 更新通道分段选择（复用 onboarding 的分段控件样式，紧凑版） */
+    .dshd-seg {
+      display: inline-flex; background: var(--dshd-hover);
+      border: 1px solid var(--dshd-border); border-radius: 8px; padding: 2px; gap: 2px;
+      margin: 6px 0 4px;
+    }
+    .dshd-seg-opt { position: relative; cursor: pointer; user-select: none; }
+    .dshd-seg-opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .dshd-seg-opt span {
+      display: block; padding: 4px 12px; border-radius: 6px; font-size: 12.5px;
+      color: var(--dshd-text-dim); cursor: pointer;
+      transition: var(--dshd-anim-state);
+    }
+    .dshd-seg-opt:hover span { color: var(--dshd-text); }
+    .dshd-seg-opt input:checked + span { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
+    .dshd-seg-opt input:focus-visible + span { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
+    /* 减弱动态效果：分段控件无过渡 */
+    @media (prefers-reduced-motion: reduce) {
+      .dshd-seg-opt span { transition: none; }
+    }
     .sswitch {
       appearance: none; -webkit-appearance: none; flex: none;
       /* dshmarket 开关：38×22 */
@@ -296,6 +316,8 @@
     let currentOpen = null;
     let lastBalanceData = null;
     let lastCheckResult = null;
+    // 更新源已切换标记：切到检查更新页时强制重查（不用关弹窗重开）
+    let dshChannelChanged = false;
     const esc = dshdEsc;
     const $ = (id) => document.getElementById(id);
     const cur = (c) => esc(dshdCurrency(c)) + ' ';
@@ -610,10 +632,11 @@
           // 更新后台执行中：显示"正在更新 dsh…"（win32 提示框确认路径，
           // 或更新中重开弹窗）；进度事件随后覆盖本行
           renderCheckLoading(dshdT('updatingDsh'));
-        } else if (lastCheckResult) renderCheckResult(lastCheckResult);
+        } else if (lastCheckResult && !dshChannelChanged) renderCheckResult(lastCheckResult);
         else {
           // 仅导航进入时触发检查（applyOpen 时 Rust 已触发，避免重复网络请求）
           renderCheckLoading();
+          dshChannelChanged = false;
           if (opts && opts.triggerCheck) invoke('app_dialog_run_check').catch(() => {});
         }
       } else if (k === 'about') renderAbout((currentOpen && currentOpen.initial) || {});
@@ -656,10 +679,41 @@
         settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
         settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
         settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
+        '<label class="srow">' +
+        '<span class="srow-txt">' +
+        '<span class="srow-name">' + dshdT('settingsDshChannel') + '</span>' +
+        '<span class="srow-desc">' + dshdT('settingsDshChannelDesc') + '</span>' +
+        '</span>' +
+        '<span class="dshd-seg" id="dsh-channel" role="radiogroup" aria-label="' + esc(dshdT('settingsDshChannel')) + '">' +
+        '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="latest" /><span>' + esc(dshdT('settingsChannelLatest')) + '</span></label>' +
+        '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="next" /><span>' + esc(dshdT('settingsChannelNext')) + '</span></label>' +
+        '</span>' +
+        '</label>' +
         '</div>' +
         '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
       body.querySelectorAll('.sswitch').forEach((el) => {
         el.addEventListener('change', onSettingToggle);
+      });
+      body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
+        el.addEventListener('change', () => {
+          if (!el.checked) return;
+          invoke('set_dsh_channel', { channel: el.value })
+            .then((state) => {
+              applySettingState(state);
+              dshChannelChanged = true;
+              // 若当前在"检查更新"页，立即用新通道重查（无需关弹窗重开）
+              if (openKind === 'check') {
+                lastCheckResult = null;
+                renderCheckLoading();
+                invoke('app_dialog_run_check').catch(() => {});
+              }
+            })
+            .catch((e) => {
+              showSettingError(e);
+              // 失败回滚：重新拉取真实状态回填 checked（radio 已乐观选中新值）
+              invoke('settings_get').then(applySettingState).catch(() => {});
+            });
+        });
       });
       invoke('settings_get').then(applySettingState).catch((e) => showSettingError(e));
     }
@@ -668,6 +722,9 @@
       SETTING_KEYS.forEach((key) => {
         const el = body.querySelector('.sswitch[data-key="' + key + '"]');
         if (el) el.checked = Boolean(state[key]);
+      });
+      body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
+        el.checked = el.value === state.dsh_update_channel;
       });
     }
     function showSettingError(message) {

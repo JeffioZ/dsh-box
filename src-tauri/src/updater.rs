@@ -242,38 +242,41 @@ pub fn check(app: &AppHandle) -> CheckResult {
     // 检查弹窗等待时间从“三者之和”缩短为“最慢者”。
     let dsh_cfg = config.clone();
     let dsh_handle = std::thread::spawn(move || match runtime::installed_dsh_version(&dsh_cfg) {
-        Some(installed) => match runtime::npm_latest_dsh_version() {
-            Ok(latest) => (
-                Some(VersionInfo {
-                    installed: installed.clone(),
-                    latest: latest.clone(),
-                    update_available: versions::compare_versions(&latest, &installed)
-                        == std::cmp::Ordering::Greater,
-                    latest_error: None,
-                }),
-                None,
-            ),
-            Err(e) => {
-                // 查询失败仍保留行：前端显示"暂无法获取版本信息"，
-                // hover 经 data-tip-extra 展示原因（与 node/pwsh 行统一）
-                let error = format!(
-                    "{}: {e}",
-                    crate::locale::text(
-                        "查询 dsh 最新版本失败",
-                        "Failed to query the latest dsh version"
-                    )
-                );
-                (
+        Some(installed) => {
+            let channel = runtime::DshChannel::from_config(&dsh_cfg);
+            match runtime::npm_latest_dsh_version(channel) {
+                Ok(latest) => (
                     Some(VersionInfo {
                         installed: installed.clone(),
-                        latest: String::new(),
-                        update_available: false,
-                        latest_error: Some(error),
+                        latest: latest.clone(),
+                        update_available: versions::compare_versions(&latest, &installed)
+                            == std::cmp::Ordering::Greater,
+                        latest_error: None,
                     }),
                     None,
-                )
+                ),
+                Err(e) => {
+                    // 查询失败仍保留行：前端显示"暂无法获取版本信息"，
+                    // hover 经 data-tip-extra 展示原因（与 node/pwsh 行统一）
+                    let error = format!(
+                        "{}: {e}",
+                        crate::locale::text(
+                            "查询 dsh 最新版本失败",
+                            "Failed to query the latest dsh version"
+                        )
+                    );
+                    (
+                        Some(VersionInfo {
+                            installed: installed.clone(),
+                            latest: String::new(),
+                            update_available: false,
+                            latest_error: Some(error),
+                        }),
+                        None,
+                    )
+                }
             }
-        },
+        }
         None => (
             None,
             Some(crate::locale::text("未检测到已安装的 dsh", "No installed dsh was found").into()),

@@ -435,6 +435,12 @@ pub fn run_check(app: &AppHandle) {
     if app.state::<AppState>().is_updating() {
         return;
     }
+    // 防并发：上一轮检查未完成则忽略本次（更新源切换后连续触发时，
+    // 旧通道的晚到结果不会覆盖新通道的检查）
+    static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if CHECKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let handle = app.clone();
     handle.state::<AppState>().set_last_check(None);
     handle.state::<AppState>().set_update_done(false, None);
@@ -445,6 +451,7 @@ pub fn run_check(app: &AppHandle) {
         let result = crate::updater::check(&handle);
         handle.state::<AppState>().set_last_check(Some(result));
         handle.state::<AppState>().set_check_progress(None);
+        CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 }
 

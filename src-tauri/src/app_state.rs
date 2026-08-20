@@ -83,6 +83,8 @@ pub struct Config {
     /// 是否自动升级内置插件（dshmarket/dsh-file-drop，默认开启；
     /// 首次预装引导不受此开关影响）。
     pub auto_update_plugins: bool,
+    /// dsh 内核更新通道："latest"（稳定推荐，默认）或 "next"（预览尝鲜）。
+    pub dsh_update_channel: String,
 }
 
 impl Config {
@@ -119,6 +121,7 @@ impl Config {
             hide_stats_line: true,
             hide_statusbar: false,
             auto_update_plugins: true,
+            dsh_update_channel: "latest".to_string(),
         };
         let cfg_file = cfg.root.join("config.json");
         if let Ok(text) = std::fs::read_to_string(&cfg_file) {
@@ -157,6 +160,11 @@ impl Config {
                 }
                 if let Some(upd) = json.get("auto_update_plugins").and_then(|v| v.as_bool()) {
                     cfg.auto_update_plugins = upd;
+                }
+                if let Some(ch) = json.get("dsh_update_channel").and_then(|v| v.as_str()) {
+                    if matches!(ch, "latest" | "next") {
+                        cfg.dsh_update_channel = ch.to_string();
+                    }
                 }
             }
         }
@@ -811,6 +819,23 @@ impl AppState {
         )?;
         self.lock_inner().config.auto_update_plugins = next;
         Ok(next)
+    }
+
+    /// 设置 dsh 内核更新通道（latest/next），持久化到 config.json。
+    pub fn set_dsh_update_channel(&self, channel: &str) -> Result<(), String> {
+        if !matches!(channel, "latest" | "next") {
+            return Err(
+                crate::locale::text("未知更新通道。", "Unknown update channel.").to_string(),
+            );
+        }
+        let config = self.config();
+        save_config_value(
+            &config.root,
+            "dsh_update_channel",
+            serde_json::json!(channel),
+        )?;
+        self.lock_inner().config.dsh_update_channel = channel.to_string();
+        Ok(())
     }
 
     /// 首次使用配置是否尚未完成：仅当数据目录完全没有 config.json（全新安装）

@@ -151,7 +151,31 @@ pub(crate) fn latest_lts_cached(force: bool) -> Result<String, String> {
 }
 
 /// 查询 npm 官方 `@deepseek-ai/dsh` 的最新版本。
-pub(crate) fn npm_latest_dsh_version() -> Result<String, String> {
+/// dsh 更新通道：latest（稳定推荐）/ next（预览尝鲜）。
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum DshChannel {
+    Latest,
+    Next,
+}
+
+impl DshChannel {
+    pub(crate) fn from_config(config: &crate::app_state::Config) -> Self {
+        if config.dsh_update_channel == "next" {
+            Self::Next
+        } else {
+            Self::Latest
+        }
+    }
+
+    fn dist_tag(self) -> &'static str {
+        match self {
+            Self::Latest => "latest",
+            Self::Next => "next",
+        }
+    }
+}
+
+pub(crate) fn npm_latest_dsh_version(channel: DshChannel) -> Result<String, String> {
     let text = get_text(NPM_DIST_TAGS)?;
     let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         format!(
@@ -159,11 +183,18 @@ pub(crate) fn npm_latest_dsh_version() -> Result<String, String> {
             crate::locale::text("解析失败", "Failed to parse the response")
         )
     })?;
-    json.get("latest")
+    let tag = channel.dist_tag();
+    json.get(tag)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
-            crate::locale::text("响应中没有 latest 字段", "The response has no latest field").into()
+            let zh = format!("响应中没有 {tag} 字段");
+            let en = format!("The response has no {tag} field");
+            if crate::locale::is_chinese() {
+                zh
+            } else {
+                en
+            }
         })
 }
 
