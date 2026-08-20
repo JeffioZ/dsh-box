@@ -14,6 +14,9 @@ use crate::versions::{node_satisfies, parse_node_version};
 use crate::{emit_status, emit_status_progress};
 
 const NODEJS_INDEX: &str = "https://nodejs.org/dist/index.json";
+/// npmmirror 国内镜像（阿里开源镜像，302 到 CDN）：官方直连失败时兜底，
+/// 缓解 nodejs.org 在国内下载慢/超时。仅包下载用，校验与 index 仍走官方。
+const NODE_MIRROR_BASE: &str = "https://npmmirror.com/mirrors/node";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
 
 /// 全局共享 HTTP 客户端：TLS 配置只构建一次（高频查询路径省初始化开销）。
@@ -313,7 +316,7 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     let version = latest_lts_cached(true)?; // 形如 v24.19.0；安装前强制刷新缓存
 
     // 按平台选择官方包（Windows zip / macOS、Linux tar.gz）
-    let (dir_name, url, is_zip) = node_package(&version);
+    let (dir_name, url, mirror_url, is_zip) = node_package(&version);
     let node_dir = config.node_dir();
     if node_dir.exists() {
         std::fs::remove_dir_all(&node_dir).map_err(|e| {
@@ -344,11 +347,22 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
         format!("Downloading Node.js {version}…")
     };
     emit_status(app, BootPhase::InstallingNode, &download_message, "");
-    let resp = download_client().get(&url).call().map_err(|e| {
-        crate::locale::owned(
-            format!("下载 Node.js 失败：{e}"),
-            format!("Failed to download Node.js: {e}"),
-        )
+    let resp = download_client().get(&url).call().or_else(|official_err| {
+        // 官方直连失败（国内网络常见）→ 兜底 npmmirror 国内镜像
+        crate::logging::log(&format!(
+            "runtime: Node 官方下载失败（{official_err}），改走 npmmirror 国内镜像"
+        ));
+        download_client()
+            .get(&mirror_url)
+            .call()
+            .map_err(|mirror_err| {
+                crate::locale::owned(
+                    format!("下载 Node.js 失败：官方 {official_err}；镜像 {mirror_err}"),
+                    format!(
+                        "Failed to download Node.js: official {official_err}; mirror {mirror_err}"
+                    ),
+                )
+            })
     })?;
     let total: u64 = resp
         .headers()
@@ -484,15 +498,16 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     Ok(config.node_exe())
 }
 
-/// 当前平台的 Node 官方包：返回（包目录名、下载 URL、是否 zip）。
+/// 当前平台的 Node 官方包：返回（包目录名、官方下载 URL、国内镜像 URL、是否 zip）。
 /// 未覆盖的平台会因函数无返回值而在编译期报错，避免静默下载错误包。
-fn node_package(version: &str) -> (String, String, bool) {
+fn node_package(version: &str) -> (String, String, String, bool) {
     #[cfg(target_os = "windows")]
     {
         let dir = format!("node-{version}-win-x64");
         (
             dir.clone(),
             format!("https://nodejs.org/dist/{version}/{dir}.zip"),
+            format!("{NODE_MIRROR_BASE}/{version}/{dir}.zip"),
             true,
         )
     }
@@ -502,6 +517,7 @@ fn node_package(version: &str) -> (String, String, bool) {
         (
             dir.clone(),
             format!("https://nodejs.org/dist/{version}/{dir}.tar.gz"),
+            format!("{NODE_MIRROR_BASE}/{version}/{dir}.tar.gz"),
             false,
         )
     }
@@ -511,6 +527,7 @@ fn node_package(version: &str) -> (String, String, bool) {
         (
             dir.clone(),
             format!("https://nodejs.org/dist/{version}/{dir}.tar.gz"),
+            format!("{NODE_MIRROR_BASE}/{version}/{dir}.tar.gz"),
             false,
         )
     }
@@ -520,6 +537,7 @@ fn node_package(version: &str) -> (String, String, bool) {
         (
             dir.clone(),
             format!("https://nodejs.org/dist/{version}/{dir}.tar.gz"),
+            format!("{NODE_MIRROR_BASE}/{version}/{dir}.tar.gz"),
             false,
         )
     }
@@ -529,6 +547,7 @@ fn node_package(version: &str) -> (String, String, bool) {
         (
             dir.clone(),
             format!("https://nodejs.org/dist/{version}/{dir}.tar.gz"),
+            format!("{NODE_MIRROR_BASE}/{version}/{dir}.tar.gz"),
             false,
         )
     }
