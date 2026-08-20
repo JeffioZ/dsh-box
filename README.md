@@ -3,10 +3,10 @@
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面加载官方 `dsh web`，并提供标题栏、状态栏、托盘、更新与本地文件菜单等桌面能力。
 
 <p align="center">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-4d6bfe" />
-  <img alt="Platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-4d6bfe" />
-  <img alt="Runtime" src="https://img.shields.io/badge/dsh-latest-4d6bfe" />
-  <img alt="Stack" src="https://img.shields.io/badge/Tauri%20v2%20%7C%20Rust-4d6bfe" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-5686fe" />
+  <img alt="Platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-5686fe" />
+  <img alt="Runtime" src="https://img.shields.io/badge/dsh-latest-5686fe" />
+  <img alt="Stack" src="https://img.shields.io/badge/Tauri%20v2%20%7C%20Rust-5686fe" />
 </p>
 
 ## 目录
@@ -104,11 +104,12 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
   "language": "zh-CN",
   "hide_tool_calls": false,
   "hide_stats_line": true,
-  "hide_statusbar": false
+  "hide_statusbar": false,
+  "dsh_update_channel": "latest"
 }
 ```
 
-语言与主题会优先跟随 dsh 的 `settings.yaml`；主题不重复写入 `config.json`。开机自启动由各平台的系统机制管理。
+`dsh_update_channel` 取 `latest`（稳定版，默认）或 `next`（开发者预览，可能包含破坏兼容性的变更）。语言与主题会优先跟随 dsh 的 `settings.yaml`；主题不重复写入 `config.json`。开机自启动由各平台的系统机制管理。
 
 ### 环境变量
 

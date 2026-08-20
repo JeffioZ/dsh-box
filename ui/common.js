@@ -105,7 +105,6 @@ const DSHD_MESSAGES = {
   pluginCatWorkflow: ['工作流', 'Workflows'],
   pluginFailed: ['操作失败：{message}', 'Operation failed: {message}'],
   pluginInstall: ['安装', 'Install'],
-  pluginInstalled: ['已安装 {name}，服务重启中…', 'Installed {name}. Restarting the service…'],
   pluginInstalledTag: ['已安装', 'Installed'],
   pluginInstalledTitle: ['已安装', 'Installed'],
   pluginInstalling: ['正在安装 {name}…', 'Installing {name}…'],
