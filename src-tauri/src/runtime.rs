@@ -776,6 +776,34 @@ pub(crate) fn base_envs(node_exe: &Path, config: &Config) -> Vec<(&'static str, 
     envs
 }
 
+/// 已装 dsh 版本是否支持 `dsh web --no-open`（rc.8 及以上）。
+/// rc.7 及更早不认识该标志会把未知选项当错误导致启动失败，因此必须按
+/// 已装版本判定；无法解析的版本号保守不加（保持旧行为）。
+fn dsh_supports_no_open(config: &Config) -> bool {
+    let pkg = config
+        .dsh_dir()
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("package.json");
+    let Ok(text) = std::fs::read_to_string(&pkg) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(version) = json.get("version").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    if let Some((_, rc_part)) = version.split_once("-rc") {
+        // 形如 "0.1.0-rc.8"：取 rc 号数值比较
+        rc_part.parse::<u32>().map(|n| n >= 8).unwrap_or(false)
+    } else {
+        // 无 rc 后缀的稳定版（如 0.1.0）视为支持
+        !version.is_empty()
+    }
+}
+
 /// 隐藏窗口启动 `dsh web` 服务，返回 (pid, 进程树守卫)。
 pub(crate) fn start_server(
     _app: &AppHandle,
@@ -784,6 +812,10 @@ pub(crate) fn start_server(
 ) -> Result<(u32, Option<TreeGuard>), String> {
     let mut args = vec![config.dsh_entry().to_string_lossy().into_owned()];
     args.push("web".into());
+    // rc.8+ 支持 --no-open（桌面壳自己导航，不需要 dsh 自动弹浏览器）
+    if dsh_supports_no_open(config) {
+        args.push("--no-open".into());
+    }
     args.push("--port".into());
     args.push(config.port.to_string());
     let envs = base_envs(node_exe, config);

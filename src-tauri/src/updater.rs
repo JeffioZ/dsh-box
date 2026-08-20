@@ -370,7 +370,9 @@ pub fn check(app: &AppHandle) -> CheckResult {
 /// 检查失败（网络/仓库不存在/无 Release）静默返回 None，不打扰用户。
 fn check_app_update() -> Option<VersionInfo> {
     const REPO: &str = "JeffioZ/dsh-box";
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    // 通过 releases.atom 页面（而非 api.github.com）查询，绕开未认证 API
+    // 的 60 次/小时/IP 限流（本机实测 403）
+    let url = format!("https://github.com/{REPO}/releases.atom");
     // 查询失败仍返回带错误信息的行（前端显示"暂无法获取版本信息"，
     // hover tips 展示原因，与其他更新行统一）
     let fail = |e: String| {
@@ -402,14 +404,10 @@ fn check_app_update() -> Option<VersionInfo> {
     {
         return fail("读取响应失败".into());
     }
-    let json: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => return fail("解析响应失败".into()),
+    let tags = parse_releases_atom(&text);
+    let Some(latest) = tags.first().map(|t| t.trim_start_matches('v').to_string()) else {
+        return fail("更新源中未找到发布版本".into());
     };
-    let latest = json
-        .get("tag_name")
-        .and_then(|v| v.as_str())
-        .map(|t| t.trim_start_matches('v').to_string())?;
     let installed = env!("CARGO_PKG_VERSION").to_string();
     let update_available =
         versions::compare_versions(&latest, &installed) == std::cmp::Ordering::Greater;
@@ -501,37 +499,27 @@ fn latest_pwsh_version() -> Result<String, String> {
 /// 从 GitHub Releases 列表取最高的非预览 tag。
 #[cfg(windows)]
 fn github_latest_stable() -> Result<String, String> {
+    // 用 releases.atom 页面绕开 GitHub API 限流；PowerShell 预览版 tag
+    // 命名规范为 vX.Y.Z-preview.N，按 tag 文本过滤即可
     let response = runtime::check_client()
-        .get("https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30")
+        .get("https://github.com/PowerShell/PowerShell/releases.atom")
         .header("User-Agent", "DSHBox")
-        .header("Accept", "application/vnd.github+json")
         .call()
-        .map_err(|e| format!("GitHub API: {e}"))?;
-    let json: serde_json::Value = response
+        .map_err(|e| format!("GitHub Releases: {e}"))?;
+    let mut text = String::new();
+    response
         .into_body()
-        .read_json()
-        .map_err(|e| format!("GitHub API: {e}"))?;
-    let entries = json
-        .as_array()
-        .ok_or_else(|| "GitHub API: releases 格式错误".to_string())?;
+        .into_reader()
+        .read_to_string(&mut text)
+        .map_err(|e| format!("GitHub Releases: {e}"))?;
     let mut best: Option<semver::Version> = None;
     let mut best_tag = String::new();
-    for entry in entries {
-        if entry
-            .get("prerelease")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-            || entry
-                .get("draft")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        {
+    for tag in parse_releases_atom(&text) {
+        let tag = tag.trim_start_matches('v');
+        if tag.contains("preview") || tag.contains("-rc") {
             continue;
         }
-        let Some(tag) = entry.get("tag_name").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        let Ok(version) = semver::Version::parse(tag.trim_start_matches('v')) else {
+        let Ok(version) = semver::Version::parse(tag) else {
             continue;
         };
         let newer = best
@@ -539,11 +527,45 @@ fn github_latest_stable() -> Result<String, String> {
             .is_none_or(|current| version.cmp_precedence(current) == std::cmp::Ordering::Greater);
         if newer {
             best = Some(version);
-            best_tag = tag.trim_start_matches('v').to_string();
+            best_tag = tag.to_string();
         }
     }
     best.map(|_| best_tag)
         .ok_or_else(|| "GitHub API: 未找到稳定版本".to_string())
+}
+
+/// 解析 GitHub releases.atom 页面的 tag 列表（按发布顺序，最新在前）。
+/// tag 取自每个 entry 的 `<link rel="alternate">` href 末段
+/// （形如 .../releases/tag/v0.5.2）；title 可能是自定义发布名，不可靠。
+fn parse_releases_atom(xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in xml.split("<entry>").skip(1) {
+        let end = entry.find("</entry>").unwrap_or(entry.len());
+        let entry = &entry[..end];
+        let mut tag = None;
+        for link in entry.split("<link").skip(1) {
+            let seg = &link[..link.find('>').unwrap_or(link.len())];
+            if !seg.contains("releases/tag/") {
+                continue;
+            }
+            let Some(start) = seg.find("href=\"") else {
+                continue;
+            };
+            let rest = &seg[start + 6..];
+            let Some(quote) = rest.find('\"') else {
+                continue;
+            };
+            let href = &rest[..quote];
+            if let Some(last) = href.rsplit('/').next() {
+                tag = Some(last.to_string());
+                break;
+            }
+        }
+        if let Some(t) = tag {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// 安装或更新 PowerShell 7（仅 Windows 有意义，其他平台给出明确提示）。
@@ -1342,11 +1364,29 @@ fn update_node(app: &AppHandle, config: &crate::app_state::Config) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pwsh_metadata;
+    use super::{parse_pwsh_metadata, parse_releases_atom};
 
     #[test]
     fn parses_official_powershell_stable_tag() {
         let metadata = serde_json::json!({ "StableReleaseTag": "v7.6.4" });
         assert_eq!(parse_pwsh_metadata(&metadata).unwrap(), "7.6.4");
+    }
+
+    #[test]
+    fn parses_releases_atom_tags_in_order() {
+        let xml = r#"<?xml version="1.0"?>
+<feed><entry>
+  <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.2.0"/>
+  <title>v0.2.0</title>
+</entry><entry>
+  <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.1.0"/>
+</entry></feed>"#;
+        assert_eq!(parse_releases_atom(xml), vec!["v0.2.0", "v0.1.0"]);
+    }
+
+    #[test]
+    fn releases_atom_skips_non_tag_links() {
+        let xml = "<entry><link rel=\"alternate\" href=\"https://github.com/o/r/releases/tag/v1.0.0\"/><link rel=\"self\" href=\"https://x/atom\"/></entry>";
+        assert_eq!(parse_releases_atom(xml), vec!["v1.0.0"]);
     }
 }
