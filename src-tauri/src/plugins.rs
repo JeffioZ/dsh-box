@@ -1064,7 +1064,7 @@ mod tests {
             "[ERR_PNPM_UNEXPECTED_VIRTUAL_STORE] Unexpected virtual store location"
         ));
         assert!(is_virtual_store_error(
-            "The dependencies at \"C:\\Users\\u\\.dsh-box\\profiles\\web\\node_modules\" are currently symlinked from the virtual store directory at \"C:\\Users\\u\\.dsh\\profiles\\web\\node_modules\\.pnpm\"."
+            "The dependencies at \"C:\\Users\\u\\.dsh\\profiles\\web\\node_modules\" are currently symlinked from the virtual store directory at \"C:\\Users\\u\\.dsh\\profiles\\web\\node_modules\\.pnpm\"."
         ));
         // 其他错误不应误判
         assert!(!is_virtual_store_error("npm ERR! code E404"));
