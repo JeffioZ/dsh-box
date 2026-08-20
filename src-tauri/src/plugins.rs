@@ -59,10 +59,7 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
                 installed: Some(version),
                 // 内置身份 = 在维护清单且用户未主动卸载过（卸载重装后
                 // 不再显示内置标签）
-                builtin: builtin_identity(
-                    MARKET_PKGS.contains(&name.as_str()),
-                    market_user_removed(&config, name),
-                ),
+                builtin: builtin_identity(is_market_pkg(name), market_user_removed(&config, name)),
             });
         }
     }
@@ -150,7 +147,7 @@ pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
     run_dsh_plugin_auto(app, &["remove", name])?;
     // 仅用户主动卸载（本函数）写标记；强制下线清理走引导路径不经过这里
     let config = app.state::<AppState>().config();
-    if MARKET_PKGS.contains(&name) {
+    if is_market_pkg(name) {
         market_mark_user_removed(&config, name);
         crate::logging::log(&format!(
             "plugins: 已记录 {name} 被用户卸载（重装后不再视为内置）"
@@ -198,19 +195,63 @@ fn restart_service_silently(app: &AppHandle) {
     });
 }
 
-// —— 内置预装包（dsh-market + dsh-file-drop）：自动预装与每日版本同步 ——
+// —— 内置预装包（自动预装与每日版本同步） ——
 
-/// 内置预装包：插件市场（dshmarket）与文件拖拽（dsh-file-drop，BSD-3-Clause，
-/// 与桌面壳场景直接相关）。均走 `dsh plugin` CLI 安装，失败静默重试。
-/// 包名在此清单内即享受内置待遇（自动引导/每日同步/UI 内置标签），
-/// 与安装来源无关；用户主动卸载后（见 market_user_removed）不再视为内置。
-const MARKET_PKGS: &[&str] = &["dshmarket", "dsh-file-drop"];
+/// 单个预设插件的静态信息（对应 resources/preset-plugins.json 条目）。
+#[derive(serde::Deserialize, Clone)]
+struct PresetPlugin {
+    /// 主键 / 存储标记键 / UI builtin 判定键（即实际包名）
+    id: String,
+    /// 传给 `dsh plugin add` 的依赖形式（npm 包名或 git 依赖形式）；
+    /// 与 id 可不一致（如 scoped 包 `@scope/name`）
+    spec: String,
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    description: String,
+    #[allow(dead_code)]
+    #[serde(rename = "repoUrl", default)]
+    repo_url: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    recommended: bool,
+}
+
+/// 解析 resources/preset-plugins.json（编译期嵌入，运行期零 IO）。
+/// 文件缺失/损坏时回落到空清单，绝不因清单问题阻断启动。
+/// OnceLock 缓存避免热路径重复反序列化。
+fn preset_plugins() -> &'static [PresetPlugin] {
+    static CACHE: std::sync::OnceLock<Vec<PresetPlugin>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        const JSON: &str = include_str!("../resources/preset-plugins.json");
+        serde_json::from_str(JSON).unwrap_or_default()
+    })
+}
+
+/// 内置包名列表（id = 实际包名，历史 config 标记以包名为键，天然兼容）。
+fn market_pkg_ids() -> impl Iterator<Item = &'static str> {
+    preset_plugins().iter().map(|p| p.id.as_str())
+}
+
+/// 是否内置包名（按 id 匹配）。
+fn is_market_pkg(name: &str) -> bool {
+    market_pkg_ids().any(|p| p == name)
+}
+
+/// 按 id 取安装 spec（`dsh plugin add` 的依赖形式）。未找到回退用 id 本身。
+fn market_spec(id: &str) -> String {
+    preset_plugins()
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.spec.clone())
+        .unwrap_or_else(|| id.to_string())
+}
 
 /// 强制下线清单：曾内置、需要从用户机器移除的包（安全缺陷/与 DSHBox
 /// 冲突等）。启动引导时检测到"已装且仍为内置身份"即自动卸载；用户卸载
 /// 过又手动重装的包（market_user_removed 标记）豁免——尊重用户选择。
 /// 初始为空，未来需要撤回插件时把包名加进来即可（发版生效）。
-/// 约束：同一包不能同时出现在 MARKET_PKGS 与 MARKET_REMOVED。
+/// 约束：同一包不能同时出现在内置清单与 MARKET_REMOVED。
 const MARKET_REMOVED: &[&str] = &[];
 /// 版本检查门控间隔（24 小时）。
 const MARKET_CHECK_INTERVAL: u64 = 86_400;
@@ -500,7 +541,7 @@ fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::Config) -> 
     if cleanup_failed {
         failed = true;
     }
-    for pkg in MARKET_PKGS {
+    for pkg in market_pkg_ids() {
         if market_installed_version(config, pkg).is_some() {
             // 已装（含用户手动安装）即视为该包引导完成
             market_mark_pkg_bootstrapped(config, pkg);
@@ -510,7 +551,7 @@ fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::Config) -> 
             continue; // 曾装过、用户主动卸载 → 尊重卸载意图，不重装
         }
         crate::logging::log(&format!("market: 自动安装内置包 {pkg}"));
-        match run_dsh_plugin_auto(app, &["add", pkg]) {
+        match run_dsh_plugin_auto(app, &["add", &market_spec(pkg)]) {
             Ok(_) => {
                 crate::logging::log(&format!("market: {pkg} 安装完成"));
                 market_mark_pkg_bootstrapped(config, pkg);
@@ -542,11 +583,11 @@ fn remove_retired_market_pkgs(app: &AppHandle, config: &crate::app_state::Config
     let mut removed_any = false;
     let mut failed = false;
     for pkg in MARKET_REMOVED {
-        if MARKET_PKGS.contains(pkg) {
+        if is_market_pkg(pkg) {
             // 配置错误防抖：同一包不能同时在维护与下线清单，否则每次
             // 启动"卸载→引导重装"抖动；跳过并提示
             crate::logging::log(&format!(
-                "market: 配置错误：{pkg} 同时存在于 MARKET_PKGS 与 MARKET_REMOVED，跳过清理"
+                "market: 配置错误：{pkg} 同时存在于内置清单与 MARKET_REMOVED，跳过清理"
             ));
             continue;
         }
@@ -593,7 +634,7 @@ fn sync_market_versions(app: &AppHandle, config: &crate::app_state::Config) -> b
     }
     let mut upgraded_any = false;
     let mut check_complete = true;
-    for pkg in MARKET_PKGS {
+    for pkg in market_pkg_ids() {
         // 用户卸载过又重装的包：不再视为内置，不自动更新
         // （仍可在插件管理页手动检查/更新）
         if market_user_removed(config, pkg) {
@@ -624,7 +665,7 @@ fn sync_market_versions(app: &AppHandle, config: &crate::app_state::Config) -> b
             continue;
         }
         crate::logging::log(&format!("market: 升级 {pkg} 到 {latest}"));
-        match run_dsh_plugin_auto(app, &["add", pkg]) {
+        match run_dsh_plugin_auto(app, &["add", &market_spec(pkg)]) {
             Ok(_) => {
                 // 验证真的升级了：pnpm 在冷却期可能“成功”但降级安装旧版
                 if market_installed_version(config, pkg).as_deref() == Some(installed.as_str()) {
@@ -860,7 +901,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
     let config = app.state::<AppState>().config();
     // 已安装插件 + 未安装的内置包（重装入口可见）
     let mut pkgs = installed_pkgs(&config);
-    for p in MARKET_PKGS {
+    for p in market_pkg_ids() {
         if !pkgs.iter().any(|x| x == p) {
             pkgs.push((*p).to_string());
         }
@@ -878,7 +919,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
                     latest: String::new(),
                     update_available: false,
                     builtin: builtin_identity(
-                        MARKET_PKGS.contains(&pkg.as_str()),
+                        is_market_pkg(&pkg),
                         market_user_removed(&config, &pkg),
                     ),
                     cooldown_until: None,
@@ -908,10 +949,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
             installed,
             latest,
             update_available,
-            builtin: builtin_identity(
-                MARKET_PKGS.contains(&pkg.as_str()),
-                market_user_removed(&config, &pkg),
-            ),
+            builtin: builtin_identity(is_market_pkg(&pkg), market_user_removed(&config, &pkg)),
             cooldown_until: None,
             error: None,
         });
@@ -932,10 +970,7 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
         )
         .into());
     };
-    let builtin = builtin_identity(
-        MARKET_PKGS.contains(&pkg),
-        market_user_removed(&config, pkg),
-    );
+    let builtin = builtin_identity(is_market_pkg(pkg), market_user_removed(&config, pkg));
     let (latest, published) = market_latest_info(pkg).ok_or_else(|| {
         crate::locale::text("版本查询失败。", "Failed to query the latest version.")
     })?;
@@ -967,7 +1002,7 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
         });
     }
     crate::logging::log(&format!("plugins: 手动升级 {pkg} 到 {latest}"));
-    match run_dsh_plugin_auto(app, &["add", pkg]) {
+    match run_dsh_plugin_auto(app, &["add", &market_spec(pkg)]) {
         Ok(_) => {
             // 验证真的升级了：pnpm 在冷却期可能“成功”但降级安装旧版
             if market_installed_version(&config, pkg).as_deref() == Some(installed.as_str()) {
@@ -1108,6 +1143,24 @@ mod tests {
         // 不在维护清单 → 非内置
         assert!(!builtin_identity(false, false));
         assert!(!builtin_identity(false, true));
+    }
+
+    #[test]
+    fn preset_plugins_loads_from_embedded_json() {
+        let ids: Vec<&str> = market_pkg_ids().collect();
+        assert!(ids.contains(&"dshmarket"));
+        assert!(ids.contains(&"dsh-file-drop"));
+        assert!(!ids.is_empty());
+    }
+
+    #[test]
+    fn market_pkg_matching_and_spec() {
+        assert!(is_market_pkg("dshmarket"));
+        assert!(!is_market_pkg("some-random-plugin"));
+        // spec 默认与 id 一致（当前两个预设均无 scoped 分离）
+        assert_eq!(market_spec("dshmarket"), "dshmarket");
+        // 未收录的包 spec 回退为 id 本身
+        assert_eq!(market_spec("unknown"), "unknown");
     }
 
     #[test]

@@ -776,6 +776,22 @@ pub(crate) fn base_envs(node_exe: &Path, config: &Config) -> Vec<(&'static str, 
     envs
 }
 
+/// 从版本字符串判断是否支持 `--no-open`（rc.8 及以上）。
+/// 纯函数便于测试。
+fn version_supports_no_open(version: &str) -> bool {
+    if let Some((_, rc_part)) = version.split_once("-rc") {
+        // 形如 "0.1.0-rc.8"：split 得 ".8"，去前导点后取 rc 号数值比较
+        rc_part
+            .trim_start_matches('.')
+            .parse::<u32>()
+            .map(|n| n >= 8)
+            .unwrap_or(false)
+    } else {
+        // 无 rc 后缀的稳定版（如 0.1.0）视为支持
+        !version.is_empty()
+    }
+}
+
 /// 已装 dsh 版本是否支持 `dsh web --no-open`（rc.8 及以上）。
 /// rc.7 及更早不认识该标志会把未知选项当错误导致启动失败，因此必须按
 /// 已装版本判定；无法解析的版本号保守不加（保持旧行为）。
@@ -795,13 +811,7 @@ fn dsh_supports_no_open(config: &Config) -> bool {
     let Some(version) = json.get("version").and_then(|v| v.as_str()) else {
         return false;
     };
-    if let Some((_, rc_part)) = version.split_once("-rc") {
-        // 形如 "0.1.0-rc.8"：取 rc 号数值比较
-        rc_part.parse::<u32>().map(|n| n >= 8).unwrap_or(false)
-    } else {
-        // 无 rc 后缀的稳定版（如 0.1.0）视为支持
-        !version.is_empty()
-    }
+    version_supports_no_open(version)
 }
 
 /// 隐藏窗口启动 `dsh web` 服务，返回 (pid, 进程树守卫)。
@@ -840,6 +850,7 @@ pub(crate) fn start_server(
 #[cfg(test)]
 mod checksum_tests {
     use super::parse_node_sha256;
+    use super::version_supports_no_open;
 
     #[test]
     fn parses_only_the_exact_archive_name() {
@@ -850,5 +861,19 @@ mod checksum_tests {
             Some(hash)
         );
         assert!(parse_node_sha256(&checksums, "missing.zip").is_none());
+    }
+
+    #[test]
+    fn no_open_support_by_rc_version() {
+        // rc.8 及以上支持 --no-open
+        assert!(version_supports_no_open("0.1.0-rc.8"));
+        assert!(version_supports_no_open("0.2.0-rc.11"));
+        // rc.7 及更早不支持
+        assert!(!version_supports_no_open("0.1.0-rc.7"));
+        // 稳定版（无 rc 后缀）支持
+        assert!(version_supports_no_open("0.1.0"));
+        // 空版本保守不支持；非 rc 的任意非空串按稳定版处理（版本来自
+        // package.json，形如 x.y.z 或 x.y.z-rc.N，不会出现垃圾串）
+        assert!(!version_supports_no_open(""));
     }
 }

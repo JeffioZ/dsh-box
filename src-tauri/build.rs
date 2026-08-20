@@ -9,6 +9,8 @@ fn main() {
     // 补上目录级跟踪，改 UI 文件后 release 构建自动重新嵌入资源
     println!("cargo:rerun-if-changed=../ui");
     println!("cargo:rerun-if-changed=app.manifest.xml");
+    // 预设插件清单：改 resources/preset-plugins.json 后重新构建即生效
+    println!("cargo:rerun-if-changed=resources/preset-plugins.json");
     // 自定义 Windows 应用清单：默认清单缺 dpiAwareness，高 DPI 屏（150%+）
     // 下窗口尺寸被系统虚拟化（逻辑像素按 96 DPI 解释），弹窗/主窗口偏小
     let mut windows = tauri_build::WindowsAttributes::new();

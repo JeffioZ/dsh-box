@@ -1,0 +1,18 @@
+[
+  {
+    "id": "dshmarket",
+    "spec": "dshmarket",
+    "name": "DSH Market",
+    "description": "可视化插件市场：浏览、搜索、一键安装社区插件",
+    "repoUrl": "https://github.com/dsh-market/dsh-market",
+    "recommended": true
+  },
+  {
+    "id": "dsh-file-drop",
+    "spec": "dsh-file-drop",
+    "name": "DSH File Drop",
+    "description": "拖拽上传非图片文件（PDF/Word/Excel/ZIP 等），路径直入输入框",
+    "repoUrl": "https://github.com/dannyvan/dsh-file-drop",
+    "recommended": true
+  }
+]
