@@ -123,7 +123,7 @@ const DSHD_MESSAGES = {
   pluginCheckUpdates: ['检查更新', 'Check for updates'],
   pluginNotInstalled: ['未安装', 'Not installed'],
   pluginCooldown: ['新版本 {version}（发布冷却中）', 'New version {version} (publish cooldown)'],
-  pluginUpdatesChecked: ['检查完成，全部为最新', 'Check complete — all up to date'],
+  pluginUpdatesChecked: ['检查完成，均为最新版本', 'Check complete — all up to date'],
   pluginUpdatesFound: ['发现 {count} 个可更新插件', '{count} update(s) available'],
   pluginUpdateAvailable: ['有新版本', 'Update available'],
   pluginUpdating: ['正在更新…', 'Updating…'],

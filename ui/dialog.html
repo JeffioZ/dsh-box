@@ -170,7 +170,8 @@
     .pcat-btn.active { background: var(--dshd-selected); border-color: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
     .pcat-btn.active:hover { background: var(--dshd-selected-hover); border-color: var(--dshd-selected-hover); }
     .pcat-btn.active:active { background: var(--dshd-pressed); border-color: var(--dshd-selected); }
-    .pstatus { min-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
+    /* 状态行固定行高 18px：空/有文字高度一致，避免提示出现时下方内容位移 */
+    .pstatus { min-height: 18px; line-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
     .pstatus.err { color: var(--dshd-error-text); }
     .pstatus.ok { color: var(--dshd-success-text); }
     @media (prefers-color-scheme: light) {
@@ -757,7 +758,7 @@
       // 无底部操作区（dsh 设置弹窗无 footer）
       $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
       $('p-query').addEventListener('keydown', (e) => { if (e.key === 'Enter') doPluginSearch(buildQuery($('p-query').value, activeCat)); });
-      $('p-builtin-check').addEventListener('click', refreshBuiltinStatus);
+      $('p-builtin-check').addEventListener('click', () => refreshBuiltinStatus(false));
       document.querySelectorAll('.pcat-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('.pcat-btn').forEach((b) => {
@@ -785,7 +786,8 @@
         });
       });
       refreshPlugins();
-      refreshBuiltinStatus();
+      // 进入页面自动检查：静默（行内状态已表达结果，不刷“检查完成”提示）
+      refreshBuiltinStatus(true);
     }
     // —— 插件更新状态（检查更新覆盖全部已安装插件；内置标签 + 版本对比 + 按包更新） ——
     let updateBusy = false;
@@ -793,13 +795,16 @@
     let updateCheckSeq = 0;
     // pkg → UpdateStatus：plugin_updates 的结果缓存，渲染已安装列表时使用
     let updateStatus = new Map();
-    async function refreshBuiltinStatus() {
+    // silent=true：自动检查（进入页面/安装后刷新），不显示结果提示——
+    // 行内版本状态已表达检查结果；手动点击“检查更新”才显示汇总提示
+    async function refreshBuiltinStatus(silent) {
       const seq = ++updateCheckSeq;
       try {
         const list = await invoke('plugin_updates');
         if (openKind !== 'plugins' || seq !== updateCheckSeq) return;
         updateStatus = new Map((list || []).map((s) => [s.pkg, s]));
         await refreshPlugins();
+        if (silent) return;
         // 冷却期内的新版已不计入 update_available：统计即“现在可更新”的数量
         const updatable = (list || []).filter((s) => s.update_available).length;
         if (updatable > 0) {
@@ -808,7 +813,7 @@
           pluginStatus(dshdT('pluginUpdatesChecked'), 'ok');
         }
       } catch (e) {
-        if (openKind === 'plugins' && seq === updateCheckSeq) {
+        if (openKind === 'plugins' && seq === updateCheckSeq && !silent) {
           pluginStatus(dshdT('pluginUpdateFailed', { message: e }), 'err');
         }
       }
@@ -1006,7 +1011,7 @@
           finally {
             setPluginsBusy(false);
             await refreshPlugins();
-            await refreshBuiltinStatus();
+            await refreshBuiltinStatus(true);
           }
         });
         actions.append(btn);
