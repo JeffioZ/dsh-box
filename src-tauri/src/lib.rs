@@ -800,6 +800,7 @@ pub fn emit_status_progress(
         progress,
         dsh_version: snapshot.dsh_version,
         node_version: snapshot.node_version,
+        npm_version: snapshot.npm_version,
         port: snapshot.port,
     };
     let _ = app.emit("dsh-status", payload);

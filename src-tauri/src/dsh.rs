@@ -212,6 +212,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     state.set_node_version(
         runtime::node_version(&node_exe).map(|(m, n, p)| format!("v{m}.{n}.{p}")),
     );
+    state.set_npm_version(runtime::npm_version(&config));
 
     // 2) dsh 包
     ensure_dsh(app, &config, &node_exe)?;

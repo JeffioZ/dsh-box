@@ -53,6 +53,9 @@ pub struct StatusPayload {
     /// 当前使用的 Node 版本（如 v24.19.0）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_version: Option<String>,
+    /// 便携 Node 自带 npm 版本（如 npm 12.0.2；npm 11 会卡 dsh 安装）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_version: Option<String>,
     /// 实际监听端口。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
@@ -617,6 +620,8 @@ pub(crate) struct Inner {
     retry_tx: Sender<()>,
     /// 当前使用 Node 的版本（boot 时检测一次缓存，get_status 免 spawn）。
     node_version: Option<String>,
+    /// 便携 Node 自带 npm 版本（boot 时检测缓存）。
+    npm_version: Option<String>,
     /// 自绘弹窗最近一次打开载荷（app_dialog_get 拉取用）。
     last_dialog: Option<crate::app_dialog::AppDialogOpen>,
     /// 最近一次余额查询结果（余额弹窗轮询拉取；事件通道对该窗口不可靠）。
@@ -693,6 +698,7 @@ impl AppState {
             updating: false,
             retry_tx,
             node_version: None,
+            npm_version: None,
             last_dialog: None,
             last_balance: None,
             last_check: None,
@@ -863,7 +869,7 @@ impl AppState {
     }
 
     pub fn snapshot(&self) -> StatusPayload {
-        let (phase, message, detail, port, config, node_version) = {
+        let (phase, message, detail, port, config, node_version, npm_version) = {
             let g = self.lock_inner();
             (
                 g.phase,
@@ -872,6 +878,7 @@ impl AppState {
                 g.config.port,
                 g.config.clone(),
                 g.node_version.clone(),
+                g.npm_version.clone(),
             )
         };
         // 缓存缺失时即时检测一次：启动页首帧就显示完整的版本信息
@@ -886,6 +893,15 @@ impl AppState {
             }
             version
         };
+        let npm_version = if npm_version.is_some() {
+            npm_version
+        } else {
+            let version = crate::runtime::npm_version(&config);
+            if version.is_some() {
+                self.set_npm_version(version.clone());
+            }
+            version
+        };
         StatusPayload {
             phase: phase.as_str().to_string(),
             message,
@@ -893,6 +909,7 @@ impl AppState {
             progress: None,
             dsh_version: crate::runtime::installed_dsh_version(&config),
             node_version,
+            npm_version,
             port: Some(port),
         }
     }
@@ -954,6 +971,11 @@ impl AppState {
     /// 缓存当前 Node 版本（boot 时检测一次，snapshot 直接读取，避免高频 spawn）。
     pub fn set_node_version(&self, version: Option<String>) {
         self.lock_inner().node_version = version;
+    }
+
+    /// 缓存便携 Node 自带 npm 版本（boot 时检测一次）。
+    pub fn set_npm_version(&self, version: Option<String>) {
+        self.lock_inner().npm_version = version;
     }
 
     /// 读取缓存的 Node 版本（None 表示尚未检测）。

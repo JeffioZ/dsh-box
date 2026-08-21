@@ -237,6 +237,30 @@ pub(crate) fn node_version(program: &Path) -> Option<(u32, u32, u32)> {
     parse_node_version(&text)
 }
 
+/// 取便携 Node 自带 npm 的版本号（形如 11.17.0 / 12.0.2）。
+/// 用 node 跑 npm-cli.js（与安装/更新路径一致），返回 None 表示拿不到。
+pub(crate) fn npm_version(config: &Config) -> Option<String> {
+    let node_exe = config.node_exe();
+    let npm_cli = node_exe.parent()?.join("node_modules/npm/bin/npm-cli.js");
+    if !npm_cli.exists() {
+        return None;
+    }
+    let mut cmd = std::process::Command::new(&node_exe);
+    cmd.arg(&npm_cli).arg("--version");
+    processes::hide_console(&mut cmd);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        // 统一 "npm x.y.z" 形式，避免裸数字与 dsh/Node 版本混淆
+        Some(format!("npm {text}"))
+    }
+}
+
 /// 在系统中查找 Node：Windows 常见目录 / Unix 常见位置 / PATH 兜底。
 pub(crate) fn find_system_node() -> Option<PathBuf> {
     #[cfg(windows)]
