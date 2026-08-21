@@ -831,6 +831,11 @@ fn run_npm_install_with_progress(
     let cache_dir = config.root.join("npm-cache").join("_cacache");
     let start = Instant::now();
     let mut last_reported_mb: u64 = u64::MAX; // 强制首帧一定汇报
+                                              // 无进展超时：npm 卡在非 fetch 阶段（install scripts 等）时不退出也不长缓存，
+                                              // 3 分钟毫无进展即判定卡死并 kill——用户明确要求“不要等太久”。
+    let no_progress_timeout = Duration::from_secs(180);
+    let mut last_progress = Instant::now();
+    let mut last_progress_mb: u64 = 0;
     let code = loop {
         match child.try_wait().map_err(|e| {
             crate::locale::owned(
@@ -842,6 +847,23 @@ fn run_npm_install_with_progress(
             None => {
                 let secs = start.elapsed().as_secs();
                 let mb = dir_size_mb(&cache_dir);
+                // 缓存有增长 = 有进展：刷新无进展计时器
+                if mb != last_progress_mb {
+                    last_progress_mb = mb;
+                    last_progress = Instant::now();
+                } else if last_progress.elapsed() > no_progress_timeout {
+                    // 卡死：先杀进程树，再向调用方报错（上层会切镜像重试）
+                    crate::logging::log(&format!(
+                        "runtime: npm install 超过 {}s 无进展，判定卡死并终止",
+                        no_progress_timeout.as_secs()
+                    ));
+                    processes::kill_tree(child.id());
+                    let tail = read_log_tail(&npm_log, 600);
+                    return Err(crate::locale::owned(
+                        format!("安装超时（{secs}s 无进展）：\n{}", tail),
+                        format!("Install timed out (no progress for {secs}s):\n{}", tail),
+                    ));
+                }
                 // 缓存大小下降（npm 清理/重算）也照报，但只在变化或首帧时发事件
                 if mb != last_reported_mb || secs == 0 {
                     last_reported_mb = mb;
@@ -856,9 +878,15 @@ fn run_npm_install_with_progress(
                     } else {
                         format!("Fetching dependencies… {secs}s elapsed")
                     };
-                    // 进度条：只有“下载阶段”的字节数无法换算 0-100，给不确定进度；
-                    // 真实下载量放 detail 展示
-                    emit_status(app, BootPhase::InstallingDsh, "正在安装 dsh…", &detail);
+                    // progress bar：只有“下载阶段”的字节数无法换算 0-100，给不确定进度；
+                    // 真实下载量放 detail 展示。message 走 i18n（前端对
+                    // installing-dsh 不重译，直接显示后端快照）
+                    emit_status(
+                        app,
+                        BootPhase::InstallingDsh,
+                        crate::locale::text("正在安装 dsh…", "Installing dsh…"),
+                        &detail,
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
