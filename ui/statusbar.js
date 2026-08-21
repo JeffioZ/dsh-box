@@ -21,6 +21,7 @@ let avgTps = null; // stats 载荷的平均解码速率（tok/s）
 let liveTps = null; // 实时速率（流式期间有值，空闲为 null）
 let detailsMap = {}; // key → 额外明细行（状态栏未显示的补充数据）
 let lastBalance = null;
+let currentSettings = null; // 设置状态（hide_balance 控制余额 chip 显隐）
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -115,9 +116,11 @@ function onLiveRate(payload) {
 
 function balanceChipState() {
   const b = lastBalance;
-  if (!b || !b.ok) return { text: '--', dot: 'err' };
-  if (b.error) return { text: '--', dot: 'warn' };
-  if (!b.balances || !b.balances.length) return { text: '--', dot: 'warn' };
+  if (!b || !b.ok) return { text: '--', dot: 'err', kind: 'unavailable' };
+  if (b.errorKind === 'no_key') return { text: dshdT('balanceNoKey'), dot: 'neutral', kind: 'no_key' };
+  if (b.errorKind === 'invalid_key') return { text: dshdT('balanceInvalidKey'), dot: 'warn', kind: 'invalid_key' };
+  if (b.error) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
+  if (!b.balances || !b.balances.length) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
   const first = b.balances[0];
   const cur = dshdCurrency(first.currency);
   // chip 只显示金额（币种符号足够，currency 代码与拆分明细留给详情弹窗）；
@@ -125,21 +128,39 @@ function balanceChipState() {
   return {
     text: cur + dshdBalanceValue(first.total_balance),
     dot: b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
+    kind: 'ok',
   };
 }
 
 function renderBalance() {
   const chip = $('balance-chip');
+  const hide = currentSettings && currentSettings.hide_balance;
+  const sep = $('edge-sep');
+  if (hide) {
+    chip.style.display = 'none';
+    // 分隔线属于「余额尾组」，隐藏余额时一并隐藏；onStats 会按统计区状态重设
+    if (sep) sep.style.display = 'none';
+    return;
+  }
+  chip.style.display = '';
+  if (sep) sep.style.removeProperty('display');
   const state = balanceChipState();
   const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
   chip.innerHTML =
     WALLET_ICON +
     '<span class="' + dotClass + '" aria-hidden="true"></span>' +
     '<span id="balance-text">' + esc(state.text) + '</span>';
-  const hints = [dshdT('balanceChipHint')];
+  const hints = [];
+  if (state.kind === 'no_key') {
+    // 未配置 Key：引导点击去设置页（不点 Details 语义）
+    hints.push(dshdT('balanceNoKeyHint'));
+  } else {
+    hints.push(dshdT('balanceChipHint'));
+  }
   if (lastBalance && lastBalance.stale) hints.push(dshdT('staleBalance'));
   chip.title = hints.join('\n');
-  chip.setAttribute('aria-label', state.text + ' — ' + dshdT('balanceDetailsAria'));
+  chip.dataset.noKey = state.kind === 'no_key' ? '1' : '';
+  chip.setAttribute('aria-label', state.text + (state.kind === 'no_key' ? ' — ' + dshdT('balanceNoKeyHint') : ' — ' + dshdT('balanceDetailsAria')));
 }
 
 function onBalance(payload) {
@@ -210,7 +231,9 @@ function init() {
   const statsEl = $('stats');
   const chip = $('balance-chip');
   chip.addEventListener('click', () => {
-    invoke('app_dialog_open_balance').catch(() => {});
+    // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开余额详情
+    const cmd = chip.dataset.noKey ? 'app_dialog_open_settings' : 'app_dialog_open_balance';
+    invoke(cmd).catch(() => {});
   });
   // 屏蔽 WebView 默认右键菜单（与标题栏一致）
   document.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -222,6 +245,15 @@ function init() {
   listen('session-stats-updated', (e) => onStats(e.payload)).catch(() => {});
   listen('live-rate-updated', (e) => onLiveRate(e.payload)).catch(() => {});
   listen('balance-updated', (e) => onBalance(e.payload)).catch(() => {});
+  listen('settings-changed', (e) => {
+    currentSettings = e.payload || null;
+    renderBalance();
+  }).catch(() => {});
+  // 初始拉取设置状态（hide_balance 决定余额 chip 是否显示）
+  invoke('settings_get').then((s) => {
+    currentSettings = s;
+    renderBalance();
+  }).catch(() => {});
   dshdApplyI18n();
   renderStats();
   renderBalance();

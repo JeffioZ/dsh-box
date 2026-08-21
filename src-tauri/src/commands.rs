@@ -2,7 +2,7 @@
 //! 安全：所有命令仅允许内置 App 页面调用；dsh 页面及其他任意来源一律拒绝，
 //! 避免 withGlobalTauri 暴露的 IPC 被远程内容用于控制桌面端。
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_state::{self, AppState};
 use crate::{dsh, logging, processes, updater};
@@ -374,6 +374,7 @@ pub struct SettingsState {
     pub hide_tool_calls: bool,
     pub hide_stats_line: bool,
     pub hide_statusbar: bool,
+    pub hide_balance: bool,
     pub auto_update_plugins: bool,
     /// dsh 更新通道："latest" 或 "next"
     pub dsh_update_channel: String,
@@ -386,6 +387,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         hide_tool_calls: config.hide_tool_calls,
         hide_stats_line: config.hide_stats_line,
         hide_statusbar: config.hide_statusbar,
+        hide_balance: config.hide_balance,
         auto_update_plugins: config.auto_update_plugins,
         dsh_update_channel: config.dsh_update_channel.clone(),
     }
@@ -433,6 +435,12 @@ pub fn settings_set(
             // 即时生效：重新同步三区块边界（隐藏时状态区 0 高、主区到底）。
             crate::titlebar::sync_bounds(&app);
         }
+        "hide_balance" => {
+            if state.config().hide_balance != value {
+                state.toggle_hide_balance()?;
+            }
+            // 即时生效：余额 chip 显示/隐藏由状态栏前端据此渲染
+        }
         "auto_update_plugins" => {
             if state.config().auto_update_plugins != value {
                 state.toggle_auto_update_plugins()?;
@@ -443,7 +451,10 @@ pub fn settings_set(
         _ => return Err(crate::locale::text("未知设置项。", "Unknown setting.").into()),
     }
     crate::logging::log(&format!("settings: {key}={value}"));
-    Ok(settings_state(&app))
+    // 广播给其他内建窗口（状态栏据此隐藏/显示余额 chip）
+    let st = settings_state(&app);
+    let _ = app.emit("settings-changed", &st);
+    Ok(st)
 }
 
 /// 切换 dsh 内核更新通道（latest/next），持久化到 config.json。

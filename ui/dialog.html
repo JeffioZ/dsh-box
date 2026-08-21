@@ -709,7 +709,7 @@
 
     // —— 设置（统一弹窗内：开机自启 / 隐藏工具调用 / 隐藏统计行） ——
     let settingsBusy = false;
-    const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'auto_update_plugins'];
+    const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'auto_update_plugins'];
     function settingsRow(key, nameKey, descKey) {
       return (
         '<label class="srow">' +
@@ -729,6 +729,7 @@
         settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
         settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
         settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
+        settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc') +
         settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
         '<label class="srow">' +
         '<span class="srow-txt">' +
