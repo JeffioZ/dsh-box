@@ -719,6 +719,17 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     if dsh_installed(config) {
         return Ok(());
     }
+    // 清理前几轮失败残留的半截安装：不完整的 node_modules / package-lock.json
+    // 会让 npm reify 阶段的树对比在坏状态上卡死（实测：manifest 全部 fetch 完
+    // 成后、tarball 未开始前卡住，--fetch-timeout 不生效）。每次干净重装。
+    let node_modules = config.dsh_dir().join("node_modules");
+    let pkg_lock = config.dsh_dir().join("package-lock.json");
+    if node_modules.exists() && std::fs::remove_dir_all(&node_modules).is_err() {
+        crate::logging::log("runtime: 清理残留 node_modules 失败，继续尝试安装");
+    }
+    if pkg_lock.exists() {
+        let _ = std::fs::remove_file(&pkg_lock);
+    }
     emit_status(
         app,
         BootPhase::InstallingDsh,
@@ -760,6 +771,9 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         // 单请求 2 分钟超时：npm 默认 fetch timeout 5 分钟，卡死时等太久
         "--fetch-timeout=120000".into(),
         "--fetch-retries=2".into(),
+        // --prefer-online：不用缓存里的旧/半截包体（前几轮失败可能留下损坏
+        // tarball），强制重新拉取；manifest 仍允许 revalidate 快速通过
+        "--prefer-online".into(),
         // --verbose：非 TTY 下也会把 fetch/reify 各步写进日志，
         // 否则卡死时拿不到任何定位信息（日志只有最终 added 行）
         "--verbose".into(),
