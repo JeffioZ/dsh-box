@@ -107,20 +107,20 @@ pub fn precreate(app: &AppHandle) {
     if let Some((dx, dy)) = initial_pos {
         builder = builder.position(dx, dy);
     }
+    // 透明窗口：仅有 Windows/Linux 提供 Public API（macOS 需 macos-private-api
+    // feature，未启用）。macOS 上跳过 transparent，卡片层在非透明窗口内以
+    // 24px 圆角自绘，效果一致（仅系统阴影差异）。
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder
+        .background_color(tauri::window::Color(0, 0, 0, 0))
+        .transparent(true)
+        .shadow(false);
+    #[cfg(target_os = "macos")]
+    let builder = builder.shadow(false);
     match builder
         .initialization_script(crate::locale::init_script())
         .resizable(false)
         .decorations(false)
-        // 透明背景在创建时设置一次：show 时重置会强制 WebView2 合成刷新，
-        // 导致"展示完成后闪一下"（分层窗口合成重建）
-        .background_color(tauri::window::Color(0, 0, 0, 0))
-        // 透明窗口 + 内容自绘 24px 圆角（与 dsh 设置弹窗一致；系统圆角仅 8px
-        // 且不可调档）。旧版 WebView2 的透明合成有抗锯齿缺陷，现代版本已修复；
-        // 若再遇黑边/透明间隙，回退系统圆角方案。
-        .transparent(true)
-        // 透明窗口关闭系统阴影：Win11 的 DWM 阴影（8px 圆角）会盖在自绘
-        // 24px 圆角内容外，看起来像一圈 native 边框
-        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
