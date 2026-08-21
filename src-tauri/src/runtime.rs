@@ -896,7 +896,7 @@ fn run_npm_install_with_progress(
                         std::thread::sleep(Duration::from_millis(200));
                         waited += Duration::from_millis(200);
                     }
-                    let tail = read_log_tail(log_path, 2000);
+                    let tail = npm_failure_tail(config, log_path, 2000);
                     return Err(crate::locale::owned(
                         format!("安装超时（{secs}s 无进展）：\n{}", tail),
                         format!("Install timed out (no progress for {secs}s):\n{}", tail),
@@ -930,7 +930,7 @@ fn run_npm_install_with_progress(
     };
     drop(child);
     if code != 0 {
-        let tail = read_log_tail(log_path, 2000);
+        let tail = npm_failure_tail(config, log_path, 2000);
         return Err(crate::locale::owned(
             format!("npm 退出码 {code}：\n{}", tail),
             format!("npm exit code {code}:\n{}", tail),
@@ -1003,6 +1003,42 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
     } else {
         text.into_owned()
     }
+}
+
+/// 取 npm 安装失败时的诊断尾部。npm 非 TTY 下 stdout/stderr 走 block
+/// buffering，卡死时可能一字节都没 flush 到重定向文件（表现为 0 字节）；
+/// 而 npm 内部 logger 会直接把 verbose 步骤写进 `npm-cache/_logs/*-debug-0.log`
+/// （每次 install 一个新文件），不受 stdout buffering 影响，才是定位卡死的
+/// 可靠来源。优先返回最新一份 debug log 尾部，缺失时回退 stdout 日志。
+fn npm_failure_tail(config: &Config, log_path: &Path, max_chars: usize) -> String {
+    let logs_dir = config.root.join("npm-cache").join("_logs");
+    let mut latest: Option<(std::time::SystemTime, PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir(&logs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // 只认 debug-0.log（npm 每次 install 的主诊断文件）
+            if !name.ends_with("-debug-0.log") {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(modified) = meta.modified() {
+                    let newer = latest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true);
+                    if newer {
+                        latest = Some((modified, path));
+                    }
+                }
+            }
+        }
+    }
+    if let Some((_, debug_log)) = latest {
+        let tail = read_log_tail(&debug_log, max_chars);
+        if !tail.trim().is_empty() {
+            return format!("[npm debug log: {}]\n{}", debug_log.display(), tail);
+        }
+    }
+    read_log_tail(log_path, max_chars)
 }
 
 // ---------- 服务启动 ----------
