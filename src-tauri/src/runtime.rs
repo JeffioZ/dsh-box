@@ -556,8 +556,9 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     if output.0 != 0 {
         crate::logging::log(&format!(
-            "runtime: 升级 npm 到 12 失败（退出码 {}），沿用捆绑版",
-            output.0
+            "runtime: 升级 npm 到 12 失败（退出码 {}），沿用捆绑版：{}",
+            output.0,
+            crate::util::truncate(&output.2, 500),
         ));
         return Ok(()); // 降级：不阻断 Node 安装
     }
