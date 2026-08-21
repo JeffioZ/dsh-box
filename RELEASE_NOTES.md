@@ -33,7 +33,7 @@
 
 - **内置插件市场**：npm registry 搜索，一键安装/卸载 dsh 插件（走官方 `dsh plugin` CLI），装/卸后自动重启服务生效；内置清单由 `resources/preset-plugins.json` 维护
 - 分类快捷入口：皮肤/主题、工具、工作流预设
-- 自动预装 `dshmarket` 与 `dsh-file-drop`：已装包每 24 小时检查 npm 最新版，落后时后台自动升级并重启服务；失败静默重试，不阻塞启动；pnpm virtual store 错位自动备份重建 node_modules 自愈
+- 自动预装 `dshmarket` 与 `dsh-file-drop`：已装包每 24 小时检查 npm 最新版，落后时后台自动升级并重启服务；失败静默重试，不阻塞启动；pnpm virtual store 错位按文件元数据根因检测并自动备份重建 node_modules 自愈（不依赖 pnpm 报错措辞，DSH_HOME 迁移/复制后同样可靠）
 - 插件管理页手动检查/更新；设置页可关自动升级
 
 ## 更新通道
