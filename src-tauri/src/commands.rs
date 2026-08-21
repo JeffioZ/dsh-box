@@ -151,6 +151,18 @@ pub fn apply_model_import(
     crate::model_import::apply(&app, payload)
 }
 
+/// 导出已配置的模型配置（settings.yaml 的 llm-pi-ai 段原文），供复制分享。
+/// 返回 Option：None 表示当前无配置（前端显示"暂无配置"提示）。
+#[tauri::command]
+pub fn export_model_config(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Option<String>, String> {
+    ensure_local_origin(&webview)?;
+    let config = app.state::<AppState>().config();
+    crate::model_import::export_yaml(&config)
+}
+
 #[tauri::command]
 pub async fn check_updates(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
@@ -575,6 +587,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         preview_language,
         preview_model_import,
         apply_model_import,
+        export_model_config,
         plugin_list,
         plugin_search,
         plugin_install,

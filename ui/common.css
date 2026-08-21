@@ -105,7 +105,9 @@
   :root {
     --dshd-bg: #f7f8fa;
     --dshd-card: #ffffff;
-    --dshd-overlay: #eef0f4;
+    /* 弹窗面板背景：dsh bg-layer-2 浅色 = bluish-00 纯白（不是浅灰）——
+       与 dsh 原生设置弹窗一致 */
+    --dshd-overlay: #ffffff;
     --dshd-text: #0f1115;
     /* 次级文字：dsh label-secondary（浅色 bluish-700 #61666b） */
     --dshd-text-dim: #61666b;

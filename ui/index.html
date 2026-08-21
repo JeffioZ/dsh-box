@@ -216,27 +216,6 @@ body.fade-out { opacity: 0; }
 .ob-skip-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .ob-skip-btn:disabled { opacity: .55; cursor: default; }
 .ob-error { font-size: 12.5px; color: var(--red); overflow-wrap: anywhere; line-height: 1.5; }
-/* 模型配置导入：textarea 复用 ob-input 令牌，独占一行；多行文本域
-   默认不支持 resize，保留高度稳定避免卡片跳动（内容多时内部滚动） */
-.ob-textarea {
-  width: 100%; min-height: 96px; resize: none; line-height: 1.5;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
-  font-size: 12px; overflow-y: auto;
-}
-.ob-import-actions { display: flex; gap: 8px; margin-top: 8px; }
-.ob-import-result {
-  margin-top: 10px; padding: 10px 12px; border-radius: 10px;
-  background: var(--dshd-hover); border: 1px solid var(--line);
-  display: flex; flex-direction: column; gap: 10px;
-}
-.ob-import-keys { display: flex; flex-direction: column; gap: 8px; }
-.ob-import-key-row { display: flex; flex-direction: column; gap: 6px; }
-.ob-import-key-label {
-  font-size: 12px; color: var(--muted); overflow-wrap: anywhere;
-  /* 凭据引用名用等宽，与文本域一致，便于复制核对 */
-  font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
-}
-.ob-import-ok { font-size: 12.5px; color: var(--green); line-height: 1.5; }
 @media (prefers-color-scheme: light) {
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
   .ob-input { background: #fff; }
@@ -289,25 +268,6 @@ body.fade-out { opacity: 0; }
             <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
             <span class="ob-hint" data-i18n="apiKeyHint">留空则之后在 dsh 设置页配置</span>
           </label>
-        </div>
-        <div class="ob-section">
-          <div class="ob-sec-label" data-i18n="modelImportTitle">模型配置</div>
-          <label class="ob-field">
-            <span class="ob-label" data-i18n="modelImportPaste">粘贴模型配置（可选）</span>
-            <textarea id="ob-import" class="ob-input ob-textarea" rows="5" spellcheck="false" data-i18n-placeholder="modelImportPlaceholder" placeholder="llm-pi-ai:&#10;  providers:&#10;    ..."></textarea>
-            <span class="ob-hint" data-i18n="modelImportHint">粘贴外部提供的模型配置，识别后填写对应的 API Key</span>
-          </label>
-          <div class="ob-import-actions">
-            <button type="button" id="ob-import-preview" class="btn ob-primary" data-i18n="modelImportPreview">解析模型配置</button>
-          </div>
-          <div id="ob-import-result" class="ob-import-result hidden" role="status" aria-live="polite">
-            <div id="ob-import-summary" class="ob-hint"></div>
-            <div id="ob-import-keys" class="ob-import-keys"></div>
-            <div class="ob-import-actions">
-              <button type="button" id="ob-import-apply" class="btn primary ob-primary" data-i18n="modelImportApply">导入并保存</button>
-            </div>
-          </div>
-          <div id="ob-import-error" class="ob-error hidden" role="alert" aria-live="polite" tabindex="-1"></div>
         </div>
         <div class="ob-section">
           <div class="ob-sec-label" data-i18n="preferences">偏好设置</div>

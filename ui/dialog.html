@@ -178,16 +178,16 @@
       .pstatus.err { color: var(--dshd-error-text); }
       .pstatus.ok { color: var(--dshd-success-text); }
     }
-    .psection { margin-top: 10px; }
+    .psection { margin-top: 8px; }
     .psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
     /* —— 设置页开关行：整行可点、原生 checkbox+role=switch 语义、可见焦点环 —— */
     .srow {
       display: flex; align-items: center; gap: 12px;
       border: 1px solid var(--dshd-border); border-radius: 10px;
-      padding: 10px 12px; background: var(--dshd-hover);
-      cursor: pointer; min-height: 56px;
+      padding: 8px 12px; background: var(--dshd-hover);
+      cursor: pointer; min-height: 48px;
     }
-    .srow + .srow { margin-top: 8px; }
+    .srow + .srow { margin-top: 6px; }
     .srow:hover { border-color: var(--dshd-border-strong); }
     .srow-txt { flex: 1; min-width: 0; }
     .srow-name { display: block; font-size: 13px; font-weight: 500; }
@@ -237,6 +237,57 @@
       border: 1px solid var(--dshd-border);
       background: rgba(224, 88, 76, .12); color: var(--dshd-error-text);
       font-size: 12px; line-height: 18px; overflow-wrap: anywhere;
+    }
+    /* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
+    .mi-box { margin-top: 8px; }
+    .mi-card {
+      display: flex; flex-direction: column; gap: 8px;
+      border: 1px solid var(--dshd-border); border-radius: 10px;
+      padding: 10px; background: var(--dshd-hover);
+    }
+    .mi-card-head { display: flex; flex-direction: column; gap: 2px; }
+    .mi-card-name { font-size: 13px; font-weight: 500; color: var(--dshd-text); }
+    .mi-card-desc { font-size: 12px; line-height: 16px; color: var(--dshd-text-dim); }
+    .mi-textarea {
+      width: 100%; min-height: 72px; resize: vertical; line-height: 1.4;
+      font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+      font-size: 12px; padding: 6px 10px; border-radius: 8px;
+      border: 1px solid var(--dshd-border); background: var(--dshd-hover);
+      color: var(--dshd-text); box-sizing: border-box;
+    }
+    .mi-textarea:focus { outline: 2px solid var(--dshd-accent); outline-offset: 1px; border-color: transparent; }
+    .mi-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .mi-feedback { font-size: 12px; line-height: 16px; }
+    .mi-feedback.ok { color: var(--dshd-success-text); }
+    .mi-feedback.err { color: var(--dshd-error-text); }
+    .mi-btn {
+      padding: 5px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 500;
+      border: 1px solid var(--dshd-border); background: var(--dshd-hover);
+      color: var(--dshd-text); cursor: pointer;
+      transition: var(--dshd-anim-state);
+    }
+    .mi-btn:hover { border-color: var(--dshd-border-strong); background: var(--dshd-selected); }
+    .mi-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
+    .mi-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
+    .mi-btn:disabled { opacity: .55; cursor: default; }
+    .mi-result {
+      margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+      background: var(--dshd-hover); border: 1px solid var(--dshd-border);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    /* hidden 属性必须压过 display:flex，否则未解析时结果区仍占位 */
+    .mi-result[hidden] { display: none; }
+    .mi-key-row { display: flex; flex-direction: column; gap: 4px; }
+    .mi-key-label { font-size: 11.5px; color: var(--dshd-text-dim); font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+    .mi-key-input {
+      width: 100%; padding: 5px 8px; border-radius: 8px; font-size: 12px;
+      border: 1px solid var(--dshd-border); background: var(--dshd-hover);
+      color: var(--dshd-text); box-sizing: border-box;
+    }
+    .mi-key-input:focus { outline: 2px solid var(--dshd-accent); outline-offset: 1px; border-color: transparent; }
+    .mi-ok { font-size: 12px; color: var(--dshd-success-text); line-height: 16px; }
+    @media (prefers-reduced-motion: reduce) {
+      .mi-btn { transition: none; }
     }
     @media (prefers-reduced-motion: reduce) {
       .sswitch, .sswitch::before { transition: none; }
@@ -690,6 +741,23 @@
         '</span>' +
         '</label>' +
         '</div>' +
+        // 模型配置导入/导出：独立卡片，随时可用
+        '<div class="psection mi-box">' +
+        '<h3>' + dshdT('modelImportTitle') + '</h3>' +
+        '<div class="mi-card">' +
+        '<div class="mi-card-head">' +
+        '<label class="mi-card-name" for="mi-textarea">' + dshdT('modelImportPaste') + '</label>' +
+        '<span class="mi-card-desc">' + dshdT('modelImportHint') + '</span>' +
+        '</div>' +
+        '<textarea id="mi-textarea" class="mi-textarea" rows="5" spellcheck="false" placeholder="' + esc(dshdT('modelImportPlaceholder')) + '"></textarea>' +
+        '<div class="mi-actions">' +
+        '<button type="button" id="mi-preview" class="mi-btn primary">' + dshdT('modelImportPreview') + '</button>' +
+        '<button type="button" id="mi-export" class="mi-btn">' + dshdT('modelExport') + '</button>' +
+        '<span id="mi-feedback" class="mi-feedback" role="status" aria-live="polite"></span>' +
+        '</div>' +
+        '<div id="mi-result" class="mi-result" hidden role="status" aria-live="polite"></div>' +
+        '</div>' +
+        '</div>' +
         '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
       body.querySelectorAll('.sswitch').forEach((el) => {
         el.addEventListener('change', onSettingToggle);
@@ -716,6 +784,134 @@
         });
       });
       invoke('settings_get').then(applySettingState).catch((e) => showSettingError(e));
+      initModelImport();
+    }
+    // —— 模型配置导入（设置页）——
+    let miPreviewRefs = [];
+    function miFeedback(message, ok) {
+      const el = $('mi-feedback');
+      if (!el) return;
+      el.textContent = message || '';
+      el.className = 'mi-feedback' + (ok ? ' ok' : ' err');
+    }
+    function miClearFeedback() { const el = $('mi-feedback'); if (el) el.textContent = ''; }
+    function initModelImport() {
+      const textarea = $('mi-textarea');
+      const previewBtn = $('mi-preview');
+      if (!textarea || !previewBtn) return;
+      previewBtn.addEventListener('click', async () => {
+        const yaml = textarea.value;
+        if (!yaml.trim()) { miFeedback(dshdT('modelImportEmpty'), false); return; }
+        miClearFeedback();
+        $('mi-result').hidden = true;
+        previewBtn.disabled = true;
+        previewBtn.textContent = dshdT('modelImportPreviewing');
+        try {
+          const preview = await invoke('preview_model_import', { yaml });
+          miRenderResult(preview);
+        } catch (e) {
+          miFeedback(String(e), false);
+        } finally {
+          previewBtn.disabled = false;
+          previewBtn.textContent = dshdT('modelImportPreview');
+        }
+      });
+      textarea.addEventListener('input', () => {
+        miClearFeedback();
+        $('mi-result').hidden = true;
+        miPreviewRefs = [];
+      });
+      const exportBtn = $('mi-export');
+      if (exportBtn) {
+        exportBtn.addEventListener('click', async () => {
+          miClearFeedback();
+          try {
+            const yaml = await invoke('export_model_config');
+            if (!yaml) {
+              miFeedback(dshdT('modelExportNone'), false);
+              return;
+            }
+            await navigator.clipboard.writeText(yaml);
+            miFeedback(dshdT('modelExportCopied'), true);
+          } catch (e) {
+            miFeedback(String(e), false);
+          }
+        });
+      }
+    }
+    function miRenderResult(preview) {
+      miPreviewRefs = preview.api_key_envs || [];
+      const box = $('mi-result');
+      box.textContent = '';
+      const summary = document.createElement('div');
+      summary.className = 'srow-desc';
+      let text = dshdT('modelImportSummary', { count: preview.providers.length });
+      if (preview.replaces_existing) text += ' ' + dshdT('modelImportReplaces');
+      summary.textContent = text;
+      box.appendChild(summary);
+      if (miPreviewRefs.length === 0) {
+        const ok = document.createElement('div');
+        ok.className = 'mi-ok';
+        ok.textContent = dshdT('modelImportNoKeys');
+        box.appendChild(ok);
+      } else {
+        for (const ref of miPreviewRefs) {
+          const row = document.createElement('label');
+          row.className = 'mi-key-row';
+          const label = document.createElement('span');
+          label.className = 'mi-key-label';
+          label.textContent = dshdT('modelImportKeyLabel', { ref });
+          const input = document.createElement('input');
+          input.className = 'mi-key-input';
+          input.type = 'password';
+          input.autocomplete = 'off';
+          input.spellcheck = false;
+          input.dataset.ref = ref;
+          input.placeholder = dshdT('modelImportKeyHint');
+          row.appendChild(label);
+          row.appendChild(input);
+          box.appendChild(row);
+        }
+        const actions = document.createElement('div');
+        actions.className = 'mi-actions';
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'mi-btn primary';
+        applyBtn.textContent = dshdT('modelImportApply');
+        applyBtn.addEventListener('click', async () => {
+          const yaml = $('mi-textarea').value;
+          const keys = [];
+          const filled = new Set();
+          box.querySelectorAll('input[data-ref]').forEach((input) => {
+            const value = input.value.trim();
+            if (value) { keys.push([input.dataset.ref, value]); filled.add(input.dataset.ref); }
+          });
+          const missing = miPreviewRefs.filter((ref) => !filled.has(ref));
+          if (missing.length > 0) {
+            miFeedback(dshdT('modelImportKeyMissing', { ref: missing.join(', ') }), false);
+            return;
+          }
+          miClearFeedback();
+          applyBtn.disabled = true;
+          applyBtn.textContent = dshdT('modelImportApplying');
+          try {
+            await invoke('apply_model_import', { payload: { yaml, keys } });
+            const ok = document.createElement('div');
+            ok.className = 'mi-ok';
+            ok.textContent = dshdT('modelImportSuccess');
+            box.appendChild(ok);
+            applyBtn.remove();
+          } catch (e) {
+            miFeedback(String(e), false);
+          } finally {
+            applyBtn.disabled = false;
+            applyBtn.textContent = dshdT('modelImportApply');
+          }
+        });
+        actions.appendChild(applyBtn);
+        box.appendChild(actions);
+      }
+      box.hidden = false;
     }
     function applySettingState(state) {
       const body = $('body');

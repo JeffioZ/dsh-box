@@ -103,6 +103,139 @@ pub fn preview(config: &Config, yaml: &str) -> Result<ImportPreview, String> {
     })
 }
 
+/// 导出模型配置：读 settings.yaml 的 llm-pi-ai 段原文，供复制给同事导入。
+/// 只导出自定义路由（pi-ai 官方目录之外的），官方目录路由（openai/anthropic
+/// 等）同事自己也能配置，不含在分享里。返回 None 表示没有可导出的自定义
+/// 路由（与文件读取失败区分，前端据此展示不同的提示）。
+pub fn export_yaml(config: &Config) -> Result<Option<String>, String> {
+    let settings_path = config.dsh_home().join("settings.yaml");
+    let text = std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("读取 settings.yaml 失败：{e}"))?;
+    let section = extract_section_text(&text);
+    if section.trim().is_empty() {
+        return Ok(None);
+    }
+    let custom_only = filter_builtin_routes(&section);
+    if custom_only.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(custom_only))
+}
+
+/// 从 settings.yaml 文本中提取 llm-pi-ai 顶层段（纯逻辑，供单测）。
+fn extract_section_text(text: &str) -> String {
+    let section = format!("{SECTION_KEY}:");
+    let mut out = String::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        if !in_section {
+            if line.trim_end() == section && !line.starts_with(' ') {
+                in_section = true;
+                out.push_str(line);
+                out.push('\n');
+            }
+            continue;
+        }
+        // 已进入段：遇到下一个顶层键即段结束
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// pi-ai 官方目录路由名单（`@earendil-works/pi-ai/dist/providers/*.models.js`
+/// 的文件名列表，37 个）。导出时过滤掉这些——它们是官方目录路由，同事
+/// 自己也能配置，没必要随分享带走。
+/// ⚠️ 上游 pi-ai 升级新增官方 provider 时需同步此名单（维护点记录于 AGENTS.md）。
+const BUILTIN_ROUTES: &[&str] = &[
+    "amazon-bedrock",
+    "ant-ling",
+    "anthropic",
+    "azure-openai-responses",
+    "cerebras",
+    "cloudflare-ai-gateway",
+    "cloudflare-workers-ai",
+    "deepseek",
+    "fireworks",
+    "github-copilot",
+    "google",
+    "google-vertex",
+    "groq",
+    "huggingface",
+    "kimi-coding",
+    "minimax",
+    "minimax-cn",
+    "mistral",
+    "moonshotai",
+    "moonshotai-cn",
+    "nvidia",
+    "openai",
+    "openai-codex",
+    "opencode",
+    "opencode-go",
+    "openrouter",
+    "qwen-token-plan",
+    "qwen-token-plan-cn",
+    "together",
+    "vercel-ai-gateway",
+    "xai",
+    "xiaomi",
+    "xiaomi-token-plan-ams",
+    "xiaomi-token-plan-cn",
+    "xiaomi-token-plan-sgp",
+    "zai",
+    "zai-coding-cn",
+];
+
+/// 从 llm-pi-ai 段文本中移除官方目录路由，仅保留自定义路由。
+/// 无自定义路由时返回空字符串（调用方据此返回 None）。
+fn filter_builtin_routes(section: &str) -> String {
+    let mut out = String::new();
+    // 当前 provider 是否为自定义路由（决定其整块去留）
+    let mut current_is_custom = false;
+    // 是否保留过至少一个自定义 provider（否则整段视为空）
+    let mut kept_any = false;
+    for line in section.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let content = line.trim_start();
+        // llm-pi-ai:（indent 0）与 providers:（indent 2）等结构行总是保留
+        if indent == 0 {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if indent == 2 {
+            // providers: 或其他段级字段，始终保留
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if indent == 4 {
+            // provider 路由键
+            let route = content.trim_end().trim_end_matches(':');
+            current_is_custom = !BUILTIN_ROUTES.contains(&route);
+            if current_is_custom {
+                kept_any = true;
+                out.push_str(line);
+                out.push('\n');
+            }
+            continue;
+        }
+        // provider 内字段（indent >= 6）或更深的嵌套，跟随当前 provider 的去留
+        if current_is_custom {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !kept_any {
+        return String::new();
+    }
+    out
+}
+
 /// 应用导入：写 settings.yaml 的 llm-pi-ai 段 + .credentials.yaml 的凭据。
 pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String> {
     let config = app.state::<AppState>().config();
@@ -570,5 +703,41 @@ llm-pi-ai:
     fn normalize_rejects_invalid() {
         let err = normalize_section("locale:\n  preference: zh\n").unwrap_err();
         assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn extract_section_pulls_llm_pi_ai_block() {
+        let text = "locale:\n  preference: zh\nllm-pi-ai:\n  providers:\n    gw:\n      models:\n        - id: x\nui-theme:\n  preference: dark\n";
+        let out = extract_section_text(text);
+        assert_eq!(
+            out,
+            "llm-pi-ai:\n  providers:\n    gw:\n      models:\n        - id: x\n"
+        );
+    }
+
+    #[test]
+    fn extract_section_empty_when_absent() {
+        let out = extract_section_text("locale:\n  preference: zh\n");
+        assert!(out.trim().is_empty());
+    }
+
+    #[test]
+    fn filter_removes_builtin_keeps_custom() {
+        let section = "llm-pi-ai:\n  providers:\n    openai:\n      apiKeyEnv: OPENAI_API_KEY\n    acme-gateway:\n      displayName: Acme\n      apiKeyEnv: ACME_KEY\n      models:\n        - id: x\n";
+        let out = filter_builtin_routes(section);
+        assert!(!out.contains("openai:"));
+        assert!(out.contains("acme-gateway:"));
+        assert!(out.contains("displayName: Acme"));
+        // 结构行保留
+        assert!(out.contains("llm-pi-ai:"));
+        assert!(out.contains("providers:"));
+    }
+
+    #[test]
+    fn filter_all_builtin_returns_empty() {
+        let section = "llm-pi-ai:\n  providers:\n    openai:\n      apiKeyEnv: OPENAI_API_KEY\n    deepseek:\n      apiKeyEnv: DEEPSEEK_API_KEY\n";
+        let out = filter_builtin_routes(section);
+        // 全部是官方路由：应返回空字符串（而非只剩结构行）
+        assert!(out.is_empty(), "expected empty, got: {out}");
     }
 }
