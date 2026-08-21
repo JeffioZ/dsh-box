@@ -42,6 +42,22 @@ const DSHD_MESSAGES = {
   apiKey: ['API Key', 'API Key'],
   apiKeyFormatHint: ['API Key 应以 sk- 开头', 'API key should start with sk-'],
   apiKeyHint: ['留空则之后在 dsh 设置页配置', 'Leave empty to configure later in dsh settings'],
+  modelImportTitle: ['模型配置', 'Model config'],
+  modelImportPaste: ['粘贴模型配置（可选）', 'Paste model config (optional)'],
+  modelImportPlaceholder: ['llm-pi-ai:\n  providers:\n    ...', 'llm-pi-ai:\n  providers:\n    ...'],
+  modelImportHint: ['粘贴外部提供的模型配置，识别后填写对应的 API Key', 'Paste a model config provided by your team, then fill in the matching API keys'],
+  modelImportPreview: ['解析模型配置', 'Parse model config'],
+  modelImportPreviewing: ['正在解析…', 'Parsing…'],
+  modelImportApply: ['导入并保存', 'Import & save'],
+  modelImportApplying: ['正在保存…', 'Saving…'],
+  modelImportSummary: ['识别到 {count} 个提供方路由。', 'Found {count} provider route(s).'],
+  modelImportReplaces: ['将替换已有的模型配置。', 'It will replace the existing model config.'],
+  modelImportKeyLabel: ['{ref} 的 API Key', 'API key for {ref}'],
+  modelImportKeyHint: ['粘贴后在 dsh 中即可使用该路由', 'Paste it and the route becomes available in dsh'],
+  modelImportKeyMissing: ['请为以下凭据引用填写 API Key：{ref}', 'Please provide an API key for: {ref}'],
+  modelImportNoKeys: ['该配置不需要 API Key，可直接导入。', 'This config needs no API key. Import directly.'],
+  modelImportSuccess: ['模型配置已导入并保存，可开始使用。', 'Model config imported and saved. You are all set.'],
+  modelImportEmpty: ['请先粘贴模型配置。', 'Paste a model config first.'],
   autostart: ['开机自启动', 'Launch at startup'],
   accountAvailable: ['账户可用', 'Account available'],
       accountUnavailable: ['账户不可用', 'Account unavailable'],
@@ -207,6 +223,9 @@ function dshdApplyI18n(root) {
   const scope = root || document;
   scope.querySelectorAll('[data-i18n]').forEach((el) => {
     el.textContent = dshdT(el.dataset.i18n);
+  });
+  scope.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    el.setAttribute('placeholder', dshdT(el.dataset.i18nPlaceholder));
   });
   scope.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.title = dshdT(el.dataset.i18nTitle);

@@ -125,6 +125,149 @@ function renderStatus(payload) {
   else hideError();
 }
 
+// —— 模型配置导入（onboarding 面板内的可选区块）——
+
+// 预览后缓存的结果：apiKeyEnv 列表（用于校验导入时 key 的归属）。
+let importPreviewRefs = [];
+
+function showImportError(message) {
+  const errBox = $('ob-import-error');
+  // 重置为纯错误样式（成功态可能把 className 改成了绿色 ob-import-ok）
+  errBox.className = 'ob-error';
+  errBox.textContent = message || dshdT('unknownError');
+  errBox.classList.remove('hidden');
+  errBox.focus();
+}
+
+function hideImportError() {
+  $('ob-import-error').classList.add('hidden');
+}
+
+function importRefsFromPreview(preview) {
+  const refs = [];
+  for (const p of (preview && preview.providers) || []) {
+    if (p.api_key_env && !refs.includes(p.api_key_env)) refs.push(p.api_key_env);
+  }
+  return refs;
+}
+
+function renderImportResult(preview) {
+  importPreviewRefs = preview.api_key_envs || importRefsFromPreview(preview);
+  const summary = $('ob-import-summary');
+  const parts = [dshdT('modelImportSummary', { count: preview.providers.length })];
+  if (preview.replaces_existing) parts.push(dshdT('modelImportReplaces'));
+  summary.textContent = parts.join(' ');
+
+  const keysBox = $('ob-import-keys');
+  keysBox.textContent = '';
+  const refs = importPreviewRefs;
+  if (refs.length === 0) {
+    const ok = document.createElement('p');
+    ok.className = 'ob-import-ok';
+    ok.textContent = dshdT('modelImportNoKeys');
+    keysBox.appendChild(ok);
+  } else {
+    for (const ref of refs) {
+      const row = document.createElement('label');
+      row.className = 'ob-import-key-row';
+      const label = document.createElement('span');
+      label.className = 'ob-import-key-label';
+      label.textContent = dshdT('modelImportKeyLabel', { ref });
+      const input = document.createElement('input');
+      input.className = 'ob-input';
+      input.type = 'password';
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.dataset.ref = ref;
+      input.placeholder = dshdT('modelImportKeyHint');
+      row.appendChild(label);
+      row.appendChild(input);
+      keysBox.appendChild(row);
+    }
+  }
+  $('ob-import-result').classList.remove('hidden');
+}
+
+async function previewModelImport() {
+  const yaml = $('ob-import').value;
+  if (!yaml.trim()) {
+    showImportError(dshdT('modelImportEmpty'));
+    return;
+  }
+  hideImportError();
+  $('ob-import-result').classList.add('hidden');
+  const previewBtn = $('ob-import-preview');
+  previewBtn.disabled = true;
+  previewBtn.textContent = dshdT('modelImportPreviewing');
+  try {
+    const preview = await window.__TAURI__.core.invoke('preview_model_import', { yaml });
+    renderImportResult(preview);
+  } catch (e) {
+    showImportError(String(e));
+  } finally {
+    previewBtn.disabled = false;
+    previewBtn.textContent = dshdT('modelImportPreview');
+  }
+}
+
+async function applyModelImport() {
+  const yaml = $('ob-import').value;
+  if (!yaml.trim()) {
+    showImportError(dshdT('modelImportEmpty'));
+    return;
+  }
+  hideImportError();
+  // 收集用户填写的 key（仅声明过的引用）
+  const keys = [];
+  const filled = new Set();
+  const inputs = $('ob-import-keys').querySelectorAll('input[data-ref]');
+  for (const input of inputs) {
+    const value = input.value.trim();
+    if (value) {
+      keys.push([input.dataset.ref, value]);
+      filled.add(input.dataset.ref);
+    }
+  }
+  // 声明过的凭据引用必须都填 key，否则导入后凭据缺失、路由不可用
+  const missing = (importPreviewRefs || []).filter((ref) => !filled.has(ref));
+  if (missing.length > 0) {
+    showImportError(dshdT('modelImportKeyMissing', { ref: missing.join(', ') }));
+    return;
+  }
+  const applyBtn = $('ob-import-apply');
+  applyBtn.disabled = true;
+  applyBtn.textContent = dshdT('modelImportApplying');
+  try {
+    await window.__TAURI__.core.invoke('apply_model_import', { payload: { yaml, keys } });
+    // 成功后把结果区切换为成功态
+    $('ob-import-result').classList.add('hidden');
+    const okBox = $('ob-import-error');
+    okBox.textContent = dshdT('modelImportSuccess');
+    okBox.className = 'ob-error ob-import-ok';
+    okBox.classList.remove('hidden');
+  } catch (e) {
+    showImportError(String(e));
+  } finally {
+    applyBtn.disabled = false;
+    applyBtn.textContent = dshdT('modelImportApply');
+  }
+}
+
+function initModelImport() {
+  const previewBtn = $('ob-import-preview');
+  const applyBtn = $('ob-import-apply');
+  const textarea = $('ob-import');
+  if (!previewBtn || !applyBtn || !textarea) return;
+  previewBtn.addEventListener('click', previewModelImport);
+  applyBtn.addEventListener('click', applyModelImport);
+  // 文本域变化：收起错误，并隐藏预览结果区，强制用户重新解析——
+  // 否则会用旧预览生成的 key 输入框配合新 yaml 提交，触发后端引用不匹配
+  textarea.addEventListener('input', () => {
+    hideImportError();
+    $('ob-import-result').classList.add('hidden');
+  });
+}
+
 // —— 首次使用配置 ——
 
 let onboardingSaving = false;
@@ -346,6 +489,7 @@ function bind() {
   });
   $('ob-start').addEventListener('click', () => submitOnboarding(false));
   $('ob-skip').addEventListener('click', () => submitOnboarding(true));
+  initModelImport();
 }
 
 async function init() {

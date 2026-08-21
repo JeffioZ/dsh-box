@@ -17,6 +17,7 @@ mod heartbeat;
 mod icons;
 pub mod locale;
 mod logging;
+mod model_import;
 mod notify;
 mod onboarding;
 mod plugins;

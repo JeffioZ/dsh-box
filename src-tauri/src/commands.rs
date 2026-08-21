@@ -124,6 +124,33 @@ pub fn preview_language(
     Ok(())
 }
 
+// ---------- 模型配置导入（启动页 onboarding 调用） ----------
+
+/// 预览导入的模型配置：解析 + 校验 + 返回 provider 摘要与所需凭据引用
+/// （只读，不写盘）。识别失败返回本地化错误，前端就地提示。
+#[tauri::command]
+pub fn preview_model_import(
+    app: AppHandle,
+    webview: tauri::Webview,
+    yaml: String,
+) -> Result<crate::model_import::ImportPreview, String> {
+    ensure_local_origin(&webview)?;
+    let config = app.state::<AppState>().config();
+    crate::model_import::preview(&config, &yaml)
+}
+
+/// 应用导入的模型配置：写 settings.yaml 的 llm-pi-ai 段 + .credentials.yaml
+/// 的凭据。配置与凭据均由 dsh 热加载，无需重启服务。
+#[tauri::command]
+pub fn apply_model_import(
+    app: AppHandle,
+    webview: tauri::Webview,
+    payload: crate::model_import::ImportApplyPayload,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::model_import::apply(&app, payload)
+}
+
 #[tauri::command]
 pub async fn check_updates(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
@@ -546,6 +573,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         onboarding_shown,
         preview_theme,
         preview_language,
+        preview_model_import,
+        apply_model_import,
         plugin_list,
         plugin_search,
         plugin_install,
