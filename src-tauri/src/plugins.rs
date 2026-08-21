@@ -275,6 +275,37 @@ fn is_virtual_store_error(detail: &str) -> bool {
         || detail.contains("symlinked from the virtual store directory")
 }
 
+/// 根因检测：node_modules/.modules.yaml 的 virtualStoreDir 指向的路径
+/// 已不存在、或与当前 DSH_HOME 不符（目录被迁移/重命名后元数据失效）。
+/// 比错误文本匹配更可靠——pnpm 新版本可能只输出堆栈尾部、不包含错误码行。
+fn virtual_store_stale(config: &crate::app_state::Config) -> bool {
+    let modules_yaml = config
+        .dsh_home()
+        .join("profiles/web/node_modules/.modules.yaml");
+    let Ok(text) = std::fs::read_to_string(&modules_yaml) else {
+        return false;
+    };
+    let Some(vs) = text
+        .lines()
+        .find(|l| l.contains("virtualStoreDir"))
+        .and_then(|l| {
+            l.trim()
+                .split_once('"')
+                .and_then(|(_, r)| r.split_once('"'))
+        })
+        .map(|(_, path)| path.to_string())
+    else {
+        return false;
+    };
+    // 路径已不存在 = 元数据失效
+    if !std::path::Path::new(&vs).exists() {
+        return true;
+    }
+    // 存在但不指向当前 DSH_HOME（指向旧 DSH_HOME）也为失效
+    let expected = config.dsh_home().join("profiles/web/node_modules/.pnpm");
+    vs != expected.to_string_lossy()
+}
+
 /// pnpm supply-chain 策略拦截（minimumReleaseAge 冷却期）：新发布包在
 /// 冷却期内不允许安装，重试无意义，须等冷却期过后。
 fn is_supply_chain_error(detail: &str) -> bool {
@@ -822,7 +853,10 @@ fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<String, String>
     let _guard = MARKET_PNPM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     match run_dsh_plugin(app, args) {
         Ok(out) => Ok(out),
-        Err(e) if is_virtual_store_error(&e) => {
+        Err(e)
+            if is_virtual_store_error(&e)
+                || virtual_store_stale(&app.state::<AppState>().config()) =>
+        {
             crate::logging::log(
                 "plugins: 检测到 pnpm virtual store 错位，备份并重建 node_modules 后重试",
             );
