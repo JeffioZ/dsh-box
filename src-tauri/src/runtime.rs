@@ -516,19 +516,20 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     Ok(config.node_exe())
 }
 
-/// 升级便携 Node 捆绑的 npm 到 12（走官方 registry；失败降级沿用捆绑版，
-/// 不阻断 Node 安装——dsh 安装阶段会因 npm 11 卡死而在超时后报错）。
+/// 升级便携 Node 自带的 npm 到 12（Node v24 官方包自带 npm 11，其 idealTree
+/// 解析 dsh 依赖树会卡死）。失败一律降级沿用自带版，不阻断 Node 安装——
+/// dsh 安装阶段会因 npm 11 卡死而在超时后报出明确错误。
+/// 整体限时 150s：升级这步走网络，run_capture 无限阻塞会卡死整个 boot，
+/// 必须给 npm 自身的 fetch-timeout + 外层超时兜底。
 fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> {
     let node_exe = config.node_exe();
-    let npm_cli = node_exe
-        .parent()
-        .ok_or_else(|| {
-            crate::locale::text(
-                "Node.js 可执行文件路径无父目录",
-                "The Node.js executable path has no parent directory",
-            )
-        })?
-        .join("node_modules/npm/bin/npm-cli.js");
+    let node_dir = node_exe.parent().ok_or_else(|| {
+        crate::locale::text(
+            "Node.js 可执行文件路径无父目录",
+            "The Node.js executable path has no parent directory",
+        )
+    })?;
+    let npm_cli = node_dir.join("node_modules/npm/bin/npm-cli.js");
     if !npm_cli.exists() {
         return Ok(()); // 没有 npm-cli 的异常包，跳过
     }
@@ -538,31 +539,66 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
         crate::locale::text("正在升级 npm…", "Upgrading npm…"),
         "",
     );
-    let args = vec![
-        npm_cli.to_string_lossy().into_owned(),
-        "install".to_string(),
-        "--global".to_string(),
-        "--prefix".to_string(),
-        node_exe
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        "npm@12".to_string(),
-        "--no-audit".to_string(),
-        "--no-fund".to_string(),
-    ];
-    let envs = base_envs(&node_exe, config);
-    let output = processes::run_capture(&node_exe, &args, &envs, Some(&config.root))
-        .map_err(|e| e.to_string())?;
-    if output.0 != 0 {
+    let prefix = node_dir.to_string_lossy().into_owned();
+    // 官方 registry 优先，失败再 npmmirror（与 dsh 安装一致，国内网络兜底）
+    for registry in [
+        "https://registry.npmjs.org",
+        "https://registry.npmmirror.com",
+    ] {
+        let args = vec![
+            npm_cli.to_string_lossy().into_owned(),
+            "install".to_string(),
+            "--global".to_string(),
+            "--prefix".to_string(),
+            prefix.clone(),
+            "npm@12".to_string(),
+            "--no-audit".to_string(),
+            "--no-fund".to_string(),
+            // 单请求 60s 超时——升级只有 1 个包，60s 足够，挂起时快速失败
+            "--fetch-timeout=60000".to_string(),
+            "--registry".to_string(),
+            registry.to_string(),
+        ];
+        let envs = base_envs(&node_exe, config);
+        // spawn + 轮询，外层 150s 超时兜底（npm 自身 fetch-timeout 60s + retry
+        // 都不该超过）；超时/npm 失败都降级沿用自带 npm，不向上传播 Err。
+        let mut child =
+            match processes::spawn_process(&node_exe, &args, &envs, Some(&config.root), None) {
+                Ok(c) => c,
+                Err(e) => {
+                    crate::logging::log(&format!("runtime: 升级 npm 启动失败：{e}，沿用自带版"));
+                    return Ok(());
+                }
+            };
+        let _guard = processes::TreeGuard::from_child(&child);
+        let deadline = std::time::Instant::now() + Duration::from_secs(150);
+        let code = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status.code().unwrap_or(-1),
+                Ok(None) => {
+                    if std::time::Instant::now() > deadline {
+                        crate::logging::log("runtime: 升级 npm 超时（150s），沿用自带版");
+                        processes::kill_tree(child.id());
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(e) => {
+                    crate::logging::log(&format!("runtime: 升级 npm 等待失败：{e}，沿用自带版"));
+                    return Ok(());
+                }
+            }
+        };
+        drop(child);
+        if code == 0 {
+            crate::logging::log("runtime: npm 已升级到 12");
+            return Ok(());
+        }
         crate::logging::log(&format!(
-            "runtime: 升级 npm 到 12 失败（退出码 {}），沿用捆绑版：{}",
-            output.0,
-            crate::util::truncate(&output.2, 500),
+            "runtime: 升级 npm 到 12 失败（{registry} 退出码 {code}），尝试兜底源"
         ));
-        return Ok(()); // 降级：不阻断 Node 安装
     }
-    crate::logging::log("runtime: npm 已升级到 12");
+    crate::logging::log("runtime: 升级 npm 到 12 失败，沿用自带版");
     Ok(())
 }
 
