@@ -1096,6 +1096,9 @@ fn run_npm_install_with_progress(
     let _install_guard = processes::TreeGuard::from_child(&child);
 
     let cache_dir = config.root.join("npm-cache").join("_cacache");
+    // 基线：安装开始前的缓存总量。之前直接显示缓存总量，导致“已下载 250MB”
+    // 起步（历史安装累积的包），进度严重误导——应显示本次安装的增量。
+    let cache_base_mb = dir_size_mb(&cache_dir);
     let start = Instant::now();
     // 无进展超时：npm 卡在非 fetch 阶段（native build / 解压 / 解析）时
     // 不退出也不长缓存，3 分钟毫无进展即判定卡死并 kill。
@@ -1156,11 +1159,14 @@ fn run_npm_install_with_progress(
                 // 否则 native build / 解压等“不下载”阶段 UI 会冻结在旧秒数。
                 if secs != last_reported_sec {
                     last_reported_sec = secs;
-                    let detail = if mb > 0 {
+                    // 本次安装增量（缓存总量减去基线），避免把历史缓存的
+                    // 250MB 误报成“本次已下载”
+                    let downloaded = mb.saturating_sub(cache_base_mb);
+                    let detail = if downloaded > 0 {
                         if crate::locale::is_chinese() {
-                            format!("已下载约 {mb} MB · 已用时 {secs}s")
+                            format!("已下载约 {downloaded} MB · 已用时 {secs}s")
                         } else {
-                            format!("~{mb} MB downloaded · {secs}s elapsed")
+                            format!("~{downloaded} MB downloaded · {secs}s elapsed")
                         }
                     } else if crate::locale::is_chinese() {
                         format!("正在下载依赖… 已用时 {secs}s")
