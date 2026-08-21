@@ -237,10 +237,16 @@ pub(crate) fn node_version(program: &Path) -> Option<(u32, u32, u32)> {
     parse_node_version(&text)
 }
 
-/// 取便携 Node 自带 npm 的版本号（形如 11.17.0 / 12.0.2）。
-/// 用 node 跑 npm-cli.js（与安装/更新路径一致），返回 None 表示拿不到。
+/// 取当前使用 Node 自带 npm 的版本号（形如 npm 11.17.0 / npm 12.0.2）。
+/// 便携优先、系统 Node 兜底（与 current_node_version 同一选择逻辑），
+/// 返回 None 表示拿不到（无 Node / npm-cli 缺失 / 运行失败）。
 pub(crate) fn npm_version(config: &Config) -> Option<String> {
-    let node_exe = config.node_exe();
+    let managed = config.node_exe();
+    let node_exe = if managed.exists() {
+        managed
+    } else {
+        find_system_node()?
+    };
     let npm_cli = node_exe.parent()?.join("node_modules/npm/bin/npm-cli.js");
     if !npm_cli.exists() {
         return None;
