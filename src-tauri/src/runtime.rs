@@ -637,9 +637,10 @@ pub(crate) fn upgrade_portable_npm(
         return Ok(());
     }
     // 已是 12+ 则跳过（ensure_node 每次启动都会调用，不能重复升级联网）
-    let cur = std::process::Command::new(&node_exe)
-        .arg(&npm_cli)
-        .arg("--version")
+    let mut version_cmd = std::process::Command::new(&node_exe);
+    version_cmd.arg(&npm_cli).arg("--version");
+    processes::hide_console(&mut version_cmd);
+    let cur = version_cmd
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -999,6 +1000,10 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         "--dangerously-allow-all-scripts".into(),
         "--no-audit".into(),
         "--no-fund".into(),
+        // --foreground-scripts：install scripts 的输出直接进日志（默认被 npm
+        // 吞掉，卡死在哪个 script 完全看不到）；也是定位 node_repl 卡点的
+        // 唯一可靠手段
+        "--foreground-scripts".into(),
         // 单请求 2 分钟超时：npm 默认 fetch timeout 5 分钟，卡死时等太久
         "--fetch-timeout=120000".into(),
         "--fetch-retries=2".into(),
@@ -1306,6 +1311,10 @@ pub(crate) fn base_envs(node_exe: &Path, config: &Config) -> Vec<(&'static str, 
     // npm 缓存落在应用根目录内（避免写入用户级缓存目录带来的权限问题）。
     let cache = config.root.join("npm-cache");
     envs.push(("npm_config_cache", cache.to_string_lossy().into_owned()));
+    // 强制 native 模块用预编译二进制：node-pty 等包的 prebuild 检查失败后会
+    // 回退 node-gyp 编译，新机器无 Python/VS 工具链时卡死（node_repl 等交互
+    // 进程挂起）。设为 false 让它们找不到 prebuild 就立即失败而非尝试编译。
+    envs.push(("npm_config_build_from_source", "false".to_string()));
     envs
 }
 
