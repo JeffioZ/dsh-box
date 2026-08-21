@@ -745,8 +745,11 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
             format!("npm was not found: {}", npm_cli.display()),
         ));
     }
-    let args = vec![
-        npm_cli.to_string_lossy().into_owned(),
+
+    // 先官方 registry；失败（含 npm 自身超时）再走 npmmirror 国内镜像兜底——
+    // 新设备 + 国内网络下 registry.npmjs.org 直连经常卡在 fetch 阶段，是
+    // “dsh 数分钟装不回来”的主因。checksum/版本查询仍走官方语义不变。
+    let base_args = vec![
         "install".into(),
         "--prefix".into(),
         config.dsh_dir().to_string_lossy().into_owned(),
@@ -754,21 +757,80 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         "--dangerously-allow-all-scripts".into(),
         "--no-audit".into(),
         "--no-fund".into(),
+        // 单请求 2 分钟超时：npm 默认 fetch timeout 5 分钟，卡死时等太久
+        "--fetch-timeout=120000".into(),
+        "--fetch-retries=2".into(),
     ];
+    for (attempt, registry) in [None, Some("https://registry.npmmirror.com")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut args = base_args.clone();
+        if let Some(reg) = registry {
+            args.push("--registry".into());
+            args.push(reg.into());
+        }
+        let prior = if attempt == 0 {
+            String::new()
+        } else if crate::locale::is_chinese() {
+            "官方源失败，改用 npmmirror 镜像…\n".into()
+        } else {
+            "The default registry failed; falling back to npmmirror…\n".into()
+        };
+        let result = run_npm_install_with_progress(app, config, node_exe, &npm_cli, &args);
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt == 0 => {
+                crate::logging::log(&format!(
+                    "runtime: npm install 官方源失败（{e}），改走 npmmirror 镜像"
+                ));
+            }
+            Err(e) => {
+                return Err(crate::locale::owned(
+                    format!("{prior}安装 dsh 失败：{e}"),
+                    format!("{prior}Failed to install dsh: {e}"),
+                ));
+            }
+        }
+    }
+    // 上面 Ok 提前返回，走到这里不可能
+    unreachable!()
+}
+
+/// 跑一次 npm install，轮询 npm 缓存目录（_cacache）累计字节数作为真实下载
+/// 进度（npm 非 TTY 无中间输出，缓存增长就是包下载量的真实反映），每秒汇报
+/// “已下载 X MB”。返回 Ok(()) 或带日志尾部的错误信息。
+fn run_npm_install_with_progress(
+    app: &AppHandle,
+    config: &Config,
+    node_exe: &Path,
+    npm_cli: &Path,
+    args: &[String],
+) -> Result<(), String> {
     let envs = base_envs(node_exe, config);
     let npm_log = config.logs_dir().join("npm-install.log");
-    let mut child =
-        processes::spawn_process(node_exe, &args, &envs, Some(&config.root), Some(&npm_log))
-            .map_err(|e| {
-                crate::locale::owned(
-                    format!("运行 npm 失败：{e}"),
-                    format!("Failed to run npm: {e}"),
-                )
-            })?;
+    // node 跑 npm-cli.js：首参必须是 npm-cli 路径
+    let mut spawn_args = vec![npm_cli.to_string_lossy().into_owned()];
+    spawn_args.extend(args.iter().cloned());
+    let mut child = processes::spawn_process(
+        node_exe,
+        &spawn_args,
+        &envs,
+        Some(&config.root),
+        Some(&npm_log),
+    )
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("运行 npm 失败：{e}"),
+            format!("Failed to run npm: {e}"),
+        )
+    })?;
     // 安装进程也纳入守卫，应用退出时不会遗留 npm/node 后台进程。
     let _install_guard = processes::TreeGuard::from_child(&child);
-    // 安装期间每秒汇报已用时（npm 非 TTY 时不输出进度，用计时替代）。
+
+    let cache_dir = config.root.join("npm-cache").join("_cacache");
     let start = Instant::now();
+    let mut last_reported_mb: u64 = u64::MAX; // 强制首帧一定汇报
     let code = loop {
         match child.try_wait().map_err(|e| {
             crate::locale::owned(
@@ -779,13 +841,26 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
             Some(status) => break status.code().unwrap_or(-1),
             None => {
                 let secs = start.elapsed().as_secs();
-                let message = if crate::locale::is_chinese() {
-                    format!("正在安装 dsh（需要联网）… 已用时 {secs}s")
-                } else {
-                    format!("Installing dsh (internet required)… {secs}s elapsed")
-                };
-                emit_status(app, BootPhase::InstallingDsh, &message, "");
-                std::thread::sleep(Duration::from_secs(1));
+                let mb = dir_size_mb(&cache_dir);
+                // 缓存大小下降（npm 清理/重算）也照报，但只在变化或首帧时发事件
+                if mb != last_reported_mb || secs == 0 {
+                    last_reported_mb = mb;
+                    let detail = if mb > 0 {
+                        if crate::locale::is_chinese() {
+                            format!("已下载约 {mb} MB · 已用时 {secs}s")
+                        } else {
+                            format!("~{mb} MB downloaded · {secs}s elapsed")
+                        }
+                    } else if crate::locale::is_chinese() {
+                        format!("正在下载依赖… 已用时 {secs}s")
+                    } else {
+                        format!("Fetching dependencies… {secs}s elapsed")
+                    };
+                    // 进度条：只有“下载阶段”的字节数无法换算 0-100，给不确定进度；
+                    // 真实下载量放 detail 展示
+                    emit_status(app, BootPhase::InstallingDsh, "正在安装 dsh…", &detail);
+                }
+                std::thread::sleep(Duration::from_millis(500));
             }
         }
     };
@@ -793,8 +868,8 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     if code != 0 {
         let tail = read_log_tail(&npm_log, 600);
         return Err(crate::locale::owned(
-            format!("安装 dsh 失败（npm 退出码 {code}）：\n{}", tail),
-            format!("Failed to install dsh (npm exit code {code}):\n{}", tail),
+            format!("npm 退出码 {code}：\n{}", tail),
+            format!("npm exit code {code}:\n{}", tail),
         ));
     }
     if !dsh_installed(config) {
@@ -805,6 +880,27 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         .into());
     }
     Ok(())
+}
+
+/// 目录累计大小（MB，整体向上取整到 1MB，避免 0/1 抖动）。
+fn dir_size_mb(dir: &Path) -> u64 {
+    dir_size_bytes(dir).div_ceil(1024 * 1024)
+}
+
+/// 目录累计字节数（递归，含子目录；不跟随符号链接）。
+fn dir_size_bytes(dir: &Path) -> u64 {
+    let mut total: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += dir_size_bytes(&path);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 /// 读取日志文件尾部（供错误提示）。
@@ -911,6 +1007,7 @@ pub(crate) fn start_server(
 
 #[cfg(test)]
 mod checksum_tests {
+    use super::dir_size_mb;
     use super::parse_node_sha256;
     use super::version_supports_no_open;
 
@@ -937,5 +1034,24 @@ mod checksum_tests {
         // 空版本保守不支持；非 rc 的任意非空串按稳定版处理（版本来自
         // package.json，形如 x.y.z 或 x.y.z-rc.N，不会出现垃圾串）
         assert!(!version_supports_no_open(""));
+    }
+
+    #[test]
+    fn dir_size_rounds_up_to_mb_and_recurses() {
+        // 唯一目录名：避免上次失败运行残留文件干扰（进程 id 会复用）
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp =
+            std::env::temp_dir().join(format!("dshbox-dirsize-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        // 5 KB 文件：不足 1MB，应向上取整为 1MB
+        std::fs::write(tmp.join("sub").join("a.bin"), vec![0u8; 5 * 1024]).unwrap();
+        assert_eq!(dir_size_mb(&tmp), 1);
+        // 1MB + 1 字节：应向上取整为 2MB
+        std::fs::write(tmp.join("sub").join("b.bin"), vec![0u8; 1024 * 1024 + 1]).unwrap();
+        assert_eq!(dir_size_mb(&tmp), 2);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
