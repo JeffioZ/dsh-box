@@ -20,6 +20,8 @@ const NODE_MIRROR_BASE: &str = "https://npmmirror.com/mirrors/node";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
 /// npm 包自身的 dist-tags（查询 npm 最新版用于检查更新）。
 const NPM_LATEST: &str = "https://registry.npmjs.org/-/package/npm/dist-tags";
+/// @deepseek-ai/dsh 的完整包元数据（拿全部版本 + 发布时间，用于动态降级）。
+const DSH_PACKAGE_META: &str = "https://registry.npmjs.org/@deepseek-ai%2fdsh";
 
 /// 全局共享 HTTP 客户端：TLS 配置只构建一次（高频查询路径省初始化开销）。
 static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
@@ -248,6 +250,35 @@ pub(crate) fn npm_latest_version() -> Result<String, String> {
                 en
             }
         })
+}
+
+/// dsh 的版本降级链：按发布时间从新到旧取最新 N 个版本（不含 latest 重复）。
+/// latest 装不上时依次尝试这些版本，实现“动态往下降”而非写死两个版本。
+/// 查询失败时返回空列表（安装流程会退化为仅试 latest）。
+pub(crate) fn dsh_version_chain(limit: usize) -> Vec<String> {
+    let text = match get_text(DSH_PACKAGE_META) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let json: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(j) => j,
+        Err(_) => return Vec::new(),
+    };
+    // time 字段：{ "0.1.0-rc.1": "...", "created": "...", "modified": "..." }
+    let time = match json.get("time").and_then(|t| t.as_object()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let mut versions: Vec<(&String, &serde_json::Value)> = time.iter().collect();
+    // 排除 created/modified 等元数据键（版本键无时间语义，其余键是字符串时间）
+    versions.retain(|(k, v)| v.is_string() && *k != "created" && *k != "modified");
+    // 按时间字符串倒序（ISO8601 字典序 == 时间序）
+    versions.sort_by(|a, b| b.1.as_str().unwrap_or("").cmp(a.1.as_str().unwrap_or("")));
+    versions
+        .iter()
+        .take(limit)
+        .map(|(v, _)| v.to_string())
+        .collect()
 }
 
 // ---------- Node 运行时 ----------
@@ -995,13 +1026,14 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     //
     // 版本降级：latest 可能处于上游发版过渡期（实测 0.1.1-rc.1/rc.2 的 62 个
     // 依赖全声明 ^0.1.1-rc.1 会互相匹配到新 rc，npm placeDep 解析组合爆炸卡
-    // 死，npm 11/12 都中招）。latest 装不上时自动降级到上一个 minor 的已知
-    // 自洽版本（0.1.0 系列依赖全锁 ^0.1.0-rc.N，不串版本），保证新装机能通。
-    let install_targets: &[&str] = &[
-        "@deepseek-ai/dsh",            // latest
-        "@deepseek-ai/dsh@0.1.0-rc.8", // 降级 1：上一候选
-        "@deepseek-ai/dsh@0.1.0-rc.7", // 降级 2：再上一候选
-    ];
+    // 死，npm 11/12 都中招）。latest 装不上时按发布时间倒序自动降级（动态
+    // 取 registry 历史版本，最多试 5 个），并广播降级状态给启动页。
+    let mut install_targets: Vec<String> = vec!["@deepseek-ai/dsh".to_string()];
+    // 动态降级链：registry 按发布时间倒序的历史版本（跳过第 1 个 = latest
+    // 本身，它已作为 install_targets[0] 试过），最多再试 4 个旧版本
+    for ver in dsh_version_chain(5).into_iter().skip(1).take(4) {
+        install_targets.push(format!("@deepseek-ai/dsh@{ver}"));
+    }
     let base_args = vec![
         "install".into(),
         "--prefix".into(),
@@ -1027,6 +1059,14 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     ];
     let mut last_error = String::new();
     'versions: for (vi, target) in install_targets.iter().enumerate() {
+        // 降级时广播状态：让启动页看得到在尝试哪个版本，而非一直“安装 dsh”
+        if vi > 0 {
+            let msg = crate::locale::owned(
+                format!("最新版装不上，自动尝试 {target}…"),
+                format!("The latest version failed; trying {target}…"),
+            );
+            emit_status(app, BootPhase::InstallingDsh, &msg, "");
+        }
         for (attempt, registry) in [None, Some("https://registry.npmmirror.com")]
             .into_iter()
             .enumerate()
@@ -1060,6 +1100,7 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
                 &npm_cli,
                 &args,
                 &config.logs_dir().join(attempt_log),
+                if vi == 0 { 180 } else { 90 },
             );
             match result {
                 Ok(()) => {
@@ -1102,6 +1143,7 @@ fn run_npm_install_with_progress(
     npm_cli: &Path,
     args: &[String],
     log_path: &Path,
+    no_progress_secs: u64,
 ) -> Result<(), String> {
     let envs = base_envs(node_exe, config);
     // node 跑 npm-cli.js：首参必须是 npm-cli 路径
@@ -1130,7 +1172,7 @@ fn run_npm_install_with_progress(
     let start = Instant::now();
     // 无进展超时：npm 卡在非 fetch 阶段（native build / 解压 / 解析）时
     // 不退出也不长缓存，3 分钟毫无进展即判定卡死并 kill。
-    let no_progress_timeout = Duration::from_secs(180);
+    let no_progress_timeout = Duration::from_secs(no_progress_secs);
     let mut last_progress = Instant::now();
     let mut last_progress_mb: u64 = 0;
     let mut last_reported_sec: u64 = u64::MAX;
