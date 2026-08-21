@@ -82,7 +82,7 @@ function renderVersions(payload) {
   const parts = [];
   if (payload.dsh_version) parts.push('dsh v' + payload.dsh_version);
   if (payload.node_version) parts.push('Node ' + payload.node_version);
-  if (payload.npm_version) parts.push(payload.npm_version);
+  if (payload.npm_version) parts.push('npm ' + payload.npm_version);
   if (payload.port) parts.push(dshdT('port', { port: payload.port }));
   // 字段缺失时保留已显示内容（防御：事件载荷异常时不清空 footer）
   if (parts.length === 0) return;

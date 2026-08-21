@@ -18,6 +18,8 @@ const NODEJS_INDEX: &str = "https://nodejs.org/dist/index.json";
 /// 缓解 nodejs.org 在国内下载慢/超时。仅包下载用，校验与 index 仍走官方。
 const NODE_MIRROR_BASE: &str = "https://npmmirror.com/mirrors/node";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
+/// npm 包自身的 dist-tags（查询 npm 最新版用于检查更新）。
+const NPM_LATEST: &str = "https://registry.npmjs.org/-/package/npm/dist-tags";
 
 /// 全局共享 HTTP 客户端：TLS 配置只构建一次（高频查询路径省初始化开销）。
 static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
@@ -225,6 +227,29 @@ pub fn installed_dsh_version(config: &Config) -> Option<String> {
         .map(String::from)
 }
 
+/// 查询 npm 包自身最新版（registry dist-tags 的 latest），用于检查更新。
+pub(crate) fn npm_latest_version() -> Result<String, String> {
+    let text = get_text(NPM_LATEST)?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("解析失败", "Failed to parse the response")
+        )
+    })?;
+    json.get("latest")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            let zh = "响应中没有 latest 字段".to_string();
+            let en = "The response has no latest field".to_string();
+            if crate::locale::is_chinese() {
+                zh
+            } else {
+                en
+            }
+        })
+}
+
 // ---------- Node 运行时 ----------
 
 /// 读取指定 node 可执行文件的版本 (major, minor, patch)。
@@ -237,7 +262,7 @@ pub(crate) fn node_version(program: &Path) -> Option<(u32, u32, u32)> {
     parse_node_version(&text)
 }
 
-/// 取当前使用 Node 自带 npm 的版本号（形如 npm 11.17.0 / npm 12.0.2）。
+/// 取当前使用 Node 自带 npm 的裸版本号（如 12.0.2）。
 /// 便携优先、系统 Node 兜底（与 current_node_version 同一选择逻辑），
 /// 返回 None 表示拿不到（无 Node / npm-cli 缺失 / 运行失败）。
 pub(crate) fn npm_version(config: &Config) -> Option<String> {
@@ -262,8 +287,7 @@ pub(crate) fn npm_version(config: &Config) -> Option<String> {
     if text.is_empty() {
         None
     } else {
-        // 统一 "npm x.y.z" 形式，避免裸数字与 dsh/Node 版本混淆
-        Some(format!("npm {text}"))
+        Some(text)
     }
 }
 
@@ -541,7 +565,7 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     // Node v24 官方捆绑 npm 11，其 idealTree 在解析 dsh 的 528 包依赖树时
     // 会在 Windows 上卡死（实测 placeDep ~550 行后停滞、零 tarball、reify
     // 不开始）。npm 12 无此问题，此处升级到 12 再交付。
-    upgrade_portable_npm(app, config)?;
+    upgrade_portable_npm(app, config, false)?;
 
     Ok(config.node_exe())
 }
@@ -551,8 +575,29 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
 /// dsh 安装阶段会因 npm 11 卡死而在超时后报出明确错误。
 /// 整体限时 150s：升级这步走网络，run_capture 无限阻塞会卡死整个 boot，
 /// 必须给 npm 自身的 fetch-timeout + 外层超时兜底。
-fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> {
+/// 升级 Node 自带 npm 到 12。strict=false（启动自动升级）：失败降级沿用
+/// 自带版、不阻断；strict=true（检查更新手动触发）：失败返回具体错误展示给
+/// 用户。走官方 registry，失败切 npmmirror 兜底；外层 150s 超时。
+pub(crate) fn upgrade_portable_npm(
+    app: &AppHandle,
+    config: &Config,
+    strict: bool,
+) -> Result<(), String> {
     let node_exe = config.node_exe();
+    // 仅升级便携 Node 的 npm。系统 Node 的 npm 归系统管理（Program Files
+    // 写入需管理员权限、且不该由便携外壳污染系统环境），strict 模式明确
+    // 拒绝而非静默降级——启动自动升级（非 strict）对系统 Node 本就不触发
+    // （install_portable_node 只在装便携 Node 后调用）。
+    if !node_exe.exists() {
+        if strict {
+            return Err(crate::locale::text(
+                "当前使用系统安装的 Node.js，npm 由其管理，请在系统环境升级",
+                "The system-installed Node.js manages npm; upgrade it in the system environment",
+            )
+            .into());
+        }
+        return Ok(());
+    }
     let node_dir = node_exe.parent().ok_or_else(|| {
         crate::locale::text(
             "Node.js 可执行文件路径无父目录",
@@ -561,7 +606,12 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
     })?;
     let npm_cli = node_dir.join("node_modules/npm/bin/npm-cli.js");
     if !npm_cli.exists() {
-        return Ok(()); // 没有 npm-cli 的异常包，跳过
+        let msg = crate::locale::text("未找到 npm", "npm was not found");
+        if strict {
+            return Err(msg.into());
+        }
+        crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
+        return Ok(());
     }
     emit_status(
         app,
@@ -590,12 +640,14 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
             registry.to_string(),
         ];
         let envs = base_envs(&node_exe, config);
-        // spawn + 轮询，外层 150s 超时兜底（npm 自身 fetch-timeout 60s + retry
-        // 都不该超过）；超时/npm 失败都降级沿用自带 npm，不向上传播 Err。
         let mut child =
             match processes::spawn_process(&node_exe, &args, &envs, Some(&config.root), None) {
                 Ok(c) => c,
                 Err(e) => {
+                    let msg = format!("运行 npm 失败：{e}");
+                    if strict {
+                        return Err(msg);
+                    }
                     crate::logging::log(&format!("runtime: 升级 npm 启动失败：{e}，沿用自带版"));
                     return Ok(());
                 }
@@ -607,14 +659,26 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
                 Ok(Some(status)) => break status.code().unwrap_or(-1),
                 Ok(None) => {
                     if std::time::Instant::now() > deadline {
-                        crate::logging::log("runtime: 升级 npm 超时（150s），沿用自带版");
+                        // 超时先杀进程树（strict/非 strict 都杀，避免泄漏）
                         processes::kill_tree(child.id());
+                        if strict {
+                            return Err(crate::locale::text(
+                                "升级 npm 超时（150s）",
+                                "npm upgrade timed out (150s)",
+                            )
+                            .into());
+                        }
+                        crate::logging::log("runtime: 升级 npm 超时（150s），沿用自带版");
                         return Ok(());
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(e) => {
-                    crate::logging::log(&format!("runtime: 升级 npm 等待失败：{e}，沿用自带版"));
+                    let msg = format!("等待 npm 失败：{e}");
+                    if strict {
+                        return Err(msg);
+                    }
+                    crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
                     return Ok(());
                 }
             }
@@ -627,6 +691,13 @@ fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> 
         crate::logging::log(&format!(
             "runtime: 升级 npm 到 12 失败（{registry} 退出码 {code}），尝试兜底源"
         ));
+    }
+    if strict {
+        return Err(crate::locale::text(
+            "升级 npm 失败（官方源与镜像均失败）",
+            "Failed to upgrade npm (both the default registry and mirror failed)",
+        )
+        .into());
     }
     crate::logging::log("runtime: 升级 npm 到 12 失败，沿用自带版");
     Ok(())

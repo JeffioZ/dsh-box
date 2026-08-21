@@ -27,6 +27,8 @@ pub struct CheckResult {
     pub dsh: Option<VersionInfo>,
     pub node: Option<NodeInfo>,
     pub pwsh: Option<PwshInfo>,
+    /// npm 版本（Node 自带）。npm 11 会卡 dsh 安装，12 为所需目标。
+    pub npm: Option<VersionInfo>,
     /// 应用自身更新（GitHub Releases）。
     pub app: Option<VersionInfo>,
     pub error: Option<String>,
@@ -338,6 +340,55 @@ pub fn check(app: &AppHandle) -> CheckResult {
     // 应用自身更新（GitHub Releases；失败静默，不阻塞其他检查）
     let app_handle = std::thread::spawn(check_app_update);
 
+    // npm 版本（Node 自带）：npm 11 会卡 dsh 安装，12 为所需目标。
+    // 检测走 registry dist-tags latest，独立线程并行（与 dsh/node/pwsh/app 一致）。
+    let npm_cfg = config.clone();
+    let npm_handle = std::thread::spawn(move || {
+        let installed = runtime::npm_version(&npm_cfg);
+        match runtime::npm_latest_version() {
+            Ok(latest) => {
+                let update_available = installed
+                    .as_deref()
+                    .map(|cur| {
+                        versions::compare_versions(&latest, cur) == std::cmp::Ordering::Greater
+                    })
+                    .unwrap_or(false);
+                (
+                    Some(VersionInfo {
+                        installed: installed.unwrap_or_default(),
+                        latest: latest.clone(),
+                        update_available,
+                        latest_error: None,
+                    }),
+                    None,
+                )
+            }
+            Err(e) => {
+                crate::logging::log(&format!("updater: npm 最新版本查询失败：{e}"));
+                // 检查失败仍显示已装版本（若无则整行不显示，与 dsh 策略一致）
+                if installed.is_some() {
+                    (
+                        Some(VersionInfo {
+                            installed: installed.unwrap_or_default(),
+                            latest: String::new(),
+                            update_available: false,
+                            latest_error: Some(format!(
+                                "{}: {e}",
+                                crate::locale::text(
+                                    "查询 npm 最新版本失败",
+                                    "Failed to query the latest npm version"
+                                )
+                            )),
+                        }),
+                        None,
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+        }
+    });
+
     if let Ok((d, d_err)) = dsh_handle.join() {
         result.dsh = d;
         if result.error.is_none() {
@@ -365,6 +416,12 @@ pub fn check(app: &AppHandle) -> CheckResult {
     }
     if let Ok(app_info) = app_handle.join() {
         result.app = app_info;
+    }
+    if let Ok((npm_info, npm_err)) = npm_handle.join() {
+        result.npm = npm_info;
+        if result.error.is_none() {
+            result.error = npm_err;
+        }
     }
     result
 }
@@ -728,6 +785,9 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         update_pwsh(app)
     } else if which == "app" {
         update_app_exe(app, &state.config())
+    } else if which == "npm" {
+        // strict：手动更新失败要报给用户（区别于启动时静默降级）
+        runtime::upgrade_portable_npm(app, &state.config(), true)
     } else {
         Err(format!(
             "{}: {which}",

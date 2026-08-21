@@ -504,6 +504,21 @@
             : (r.pwsh.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
           '<span id="u-pwsh"></span></div>';
       }
+      // npm：独立行，可手动升级（npm 11 会卡 dsh 安装，12 为所需目标）；
+      // 与 Node 行分开，见用户反馈“检查更新弹窗里还是没有 npm”。
+      if (r.npm) {
+        const v = r.npm.installed;
+        const hint = r.npm.latest_error ? ' data-tip-extra="' + esc(r.npm.latest_error) + '"' : '';
+        const label = !r.npm.latest ? dshdT('versionServiceUnavailable')
+          : (r.npm.update_available
+            ? ''
+            : dshdT('upToDate'));
+        html += '<div class="uprow"><div class="info"><div class="name">npm</div>' +
+          '<div class="ver" data-trunc-tip' + hint + '>' + (r.npm.update_available
+            ? verHtml(v, r.npm.latest || dshdT('latestVersion'), true)
+            : esc(v) + '<span class="v-ok">' + label + '</span>') + '</div></div>' +
+          '<span id="u-npm"></span></div>';
+      }
       // GitHub 查询失败时 r.app 为空，但应用本机版本仍应始终可见；
       // 远端状态明确标注不可用，避免用户误以为没有检查应用本体。
       const localAppVersion = currentOpen && currentOpen.initial
@@ -531,9 +546,10 @@
       if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
       if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
       if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
+      if (r.npm && r.npm.update_available) updBtn('u-npm', dshdT('update'), 'npm', false);
       if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
-      const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.app && r.app.update_available);
-      if (!any && !r.error && r.app && (r.dsh || r.node || r.pwsh)) {
+      const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
+      if (!any && !r.error && r.app && (r.dsh || r.node || r.pwsh || r.npm)) {
         const message = document.createElement('div');
         message.className = 'msg';
         message.setAttribute('role', 'status');
