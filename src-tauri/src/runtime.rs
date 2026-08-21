@@ -992,11 +992,22 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     // 先官方 registry；失败（含 npm 自身超时）再走 npmmirror 国内镜像兜底——
     // 新设备 + 国内网络下 registry.npmjs.org 直连经常卡在 fetch 阶段，是
     // “dsh 数分钟装不回来”的主因。checksum/版本查询仍走官方语义不变。
+    //
+    // 版本降级：latest 可能处于上游发版过渡期（实测 0.1.1-rc.1/rc.2 的 62 个
+    // 依赖全声明 ^0.1.1-rc.1 会互相匹配到新 rc，npm placeDep 解析组合爆炸卡
+    // 死，npm 11/12 都中招）。latest 装不上时自动降级到上一个 minor 的已知
+    // 自洽版本（0.1.0 系列依赖全锁 ^0.1.0-rc.N，不串版本），保证新装机能通。
+    let install_targets: &[&str] = &[
+        "@deepseek-ai/dsh",            // latest
+        "@deepseek-ai/dsh@0.1.0-rc.8", // 降级 1：上一候选
+        "@deepseek-ai/dsh@0.1.0-rc.7", // 降级 2：再上一候选
+    ];
     let base_args = vec![
         "install".into(),
         "--prefix".into(),
         config.dsh_dir().to_string_lossy().into_owned(),
-        "@deepseek-ai/dsh".into(),
+        // target 由内层循环填充（占位）
+        String::new(),
         "--dangerously-allow-all-scripts".into(),
         "--no-audit".into(),
         "--no-fund".into(),
@@ -1014,54 +1025,71 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         // 否则卡死时拿不到任何定位信息（日志只有最终 added 行）
         "--verbose".into(),
     ];
-    for (attempt, registry) in [None, Some("https://registry.npmmirror.com")]
-        .into_iter()
-        .enumerate()
-    {
-        let mut args = base_args.clone();
-        // 每轮独立日志文件：append 模式会让两轮输出混在同一个文件、
-        // 尾部误读上一轮内容；分开写才能拿到本轮真实的失败尾部
-        let attempt_log = if attempt == 0 {
-            "npm-install.log"
-        } else {
-            "npm-install-mirror.log"
-        };
-        if let Some(reg) = registry {
-            args.push("--registry".into());
-            args.push(reg.into());
-        }
-        let prior = if attempt == 0 {
-            String::new()
-        } else if crate::locale::is_chinese() {
-            "官方源失败，改用 npmmirror 镜像…\n".into()
-        } else {
-            "The default registry failed; falling back to npmmirror…\n".into()
-        };
-        let result = run_npm_install_with_progress(
-            app,
-            config,
-            node_exe,
-            &npm_cli,
-            &args,
-            &config.logs_dir().join(attempt_log),
-        );
-        match result {
-            Ok(()) => return Ok(()),
-            Err(e) if attempt == 0 => {
-                crate::logging::log(&format!(
-                    "runtime: npm install 官方源失败（{e}），改走 npmmirror 镜像"
-                ));
+    let mut last_error = String::new();
+    'versions: for (vi, target) in install_targets.iter().enumerate() {
+        for (attempt, registry) in [None, Some("https://registry.npmmirror.com")]
+            .into_iter()
+            .enumerate()
+        {
+            let mut args = base_args.clone();
+            // base_args[3] 是 target 占位，填入当前版本
+            args[3] = (*target).to_string();
+            // 每轮独立日志文件：append 模式会让两轮输出混在同一个文件、
+            // 尾部误读上一轮内容；分开写才能拿到本轮真实的失败尾部
+            let attempt_log = if vi == 0 {
+                if attempt == 0 {
+                    "npm-install.log"
+                } else {
+                    "npm-install-mirror.log"
+                }
+            } else {
+                if attempt == 0 {
+                    "npm-install-v2.log"
+                } else {
+                    "npm-install-v2-mirror.log"
+                }
+            };
+            if let Some(reg) = registry {
+                args.push("--registry".into());
+                args.push(reg.into());
             }
-            Err(e) => {
-                return Err(crate::locale::owned(
-                    format!("{prior}安装 dsh 失败：{e}"),
-                    format!("{prior}Failed to install dsh: {e}"),
-                ));
+            let result = run_npm_install_with_progress(
+                app,
+                config,
+                node_exe,
+                &npm_cli,
+                &args,
+                &config.logs_dir().join(attempt_log),
+            );
+            match result {
+                Ok(()) => {
+                    // 装的是降级版本时，明确记日志便于排查
+                    if vi > 0 {
+                        crate::logging::log(&format!(
+                            "runtime: dsh latest 装不上，已自动降级到 {target}"
+                        ));
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_error = e.clone();
+                    crate::logging::log(&format!(
+                        "runtime: install {target} ({registry:?}) 失败：{e}"
+                    ));
+                    if attempt == 0 {
+                        continue; // 官方失败，同版本切镜像再试
+                    }
+                    // 镜像也失败：降级到下一个版本
+                    continue 'versions;
+                }
             }
         }
     }
-    // 上面 Ok 提前返回，走到这里不可能
-    unreachable!()
+    // 所有版本 + 两个 registry 都试遍仍失败：报最终错误
+    Err(crate::locale::owned(
+        format!("安装 dsh 失败（latest 与降级版本均无法安装）：{last_error}",),
+        format!("Failed to install dsh (latest and fallback versions all failed): {last_error}",),
+    ))
 }
 
 /// 跑一次 npm install，轮询 npm 缓存目录（_cacache）累计字节数作为真实下载
