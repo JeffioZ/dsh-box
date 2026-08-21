@@ -285,15 +285,14 @@ fn virtual_store_stale(config: &crate::app_state::Config) -> bool {
     let Ok(text) = std::fs::read_to_string(&modules_yaml) else {
         return false;
     };
-    let Some(vs) = text
-        .lines()
-        .find(|l| l.contains("virtualStoreDir"))
-        .and_then(|l| {
-            l.trim()
-                .split_once('"')
-                .and_then(|(_, r)| r.split_once('"'))
-        })
-        .map(|(_, path)| path.to_string())
+    // .modules.yaml 是 JSON 格式：直接解析 virtualStoreDir 字段
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(vs) = json
+        .get("virtualStoreDir")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
     else {
         return false;
     };
@@ -301,9 +300,21 @@ fn virtual_store_stale(config: &crate::app_state::Config) -> bool {
     if !std::path::Path::new(&vs).exists() {
         return true;
     }
-    // 存在但不指向当前 DSH_HOME（指向旧 DSH_HOME）也为失效
+    // 存在但指向旧 DSH_HOME 也为失效；比较前统一分隔符与大小写
+    // （Windows 路径大小写不敏感，pnpm 可能写入正/反斜杠混用）
     let expected = config.dsh_home().join("profiles/web/node_modules/.pnpm");
-    vs != expected.to_string_lossy()
+    normalize_path(&vs) != normalize_path(&expected.to_string_lossy())
+}
+
+/// 路径规范化：Windows 大小写不敏感 + 正/反斜杠统一，供路径相等比较。
+#[cfg(windows)]
+fn normalize_path(p: &str) -> String {
+    p.replace('/', "\\").to_lowercase()
+}
+
+#[cfg(not(windows))]
+fn normalize_path(p: &str) -> String {
+    p.to_string()
 }
 
 /// pnpm supply-chain 策略拦截（minimumReleaseAge 冷却期）：新发布包在
@@ -1136,6 +1147,25 @@ mod tests {
             "[ERR_PNPM_UNEXPECTED_VIRTUAL_STORE] Unexpected virtual store location"
         ));
         assert!(!is_environment_block_error("npm ERR! code E404"));
+    }
+
+    #[test]
+    fn normalize_path_handles_separators_and_case() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                normalize_path("C:/Users/Jeff/.dsh"),
+                "c:\\users\\jeff\\.dsh"
+            );
+            assert_eq!(
+                normalize_path("C:\\Users\\JEFF\\.dsh"),
+                "c:\\users\\jeff\\.dsh"
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(normalize_path("/home/user/.dsh"), "/home/user/.dsh");
+        }
     }
 
     #[test]
