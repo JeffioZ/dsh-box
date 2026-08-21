@@ -847,9 +847,8 @@ fn run_npm_install_with_progress(
 
     let cache_dir = config.root.join("npm-cache").join("_cacache");
     let start = Instant::now();
-    let mut last_reported_mb: u64 = u64::MAX; // 强制首帧一定汇报
-                                              // 无进展超时：npm 卡在非 fetch 阶段（native build / 解压 / 解析）时
-                                              // 不退出也不长缓存，3 分钟毫无进展即判定卡死并 kill。
+    // 无进展超时：npm 卡在非 fetch 阶段（native build / 解压 / 解析）时
+    // 不退出也不长缓存，3 分钟毫无进展即判定卡死并 kill。
     let no_progress_timeout = Duration::from_secs(180);
     let mut last_progress = Instant::now();
     let mut last_progress_mb: u64 = 0;
@@ -864,7 +863,13 @@ fn run_npm_install_with_progress(
             Some(status) => break status.code().unwrap_or(-1),
             None => {
                 let secs = start.elapsed().as_secs();
-                let mb = dir_size_mb(&cache_dir);
+                let mb = if secs != last_reported_sec {
+                    // 每秒只做一次全量缓存目录扫描（数万小文件递归开销不小，
+                    // 不能每 0.5s 都扫）
+                    dir_size_mb(&cache_dir)
+                } else {
+                    last_progress_mb
+                };
                 // 缓存有增长 = 有进展：刷新无进展计时器
                 if mb != last_progress_mb {
                     last_progress_mb = mb;
@@ -901,9 +906,6 @@ fn run_npm_install_with_progress(
                 // 否则 native build / 解压等“不下载”阶段 UI 会冻结在旧秒数。
                 if secs != last_reported_sec {
                     last_reported_sec = secs;
-                    if mb != last_reported_mb {
-                        last_reported_mb = mb;
-                    }
                     let detail = if mb > 0 {
                         if crate::locale::is_chinese() {
                             format!("已下载约 {mb} MB · 已用时 {secs}s")
@@ -965,11 +967,41 @@ fn dir_size_bytes(dir: &Path) -> u64 {
     total
 }
 
-/// 读取日志文件尾部（供错误提示）。
+/// 读取日志文件尾部（供错误提示）。真正从文件末尾往前读，而不是把
+/// 整个文件 load 进内存——npm --verbose 日志可达几十 MB，且卡死时关键
+/// 信息在末尾（最后卡在哪个包/fetch），读头部没有诊断价值。
 fn read_log_tail(path: &Path, max_chars: usize) -> String {
-    match std::fs::read_to_string(path) {
-        Ok(text) => crate::util::truncate(&text, max_chars),
-        Err(_) => String::new(),
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    let file_len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return String::new(),
+    };
+    if file_len == 0 {
+        return String::new();
+    }
+    // UTF-8 最坏 4 字节/字符，留 4×max_chars 再往前多读 3 字节避免切断多字节字符
+    let read_start = file_len.saturating_sub((max_chars as u64) * 4 + 3);
+    if file.seek(SeekFrom::Start(read_start)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // 可能从多字节字符中间切，丢弃首个不完整字符（from_utf8_lossy 已用 � 占位，
+    // 这里按字符数截取末尾 max_chars 即可，开头残尾自然被跳过）
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() > max_chars {
+        // 保留末尾 max_chars 个字符，开头加省略号
+        let from = chars.len() - max_chars;
+        format!("…{}", chars[from..].iter().collect::<String>())
+    } else {
+        text.into_owned()
     }
 }
 
@@ -1071,6 +1103,7 @@ pub(crate) fn start_server(
 mod checksum_tests {
     use super::dir_size_mb;
     use super::parse_node_sha256;
+    use super::read_log_tail;
     use super::version_supports_no_open;
 
     #[test]
@@ -1115,5 +1148,22 @@ mod checksum_tests {
         std::fs::write(tmp.join("sub").join("b.bin"), vec![0u8; 1024 * 1024 + 1]).unwrap();
         assert_eq!(dir_size_mb(&tmp), 2);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_log_tail_returns_end_not_head() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file =
+            std::env::temp_dir().join(format!("dshbox-taillog-{}-{nanos}", std::process::id()));
+        // 头部是长噪声，尾部只有标记行：读尾必须拿到标记而非头部
+        let head = "x".repeat(100_000);
+        std::fs::write(&file, format!("{head}\nTAIL-MARKER-END\n")).unwrap();
+        let tail = read_log_tail(&file, 50);
+        assert!(tail.contains("TAIL-MARKER-END"), "got: {tail}");
+        assert!(!tail.starts_with("xxx"), "不应返回头部：{tail}");
+        std::fs::remove_file(&file).ok();
     }
 }
