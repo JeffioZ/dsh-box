@@ -349,26 +349,54 @@ pub(crate) fn current_node_version(config: &Config) -> Option<String> {
 /// 便携运行时损坏或版本不满足要求时自动清理，再选择合格的系统 Node 或重新安装。
 pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<PathBuf, String> {
     let managed = config.node_exe();
-    if managed.exists() {
+    let node_exe = if managed.exists() {
         if node_version(&managed).is_some_and(|(maj, min, _)| node_satisfies(maj, min)) {
-            return Ok(managed);
-        }
-        crate::logging::log("runtime: 便携 Node 损坏或版本过旧，准备重新选择运行时");
-        std::fs::remove_dir_all(config.node_dir()).map_err(|e| {
-            crate::locale::owned(
-                format!("清理损坏的 Node.js 运行时失败：{e}"),
-                format!("Failed to remove the damaged Node.js runtime: {e}"),
-            )
-        })?;
-    }
-    if let Some(system) = find_system_node() {
-        if let Some((maj, min, _)) = node_version(&system) {
-            if node_satisfies(maj, min) {
-                return Ok(system);
+            managed
+        } else {
+            crate::logging::log("runtime: 便携 Node 损坏或版本过旧，准备重新选择运行时");
+            std::fs::remove_dir_all(config.node_dir()).map_err(|e| {
+                crate::locale::owned(
+                    format!("清理损坏的 Node.js 运行时失败：{e}"),
+                    format!("Failed to remove the damaged Node.js runtime: {e}"),
+                )
+            })?;
+            if let Some(system) = find_system_node() {
+                if let Some((maj, min, _)) = node_version(&system) {
+                    if node_satisfies(maj, min) {
+                        system
+                    } else {
+                        install_portable_node(app, config)?
+                    }
+                } else {
+                    install_portable_node(app, config)?
+                }
+            } else {
+                install_portable_node(app, config)?
             }
         }
-    }
-    install_portable_node(app, config)
+    } else if let Some(system) = find_system_node() {
+        if let Some((maj, min, _)) = node_version(&system) {
+            if node_satisfies(maj, min) {
+                system
+            } else {
+                install_portable_node(app, config)?
+            }
+        } else {
+            install_portable_node(app, config)?
+        }
+    } else {
+        install_portable_node(app, config)?
+    };
+
+    // Node v24 官方自带 npm 11，其 idealTree 解析 dsh 的 528 包依赖树时会在
+    // Windows 卡死（实测 placeDep ~550 行后停滞、零 tarball、reify 不开始）。
+    // npm 12 无此问题。这里对「任何拿到 Node 的路径」统一升级——此前只在
+    // install_portable_node 内部做，导致已装好便携 Node 的机器（ensure_node
+    // 直接返回）永远不升级，dsh 照旧卡死。
+    // 仅升级便携 Node 的 npm；系统 Node 由 upgrade 内部跳过（归系统管理）。
+    upgrade_portable_npm(app, config, false)?;
+
+    Ok(node_exe)
 }
 
 /// 下载并安装便携版 Node 到应用数据目录。
@@ -562,11 +590,6 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
         .into());
     }
 
-    // Node v24 官方捆绑 npm 11，其 idealTree 在解析 dsh 的 528 包依赖树时
-    // 会在 Windows 上卡死（实测 placeDep ~550 行后停滞、零 tarball、reify
-    // 不开始）。npm 12 无此问题，此处升级到 12 再交付。
-    upgrade_portable_npm(app, config, false)?;
-
     Ok(config.node_exe())
 }
 
@@ -612,6 +635,21 @@ pub(crate) fn upgrade_portable_npm(
         }
         crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
         return Ok(());
+    }
+    // 已是 12+ 则跳过（ensure_node 每次启动都会调用，不能重复升级联网）
+    let cur = std::process::Command::new(&node_exe)
+        .arg(&npm_cli)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if let Some(v) = cur {
+        if let Some(major) = v.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+            if major >= 12 {
+                return Ok(());
+            }
+        }
     }
     emit_status(
         app,
