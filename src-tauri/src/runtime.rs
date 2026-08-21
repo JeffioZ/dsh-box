@@ -507,7 +507,62 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
         )
         .into());
     }
+
+    // Node v24 官方捆绑 npm 11，其 idealTree 在解析 dsh 的 528 包依赖树时
+    // 会在 Windows 上卡死（实测 placeDep ~550 行后停滞、零 tarball、reify
+    // 不开始）。npm 12 无此问题，此处升级到 12 再交付。
+    upgrade_portable_npm(app, config)?;
+
     Ok(config.node_exe())
+}
+
+/// 升级便携 Node 捆绑的 npm 到 12（走官方 registry；失败降级沿用捆绑版，
+/// 不阻断 Node 安装——dsh 安装阶段会因 npm 11 卡死而在超时后报错）。
+fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> {
+    let node_exe = config.node_exe();
+    let npm_cli = node_exe
+        .parent()
+        .ok_or_else(|| {
+            crate::locale::text(
+                "Node.js 可执行文件路径无父目录",
+                "The Node.js executable path has no parent directory",
+            )
+        })?
+        .join("node_modules/npm/bin/npm-cli.js");
+    if !npm_cli.exists() {
+        return Ok(()); // 没有 npm-cli 的异常包，跳过
+    }
+    emit_status(
+        app,
+        BootPhase::InstallingNode,
+        crate::locale::text("正在升级 npm…", "Upgrading npm…"),
+        "",
+    );
+    let args = vec![
+        npm_cli.to_string_lossy().into_owned(),
+        "install".to_string(),
+        "--global".to_string(),
+        "--prefix".to_string(),
+        node_exe
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        "npm@12".to_string(),
+        "--no-audit".to_string(),
+        "--no-fund".to_string(),
+    ];
+    let envs = base_envs(&node_exe, config);
+    let output = processes::run_capture(&node_exe, &args, &envs, Some(&config.root))
+        .map_err(|e| e.to_string())?;
+    if output.0 != 0 {
+        crate::logging::log(&format!(
+            "runtime: 升级 npm 到 12 失败（退出码 {}），沿用捆绑版",
+            output.0
+        ));
+        return Ok(()); // 降级：不阻断 Node 安装
+    }
+    crate::logging::log("runtime: npm 已升级到 12");
+    Ok(())
 }
 
 /// 当前平台的 Node 官方包：返回（包目录名、官方下载 URL、国内镜像 URL、是否 zip）。
