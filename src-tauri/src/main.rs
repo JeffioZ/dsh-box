@@ -12,7 +12,7 @@
 
 fn main() {
     // panic = "abort"：panic 信息默认输出到 GUI 应用不可见的 stderr。
-    // 挂接 hook 把 panic 信息尽力写入应用日志（desktop.log），
+    // 挂接 hook 把 panic 信息尽力写入应用日志（dshbox.log），
     // 写入失败时静默忽略；随后交还默认 hook，保留 stderr 输出与
     // RUST_BACKTRACE（dev 构建 panic=unwind 下依赖它），默认 abort 行为不变。
     let previous_hook = std::panic::take_hook();

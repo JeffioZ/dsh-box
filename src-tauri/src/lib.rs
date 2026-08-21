@@ -65,7 +65,7 @@ pub fn log_panic(line: &str) {
     let root = std::env::var("DSH_BOX_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| app_state::default_app_root());
-    let path = root.join("logs").join("desktop.log");
+    let path = root.join("logs").join("dshbox.log");
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -1469,7 +1469,7 @@ pub fn run() {
             }
 
             let cfg = app.state::<AppState>().config();
-            logging::init(cfg.logs_dir().join("desktop.log"));
+            logging::init(cfg.logs_dir().join("dshbox.log"));
             logging::log(&format!(
                 "启动: port={} root={}",
                 cfg.port,

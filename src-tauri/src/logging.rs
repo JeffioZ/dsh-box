@@ -1,4 +1,4 @@
-//! 应用自身运行日志（logs/desktop.log）：启动、托盘、引导阶段、IPC 调用等诊断信息。
+//! 应用自身运行日志（logs/dshbox.log）：启动、托盘、引导阶段、IPC 调用等诊断信息。
 //! 超过 2MB 自动轮转为 .old（保留一份旧日志）。
 
 use std::io::Write;

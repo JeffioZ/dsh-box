@@ -90,7 +90,7 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 | macOS | `~/Library/Application Support/com.deepseek.dsh-box` |
 | Linux | `$XDG_DATA_HOME/com.deepseek.dsh-box`（未设置 `XDG_DATA_HOME` 时为 `~/.local/share/com.deepseek.dsh-box`） |
 
-该目录下会生成 `node/`、`dsh/`、`npm-cache/` 与 `logs/`（`desktop.log`，时间为 UTC，超过 2 MB 自动轮转为 `.old`）。更新 dsh 或 Node 期间会短暂出现 `dsh-old/` 或 `node-old/` 备份目录，更新成功后自动清理。
+该目录下会生成 `node/`、`dsh/`、`npm-cache/` 与 `logs/`（`dshbox.log`，时间为 UTC，超过 2 MB 自动轮转为 `.old`）。更新 dsh 或 Node 期间会短暂出现 `dsh-old/` 或 `node-old/` 备份目录，更新成功后自动清理。
 
 ### config.json
 
