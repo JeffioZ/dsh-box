@@ -760,12 +760,22 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         // 单请求 2 分钟超时：npm 默认 fetch timeout 5 分钟，卡死时等太久
         "--fetch-timeout=120000".into(),
         "--fetch-retries=2".into(),
+        // --verbose：非 TTY 下也会把 fetch/reify 各步写进日志，
+        // 否则卡死时拿不到任何定位信息（日志只有最终 added 行）
+        "--verbose".into(),
     ];
     for (attempt, registry) in [None, Some("https://registry.npmmirror.com")]
         .into_iter()
         .enumerate()
     {
         let mut args = base_args.clone();
+        // 每轮独立日志文件：append 模式会让两轮输出混在同一个文件、
+        // 尾部误读上一轮内容；分开写才能拿到本轮真实的失败尾部
+        let attempt_log = if attempt == 0 {
+            "npm-install.log"
+        } else {
+            "npm-install-mirror.log"
+        };
         if let Some(reg) = registry {
             args.push("--registry".into());
             args.push(reg.into());
@@ -777,7 +787,14 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         } else {
             "The default registry failed; falling back to npmmirror…\n".into()
         };
-        let result = run_npm_install_with_progress(app, config, node_exe, &npm_cli, &args);
+        let result = run_npm_install_with_progress(
+            app,
+            config,
+            node_exe,
+            &npm_cli,
+            &args,
+            &config.logs_dir().join(attempt_log),
+        );
         match result {
             Ok(()) => return Ok(()),
             Err(e) if attempt == 0 => {
@@ -806,9 +823,9 @@ fn run_npm_install_with_progress(
     node_exe: &Path,
     npm_cli: &Path,
     args: &[String],
+    log_path: &Path,
 ) -> Result<(), String> {
     let envs = base_envs(node_exe, config);
-    let npm_log = config.logs_dir().join("npm-install.log");
     // node 跑 npm-cli.js：首参必须是 npm-cli 路径
     let mut spawn_args = vec![npm_cli.to_string_lossy().into_owned()];
     spawn_args.extend(args.iter().cloned());
@@ -817,7 +834,7 @@ fn run_npm_install_with_progress(
         &spawn_args,
         &envs,
         Some(&config.root),
-        Some(&npm_log),
+        Some(log_path),
     )
     .map_err(|e| {
         crate::locale::owned(
@@ -831,11 +848,12 @@ fn run_npm_install_with_progress(
     let cache_dir = config.root.join("npm-cache").join("_cacache");
     let start = Instant::now();
     let mut last_reported_mb: u64 = u64::MAX; // 强制首帧一定汇报
-                                              // 无进展超时：npm 卡在非 fetch 阶段（install scripts 等）时不退出也不长缓存，
-                                              // 3 分钟毫无进展即判定卡死并 kill——用户明确要求“不要等太久”。
+                                              // 无进展超时：npm 卡在非 fetch 阶段（native build / 解压 / 解析）时
+                                              // 不退出也不长缓存，3 分钟毫无进展即判定卡死并 kill。
     let no_progress_timeout = Duration::from_secs(180);
     let mut last_progress = Instant::now();
     let mut last_progress_mb: u64 = 0;
+    let mut last_reported_sec: u64 = u64::MAX;
     let code = loop {
         match child.try_wait().map_err(|e| {
             crate::locale::owned(
@@ -852,21 +870,40 @@ fn run_npm_install_with_progress(
                     last_progress_mb = mb;
                     last_progress = Instant::now();
                 } else if last_progress.elapsed() > no_progress_timeout {
-                    // 卡死：先杀进程树，再向调用方报错（上层会切镜像重试）
+                    // 卡死：先杀进程树并等其真正退出（taskkill 是异步的，
+                    // 不等待的话立读日志会拿到空文件/半截内容），再读日志报错。
                     crate::logging::log(&format!(
                         "runtime: npm install 超过 {}s 无进展，判定卡死并终止",
                         no_progress_timeout.as_secs()
                     ));
                     processes::kill_tree(child.id());
-                    let tail = read_log_tail(&npm_log, 600);
+                    // taskkill 是异步 fire-and-forget，必须等进程树真正退出才能
+                    // 读到完整日志；带 10s 兜底，防止 taskkill 失败导致永久阻塞
+                    let mut waited = Duration::from_secs(0);
+                    loop {
+                        if child.try_wait().ok().flatten().is_some() {
+                            break;
+                        }
+                        if waited >= Duration::from_secs(10) {
+                            crate::logging::log("runtime: npm install kill 后 10s 未退出");
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                        waited += Duration::from_millis(200);
+                    }
+                    let tail = read_log_tail(log_path, 2000);
                     return Err(crate::locale::owned(
                         format!("安装超时（{secs}s 无进展）：\n{}", tail),
                         format!("Install timed out (no progress for {secs}s):\n{}", tail),
                     ));
                 }
-                // 缓存大小下降（npm 清理/重算）也照报，但只在变化或首帧时发事件
-                if mb != last_reported_mb || secs == 0 {
-                    last_reported_mb = mb;
+                // 进度按秒固定刷新（已用时持续跳动），不依赖 mb 是否变化——
+                // 否则 native build / 解压等“不下载”阶段 UI 会冻结在旧秒数。
+                if secs != last_reported_sec {
+                    last_reported_sec = secs;
+                    if mb != last_reported_mb {
+                        last_reported_mb = mb;
+                    }
                     let detail = if mb > 0 {
                         if crate::locale::is_chinese() {
                             format!("已下载约 {mb} MB · 已用时 {secs}s")
@@ -878,9 +915,6 @@ fn run_npm_install_with_progress(
                     } else {
                         format!("Fetching dependencies… {secs}s elapsed")
                     };
-                    // progress bar：只有“下载阶段”的字节数无法换算 0-100，给不确定进度；
-                    // 真实下载量放 detail 展示。message 走 i18n（前端对
-                    // installing-dsh 不重译，直接显示后端快照）
                     emit_status(
                         app,
                         BootPhase::InstallingDsh,
@@ -894,7 +928,7 @@ fn run_npm_install_with_progress(
     };
     drop(child);
     if code != 0 {
-        let tail = read_log_tail(&npm_log, 600);
+        let tail = read_log_tail(log_path, 2000);
         return Err(crate::locale::owned(
             format!("npm 退出码 {code}：\n{}", tail),
             format!("npm exit code {code}:\n{}", tail),
