@@ -6,17 +6,21 @@ DSHBox 是 dsh 的薄桌面外壳。对话、Agent、工具、会话格式和官
 
 ## 模块边界
 
-```text
-内置 UI ──IPC──> commands/ ──> 业务模块
-   │                 │             ├─ runtime/：Node、dsh 包、服务
-   │                 │             ├─ updater/：检查、替换、恢复
-   │                 │             ├─ plugins/：dsh plugin CLI
-   │                 │             └─ app_state/：运行态与持久化
-   │                 └─ 只校验来源、参数并转发
-   │
-   └─主 WebView──> 官方 dsh web
-                     ├─ webview/：可信导航、dshd://、脚本注入
-                     └─ $DSH_HOME：设置、凭据、只读会话日志
+```mermaid
+flowchart LR
+    UI[内置 UI] -->|受限 IPC| CMD[commands/]
+    CMD --> RUNTIME[runtime/]
+    CMD --> UPDATER[updater/]
+    CMD --> PLUGINS[plugins/]
+    CMD --> STATE[app_state/]
+    CMD --> DATA[模型、凭据与会话数据模块]
+    UI --> WEB[主 WebView]
+    WEB --> DSH[官方 dsh web]
+    WEB --> BRIDGE[webview/ 导航与注入]
+    DATA --> HOME[$DSH_HOME 设置、凭据与会话日志]
+    RUNTIME --> DSHCLI[dsh CLI / 服务]
+    PLUGINS --> DSHCLI
+    DSHCLI --> HOME
 ```
 
 - `bootstrap.rs` 组装 Tauri 插件、窗口、事件和后台任务；`lib.rs` 只保留跨模块公共边界。
@@ -27,22 +31,39 @@ DSHBox 是 dsh 的薄桌面外壳。对话、Agent、工具、会话格式和官
 
 ## 启动时序
 
-```text
-AppState 初始化
-  → 恢复中断的更新事务
-  → 创建主窗口与内置启动页
-  → boot_loop / boot_once
-      → 检测或安装 Node
-      → 检测或安装 dsh
-      → 静默检查更新
-      → 启动 dsh web
-      → 健康检查
-      → 等待首次配置（仅全新安装）
-      → 导航到本机 dsh origin
-  → watchdog 持续检查服务与页面心跳
+```mermaid
+sequenceDiagram
+    participant UI as 启动页
+    participant Boot as boot_loop
+    participant Runtime as Node / dsh 运行时
+    participant Web as dsh web
+
+    Boot->>Boot: 恢复中断的更新事务
+    Boot->>Web: 探测首选端口与官方 3080
+    alt 发现外部 dsh
+        Boot-->>UI: 展示服务身份并等待明确选择
+        UI->>Boot: 连接外部服务或启动本地服务
+    end
+    Boot->>Runtime: 检测或安装 Node 与 dsh（本地模式）
+    alt 用户切换下载源
+        UI->>Boot: 请求切源（携带当前引导轮次）
+        Boot->>Boot: 终止当前下载并立即重新引导
+    else 用户取消安装
+        UI->>Boot: 请求取消（携带当前引导轮次）
+        Boot-->>UI: 已取消，可重新安装
+    else 运行时就绪
+        Boot->>Web: 启动服务、保留 Child 并执行健康检查
+        Boot-->>UI: 等待首次设置（仅新用户）
+        Boot->>Web: 导航到本机 dsh origin
+    end
+    Boot->>Boot: watchdog 持续检查服务
 ```
 
-首次配置不是独立启动线程：它是 `boot_once` 状态机中的一个等待点，避免多个流程竞争窗口状态或重复启动服务。
+首次配置不是独立启动线程：它是 `boot_inner` 中的等待点。`boot_once` 把内部错误映射为就绪、取消、切源重启或失败四种业务结果，避免取消操作短暂显示成启动失败。
+
+本地端口只尝试 `state.json` 中的上次成功值与用户首选值；均不可绑定时传 `--port 0`，从 dsh 标准输出解析实际端口并持久化。端口探测区分 `Free`、`Listening` 与 `Unbindable`，Windows 保留端口不会触发无意义的 HTTP 重试。启动后的 `Child` 由 `AppState` 持有，绑定失败或缺包等早退可立即呈现日志，而不是等待 120 秒超时。
+
+服务归属只有托管、外部、外部断开和未连接四种状态。外部候选必须同时通过 dsh 页面标记与 `host.describe` RPC 校验；当前上游未提供 `DSH_HOME`/实例 ID，因此候选指纹仅用于判断“是否还是上次那一个”，不能证明数据目录相同。首次连接外部服务时，本地凭据与插件引导只会被暂缓；日后首次改用本地服务时恢复，已用过本地服务的用户不会重复引导。外部模式禁止进程重启、dsh/Node/npm 更新、插件维护和 dsh 数据文件写入；看门狗只报告断开，不会静默换成本地服务。
 
 ## 数据所有权
 
@@ -54,6 +75,8 @@ AppState 初始化
 | `$DSH_HOME/.credentials.yaml` | dsh/用户 | 只合并指定凭据行 |
 | 会话日志 | dsh | 只读统计与通知 |
 | `node/`、`dsh/` | DSHBox | 事务化安装和更新 |
+
+连接外部 dsh 时，表中 `$DSH_HOME` 与托管运行时相关的写操作全部暂停；DSHBox 没有可靠路径把本机数据目录假定成外部服务的数据目录。
 
 `config.json` 与 `state.json` 不做跨文件兜底或隐式迁移。API Key 不属于 DSHBox 配置，只从环境变量或 dsh 的 `.credentials.yaml` 读取。
 

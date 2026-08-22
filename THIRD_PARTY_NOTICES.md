@@ -8,7 +8,7 @@ DSHBox 自身采用 MIT License。仓库、构建工具、编译产物和运行�
 - npm 开发依赖及其精确版本以 `package-lock.json` 为准；`@tauri-apps/cli` 用于构建，`@resvg/resvg-js` 用于生成图标。
 - WebView2、WebKit 与 WebKitGTK 由操作系统或系统运行时提供，不由本仓库重新许可。
 
-锁文件中的许可证元数据包含 MIT、Apache-2.0、BSD、ISC、MPL-2.0、Unicode-3.0、Zlib、CDLA-Permissive-2.0 等兼容组合。发布者在分发二进制前仍应使用依赖审计工具从当前锁文件生成并核对完整 notices；本摘要不能替代各包随附的许可证文本。
+锁文件中的许可证元数据包含 MIT、Apache-2.0、BSD、ISC、MPL-2.0、Unicode-3.0、Zlib、CDLA-Permissive-2.0 等标识。发布者在分发二进制前仍应使用依赖审计工具从当前锁文件生成并核对完整 notices；本摘要不能替代各包随附的许可证文本，也不判断具体分发方式下的许可证兼容性。
 
 ## 运行时下载
 

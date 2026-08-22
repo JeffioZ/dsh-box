@@ -1,17 +1,36 @@
 # DSHBox
 
-[English](README.en.md) · [架构](docs/architecture.md) · [开发指南](docs/development.md) · [安全模型](docs/security.md)
+![CI](https://github.com/JeffioZ/dsh-box/actions/workflows/build.yml/badge.svg)
+![License](https://img.shields.io/github/license/JeffioZ/dsh-box)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4176e6)
+
+[English](README.en.md) · [架构](docs/architecture.md) · [开发指南](docs/development.md) · [故障排查](docs/troubleshooting.md) · [安全模型](docs/security.md)
 
 DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 Tauri v2、Rust 与原生 HTML/CSS/JavaScript。主界面直接加载官方 `dsh web`，外壳负责运行环境、窗口、托盘、更新与本地系统集成，不 fork 或 patch dsh。
 
-> 当前发布产物未签名。Windows SmartScreen、macOS Gatekeeper 或 Linux 安全策略可能要求手动放行；详情见[安全模型](docs/security.md)。
+> [!IMPORTANT]
+> 仓库目前处于首个公开版本发布前。请从源码构建；后续 Release 产物仍将保持未签名，系统可能要求手动放行。详情见[安全模型](docs/security.md)。
+
+## 快速开始
+
+先安装 Rust 1.85+、Node.js `^22.19.0` 或 `>=24.0.0`，以及对应平台的 [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)。Windows 构建：
+
+```powershell
+git clone https://github.com/JeffioZ/dsh-box.git
+cd dsh-box
+npm ci
+npm run check
+pwsh -NoLogo -NoProfile -File .\build.ps1
+```
+
+Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说明见[开发指南](docs/development.md)。
 
 ## 功能
 
 | 能力 | 说明 |
 |---|---|
 | 开箱即用 | 自动检测 Node.js、安装 dsh，并在 Windows 缺少 WebView2 时引导安装 |
-| 服务生命周期 | 单实例、端口冲突回退、进程树清理、服务看门狗和页面心跳恢复 |
+| 服务生命周期 | 系统分配端口回退、外部 dsh 安全接入、进程树清理、服务看门狗和页面心跳恢复 |
 | 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、深浅色和中英双语 |
 | 安全更新 | dsh/Node 事务化更新和中断恢复；Windows 应用附件按精确 tag 与 SHA-256 校验 |
 | 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
@@ -31,7 +50,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 ## 安装与首次启动
 
-从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应产物：
+首个公开版本发布后，可从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应产物：
 
 - Windows：运行 `DSHBox.exe`。
 - macOS：把应用拖入 Applications。若 Gatekeeper 拦截，按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
@@ -44,7 +63,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 3. 开机自启动使用各平台系统机制。
 4. “安装推荐插件”默认勾选，但可取消；直接跳过首次配置视为不同意自动安装。
 
-之后可在“桌面端设置 → DeepSeek 凭据”中替换或清除 API Key；若环境变量已提供密钥，该区域只读并明确显示由外部管理。
+之后可在“设置 → 服务管理 → DeepSeek API Key”中替换或清除密钥；若环境变量已提供密钥，该区域只读并显示由外部管理。
 
 ## 配置与数据
 
@@ -85,6 +104,10 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 `dsh_update_channel` 可取 `latest` 或风险更高的预览通道 `next`。`close_behavior` 可取 `tray` / `quit`，`launch_behavior` 可取 `window` / `tray`，`download_source` 可取 `auto` / `official` / `mirror`。`config.json` 与 `state.json` 职责严格分离，不读取旧文件中的跨界字段。
 
+`port` 是本地托管服务的首选端口，不是必须占用的固定端口。DSHBox 先尝试上次成功端口和该首选端口；均不可用时通过 `dsh web --port 0` 让操作系统一次分配可用端口，并把结果记入 `state.json`，不会顺序扫描大段端口。
+
+启动时若在首选端口或 dsh 官方默认端口 `3080` 发现通过页面与 `host.describe` 双重校验的外部 dsh，DSHBox 会先询问是否连接并记住该服务指纹。首次运行时该选择优先于本地设置；选择外部服务会暂缓只适用于本地运行时的凭据与插件引导，日后首次改用本地服务时再补充显示。外部模式只负责显示与重连，不会停止、重启或更新该进程，也不会改写其凭据、模型或插件；服务消失时会明确报错，用户可重试或改用本地服务。
+
 环境变量优先于 `config.json`：
 
 | 变量 | 作用 |
@@ -111,7 +134,7 @@ API Key 解析顺序为：`DSH_BOX_API_KEY` → `DEEPSEEK_API_KEY` → `$DSH_HOM
 
 ## 开发
 
-要求 Rust 1.85+、Node.js，以及对应平台的 Tauri 系统依赖。Windows 推荐 PowerShell 7。
+要求 Rust 1.85+、Node.js `^22.19.0` 或 `>=24.0.0`，以及对应平台的 Tauri 系统依赖。Windows 推荐 PowerShell 7。
 
 ```powershell
 npm install

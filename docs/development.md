@@ -3,7 +3,7 @@
 ## 环境
 
 - Rust 1.85 或更高版本。
-- Node.js 与 npm；Node 仅用于项目检查、图标和构建辅助，不参与 UI 打包。
+- Node.js `^22.19.0` 或 `>=24.0.0` 与 npm；Node 仅用于项目检查、图标和构建辅助，不参与 UI 打包。
 - 对应平台的 Tauri v2 系统依赖。Windows 需要 Visual Studio 2022 C++ 工具链，Linux 需要 WebKitGTK 4.1 开发包。
 - Windows 命令推荐 PowerShell 7（`pwsh`）。
 
@@ -27,6 +27,19 @@ pwsh -NoLogo -NoProfile -File .\dev-run.ps1
 ```
 
 `dev-run.ps1` 在 4321 端口提供 `ui/`；只改 UI 可刷新页面，改 Rust 后需重新执行 `dev-build.ps1`。开发版使用独立的 `src-tauri/target/dev/` 构建缓存，不会覆盖或锁住正式版产物。
+`build.ps1` 与 `dev-build.ps1` 会先运行完整项目一致性检查，避免把 UI 语法、资源引用或配置错误编进产物。
+
+## CI 与跨平台检查
+
+GitHub Actions 在 Windows x64、macOS arm64、Linux x64/arm64 原生任务上运行格式检查、Clippy 与单测；macOS x64 另做交叉编译检查和 Clippy。`main` push 与 PR 只做验证；只有格式为 `vX.Y.Z` 且与项目版本一致的 tag 才执行 release 构建并上传附件。
+
+本地 Windows 编译不会检查 Unix 专属分支。修改 `#[cfg(windows)]`、`#[cfg(target_os = "macos")]` 或 Unix 代码时，同时检查以下内容：
+
+- 专属函数的 `use` 也使用相同 `cfg`，避免其他平台出现未解析导入。
+- 共享模块不要无条件引用只在单个平台定义的符号。
+- 新增平台分支后让 PR 完整跑完 CI 矩阵，再合并或打 tag。
+
+如果某个平台在“单测”阶段编译失败，先处理第一条 Rust 编译错误。后续矩阵错误通常是同一根因的重复结果。
 
 ## 修改规则
 
@@ -57,9 +70,13 @@ npm run icons
 
 不要手工上传本地产物替代 CI 产物。当前本地验证不能覆盖所有目标平台，功能变更应通过 PR 等待完整矩阵。
 
+发布前再确认 tag 为严格的 `vX.Y.Z`，并与 `Cargo.toml`、`package.json`、`tauri.conf.json` 和两份锁文件一致。普通 `main` push 不生成发布附件。
+
 ## 故障定位
 
 - 应用日志：数据根目录 `logs/dshbox.log`。
 - dsh 服务日志：同目录 `logs/dsh.log`。
 - `npm run check` 失败时先处理其给出的具体文件；该脚本不会抽样。
 - 更新失败时不要手工删除 `*-old`、`.part` 或事务标记，先让下一次启动执行恢复。
+
+常见用户侧问题与日志位置见[故障排查](troubleshooting.md)。
