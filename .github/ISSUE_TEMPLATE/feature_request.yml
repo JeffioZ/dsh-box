@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a desktop-shell improvement within the project boundary
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the workflow problem rather than only a proposed control.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: dsh integration channel
+      options: [Page injection, DSH_HOME data, dsh CLI, Unsure]
+    validations:
+      required: true
+  - type: textarea
+    id: regression
+    attributes:
+      label: Possible regressions or tradeoffs
+      description: Include impacts on daily use, the context menu, startup, updates, and cross-platform behavior.

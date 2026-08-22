@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible DSHBox problem without sensitive data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Security vulnerabilities and credentials must not be posted here. Use the private process in SECURITY.md."
+  - type: input
+    id: version
+    attributes:
+      label: DSHBox version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Windows x64, macOS arm64, macOS x64, Linux x64, Linux arm64]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a minimal example and redact paths, account data, conversations, and keys.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or screenshots
+      description: Never attach config.json, .credentials.yaml, API keys, or private session content.

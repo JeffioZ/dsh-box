@@ -1,117 +1,89 @@
 # DSHBox
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 [Tauri v2](https://tauri.app)。主界面加载官方 `dsh web`，并提供标题栏、状态栏、托盘、更新与本地文件菜单等桌面能力。
+[English](README.en.md) · [架构](docs/architecture.md) · [开发指南](docs/development.md) · [安全模型](docs/security.md)
 
-<p align="center">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-5686fe" />
-  <img alt="Platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-5686fe" />
-  <img alt="Runtime" src="https://img.shields.io/badge/dsh-latest-5686fe" />
-  <img alt="Stack" src="https://img.shields.io/badge/Tauri%20v2%20%7C%20Rust-5686fe" />
-</p>
+DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 Tauri v2、Rust 与原生 HTML/CSS/JavaScript。主界面直接加载官方 `dsh web`，外壳负责运行环境、窗口、托盘、更新与本地系统集成，不 fork 或 patch dsh。
 
-## 目录
-
-- [功能](#功能)
-- [平台支持](#平台支持)
-- [快速开始](#快速开始)
-- [配置](#配置)
-- [构建](#构建)
-- [项目结构](#项目结构)
-- [边界与规划](#边界与规划)
-- [许可](#许可)
-- [内置插件市场](#内置插件市场)
+> 当前发布产物未签名。Windows SmartScreen、macOS Gatekeeper 或 Linux 安全策略可能要求手动放行；详情见[安全模型](docs/security.md)。
 
 ## 功能
 
 | 能力 | 说明 |
 |---|---|
-| **单文件分发** | Windows 单个 exe、无控制台窗口，双击即用；macOS dmg 拖入 Applications；Linux 解压即用 |
-| **零依赖准备** | 自动检测并安装 Node.js 与 dsh；Windows 缺少 WebView2 时引导安装 |
-| **一键更新** | dsh 与 Node.js 事务化更新（失败自动回滚，被打断下次启动自动还原）；应用本体自更新（Windows） |
-| **服务自愈** | 单实例、看门狗自动恢复、端口冲突自动回退、页面挂起自动重载 |
-| **桌面体验** | 托盘常驻、自绘标题栏（主菜单 + 窗口控制）、底部状态栏（会话统计 + API 余额）、统一弹窗（余额/更新/插件/设置/关于） |
-| **插件管理** | 内置插件市场：搜索 npm 上的 dsh 插件，一键安装/卸载（走官方 `dsh plugin`） |
-| **便携模式** | exe 旁放 `portable.txt`，数据跟随 exe，拷 U 盘即用 |
-| **通知与提醒** | 任务完成系统通知（点击回窗口）、运行期每 6 小时自动检查更新 |
-| **双语界面** | 界面语言跟随 dsh 设置（中/英），深浅色随系统/主题自动切换 |
+| 开箱即用 | 自动检测 Node.js、安装 dsh，并在 Windows 缺少 WebView2 时引导安装 |
+| 服务生命周期 | 单实例、端口冲突回退、进程树清理、服务看门狗和页面心跳恢复 |
+| 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、深浅色和中英双语 |
+| 安全更新 | dsh/Node 事务化更新和中断恢复；Windows 应用附件按精确 tag 与 SHA-256 校验 |
+| 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
+| 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次推荐插件可明确取消 |
+| 模型配置 | 类型化校验并导入/导出 `llm-pi-ai` 自定义路由，凭据与设置分开保存 |
+| 便携模式 | Windows exe 同级放置 `portable.txt`，运行时与配置改存相邻 `data/` |
 
-## 平台支持
+## 平台
 
-| 平台 | 架构 | 最低系统版本 | 状态 |
+| 平台 | 架构 | 最低环境 | 发布形式 |
 |---|---|---|---|
-| Windows | x64 | Windows 10 及以上 | 支持；主要测试平台 |
-| macOS | arm64 / x64 | macOS 13.5 及以上 | 支持；CI 产物未签名 |
-| Linux | x64 / arm64 | Ubuntu 22.04 / Debian 12 及等价发行版（WebKitGTK 4.1） | 支持 |
+| Windows | x64 | Windows 10；WebView2 Runtime | 单个 `DSHBox.exe` |
+| macOS | arm64 / x64 | macOS 13.5+ | 未签名 dmg |
+| Linux | x64 / arm64 | Ubuntu 22.04、Debian 12 或等价 WebKitGTK 4.1 环境 | zip |
 
-最低版本取各底层依赖中最严格的一个（dsh 本身是纯 Node.js 工具，三平台通用）：
+Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Linux 上 dsh 的 Landlock 需要内核 5.13+，不满足时由 dsh 自身降级。
 
-- **Windows 10**：Node.js 22 的最低支持版本；WebView2 支持 1803+（Win11 预装，较老系统由外壳引导安装 Runtime）
-- **macOS 13.5**：外壳自动安装的 Node.js 24 LTS 要求 macOS 13.5+
-- **Ubuntu 22.04 / Debian 12**：Tauri v2 依赖 WebKitGTK 4.1（高于 Node 的 glibc 2.28 要求）
+## 安装与首次启动
 
-Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；不满足时 dsh 自动降级，不影响 Web 主界面运行。
+从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应产物：
 
-## 快速开始
+- Windows：运行 `DSHBox.exe`。
+- macOS：把应用拖入 Applications。若 Gatekeeper 拦截，按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
+- Linux：解压后运行 `DSHBox`；请先安装发行版要求的 WebKitGTK 4.1 依赖。
 
-从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应平台的产物：
+首次启动会准备运行时，然后显示可跳过的配置页：
 
-- Windows：直接运行 `DSHBox.exe`
-- macOS：下载 `.dmg`，打开后把 **DeepSeek Harness Box** 拖入 Applications，再从启动台/Applications 启动
-- Linux：解压 `.zip` 后运行 `DSHBox`
+1. API Key 写入 dsh 的 `$DSH_HOME/.credentials.yaml`，不会再复制到 DSHBox 的 `config.json`。
+2. 语言与主题写入 dsh 的 `settings.yaml`，与官方 CLI/Web 界面共享。
+3. 开机自启动使用各平台系统机制。
+4. “安装推荐插件”默认勾选，但可取消；直接跳过首次配置视为不同意自动安装。
 
-各平台产物以最新 Release 附件为准，GitHub Actions 也会产出各平台的构建产物。所有产物均未签名，系统安全策略可能要求手动允许。
+之后可在“桌面端设置 → DeepSeek 凭据”中替换或清除 API Key；若环境变量已提供密钥，该区域只读并明确显示由外部管理。
 
-**macOS 首次运行被 Gatekeeper 拦截时**（提示"无法验证…是否包含恶意软件"）：
+## 配置与数据
 
-1. 右键（或按住 `Ctrl` 点击）应用图标 → **打开** → 在弹窗中再次点击 **打开**，仅首次需要；
-2. 或在终端执行（把应用拖入终端即可自动填入路径）：
-   ```bash
-   xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness Box.app"
-   ```
-3. 若仍被拦：系统设置 → 隐私与安全性 → 找到对应提示 → 点击"仍要打开"。
-
-该提示源于产物未签名/未公证（见"平台支持"），与软件本身无关；签名公证后即可消除。
-
-首次运行会自动补齐运行环境——按需安装 Node.js 与 dsh 包——随后启动 `dsh web`（默认端口 18080）。Linux 还需先安装发行版提供的 WebKitGTK 等 Tauri 系统依赖。
-
-**第一次启动的旅程**：
-
-1. **Loading 界面**：自动检测/安装运行时（进度 + 步骤指示，多步流程一目了然）
-2. **首次使用配置**（全新安装时出现）：引导设置 API Key、语言、主题与开机自启（可跳过，之后仍可在 dsh 设置或桌面端设置中调整）
-3. **主界面**：就绪后自动进入 dsh 官方 Web 界面；底部状态栏显示会话统计与 API 余额，托盘常驻
-
-## 配置
-
-### 数据目录
+默认数据根目录：
 
 | 平台 | 路径 |
 |---|---|
 | Windows | `%LOCALAPPDATA%\DSHBox` |
 | macOS | `~/Library/Application Support/com.deepseek.dsh-box` |
-| Linux | `$XDG_DATA_HOME/com.deepseek.dsh-box`（未设置 `XDG_DATA_HOME` 时为 `~/.local/share/com.deepseek.dsh-box`） |
+| Linux | `$XDG_DATA_HOME/com.deepseek.dsh-box`，未设置时为 `~/.local/share/com.deepseek.dsh-box` |
 
-该目录下会生成 `node/`、`dsh/`、`npm-cache/` 与 `logs/`（`dshbox.log`，时间为 UTC，超过 2 MB 自动轮转为 `.old`）。更新 dsh 或 Node 期间会短暂出现 `dsh-old/` 或 `node-old/` 备份目录，更新成功后自动清理。
+主要内容：
 
-### config.json
+- `config.json`：用户可理解的外壳设置。
+- `state.json`：窗口位置、首次引导和后台维护标记；不建议手工编辑。
+- `node/`、`dsh/`、`npm-cache/`：DSHBox 管理的运行时。
+- `logs/dshbox.log`：UTC 日志，超过 2 MiB 轮转为 `.old`。
+- `$DSH_HOME`：默认 `~/.dsh`，由官方 dsh 与 DSHBox 共享，不位于上述数据根目录。
 
-数据目录下的可选配置文件：
+`config.json` 支持：
 
 ```json
 {
   "port": 18080,
-  "api_key": "sk-...",
   "api_base": "https://api.deepseek.com",
   "language": "zh-CN",
   "hide_tool_calls": false,
   "hide_stats_line": true,
   "hide_statusbar": false,
-  "dsh_update_channel": "latest"
+  "hide_balance": false,
+  "auto_update_plugins": true,
+  "dsh_update_channel": "latest",
+  "close_behavior": "tray",
+  "launch_behavior": "window",
+  "download_source": "auto"
 }
 ```
 
-`dsh_update_channel` 取 `latest`（稳定版，默认）或 `next`（开发者预览，可能包含破坏兼容性的变更）。语言与主题会优先跟随 dsh 的 `settings.yaml`；主题不重复写入 `config.json`。开机自启动由各平台的系统机制管理。
-
-### 环境变量
+`dsh_update_channel` 可取 `latest` 或风险更高的预览通道 `next`。`close_behavior` 可取 `tray` / `quit`，`launch_behavior` 可取 `window` / `tray`，`download_source` 可取 `auto` / `official` / `mirror`。`config.json` 与 `state.json` 职责严格分离，不读取旧文件中的跨界字段。
 
 环境变量优先于 `config.json`：
 
@@ -119,127 +91,85 @@ Linux 上 dsh 的 Landlock 沙箱（文件系统隔离）需要内核 5.13+；�
 |---|---|
 | `DSH_BOX_ROOT` | 覆盖数据根目录 |
 | `DSH_BOX_PORT` | 覆盖监听端口 |
-| `DSH_HOME` | 覆盖 dsh 主目录（官方语义，默认 `~/.dsh`，与官方 dsh CLI 互通） |
-| `DSH_BOX_API_KEY` | 覆盖 API Key |
+| `DSH_BOX_API_KEY` | 覆盖 DeepSeek API Key |
 | `DSH_BOX_API_BASE` | 覆盖 API 基地址 |
-| `DSHD_LANG` | 固定界面语言（`zh-CN` / `en`，重启后生效，优先级最高） |
+| `DSH_HOME` | 覆盖 dsh 官方主目录 |
+| `DSHD_LANG` | 固定 `zh-CN` 或 `en` |
 
-### 便携模式
+API Key 解析顺序为：`DSH_BOX_API_KEY` → `DEEPSEEK_API_KEY` → `$DSH_HOME/.credentials.yaml`。
 
-把 `DSHBox.exe` 所在目录放一个空的 `portable.txt` 文件，数据目录（`node/`、`dsh/`、`logs/`、`config.json`）即跟随 exe 存放在旁边的 `data/` 目录，拷贝到 U 盘即可随身携带。删除 `portable.txt` 即恢复常规模式。`DSH_BOX_ROOT` 环境变量仍优先于便携模式。
+## 内置插件
 
-### API Key
+首次引导可选择安装：
 
-解析顺序：`DSH_BOX_API_KEY` → `config.json` → `DEEPSEEK_API_KEY` → dsh 凭据文件（`$DSH_HOME/.credentials.yaml`，即 `~/.dsh/.credentials.yaml`）。
+- [DSH Market](https://github.com/dsh-market/dsh-market)（`dshmarket`）
+- [DSH File Drop](https://github.com/dannyvan/dsh-file-drop)（`dsh-file-drop`）
 
-> `config.json` 中的 API Key 以明文保存在当前用户的数据目录内，请勿提交到仓库或发送给他人。
+同意后，未安装的推荐插件会在 dsh 就绪后安装；仍保持内置身份的已安装插件每 24 小时检查一次更新。用户主动卸载后不会自动重装。安装、更新和卸载都走 `dsh plugin` CLI；多个手动变更会合并为一次重启，自动维护只在会话空闲后应用。
 
-## 构建
+插件是与 dsh 同环境执行的第三方代码。推荐、内置或市场收录都不构成安全背书；安装前应核实来源。清单维护规则见 [resources/README.md](src-tauri/resources/README.md)。
 
-### 前置要求
+## 开发
 
-- Rust stable
-- Windows 另需 VS2022 C++ 工具链与 Node.js（用于复制产物）
-- Linux 另需 WebKitGTK 系统包（`libwebkit2gtk-4.1-dev`、`libgtk-3-dev`、`libayatana-appindicator3-dev` 等）
-
-### 正式构建
+要求 Rust 1.85+、Node.js，以及对应平台的 Tauri 系统依赖。Windows 推荐 PowerShell 7。
 
 ```powershell
-# 一键构建（Windows）
-pwsh -NoLogo -NoProfile -File .\build.ps1
-# 输出：dist\DSHBox.exe
-
-# 分步
 npm install
-npm run icons                # 生成图标（首次）
-pwsh -File scripts\cargo.ps1 build
-node scripts\copy-exe.mjs
+npm run check
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
-`build.ps1` 与 `scripts/cargo.ps1 build` 只编译、不修改版本号。发布前递增补丁版本请显式运行 `pwsh -File scripts/bump-version.ps1`。
-
-### 开发模式（改 UI 免编译）
+Windows 构建与开发：
 
 ```powershell
-pwsh -File .\dev-build.ps1   # 首次：构建不嵌入资源的开发版（dist-dev\DSHBox-dev.exe）
-pwsh -File .\dev-run.ps1     # 运行：自动启动 UI 静态服务器(4321) + 开发版 exe
-# 之后只改 ui/ 下的文件，重启 dev-run.ps1（或刷新页面）即生效；改 Rust 代码需重新 dev-build
+pwsh -NoLogo -NoProfile -File .\build.ps1
+pwsh -NoLogo -NoProfile -File .\dev-build.ps1
+pwsh -NoLogo -NoProfile -File .\dev-run.ps1
 ```
 
-### CI
-
-GitHub Actions 负责三平台格式检查、单测、Clippy、release 构建与产物上传。
+开发模式通过本地 4321 端口加载 `ui/`，只改 UI 不需要重编 Rust。完整环境、图标、版本和发布流程见[开发指南](docs/development.md)。
 
 ## 项目结构
 
-```
+```text
 desktop/
-  ui/                   # 启动页、标题栏、托盘菜单、统一弹窗（common.css 共享样式）
-  src-tauri/src/        # Rust 外壳（按职责分层）
-    main.rs             # 入口；Windows 含 WebView2 自动安装预检
-    lib.rs              # run() 组装、状态广播、导航、右键菜单注入脚本、自定义协议
-    app_state.rs        # 共享状态：配置、引导阶段、生命周期锁、弹窗轮询数据
-    commands.rs         # Tauri 命令层（IPC 转发，无业务实现）
-    app_dialog.rs       # 统一自绘弹窗（余额/检查更新/插件/设置/关于）
-    dialog.rs           # 原生消息框封装（模态、互斥）
-    file_actions.rs     # 本地文件动作（默认程序打开 / 定位 / 打开方式）
-    icons.rs            # 图标提取（SHGetFileInfo → PNG，含缓存）
-    logging.rs          # 日志（轮转）
-    locale.rs           # 系统语言检测与中英文选择
-    onboarding.rs       # 首次使用配置与持久化
-    plugins.rs          # 插件搜索、安装/卸载与内置插件后台维护
-    stats.rs            # 会话统计读取、格式化与实时速率估算
-    titlebar.rs         # 自绘标题栏（子 webview）
-    tray_menu.rs        # 标题栏/托盘共用菜单模型；Windows 自绘托盘菜单窗口
-    runtime.rs          # Node 检测/安装、dsh 包安装、服务启动
-    versions.rs         # 版本比较、Node 最低版本判定（纯逻辑）
-    update_txn.rs       # 更新事务原语：备份 + 标记 + 中断恢复
-    updater.rs          # 一键更新（dsh / Node）
-    dsh.rs              # 服务生命周期：引导主循环、看门狗、退出清理
-    processes.rs        # 进程管理：树守卫（Windows Job / Unix 进程组）
-    util.rs             # 文本截断等小工具
-    window.rs           # 窗口位置记忆与系统协商补偿、DPI 图标、Win11 圆角
-    balance.rs          # API 余额
-    tray.rs             # 托盘图标与动作
-    autostart.rs        # 开机自启动（三分支）
-  scripts/              # 构建与图标生成脚本（icon-codecs.mjs 为图标编解码）
-  .github/workflows/    # 三平台 CI
+├─ assets/brand/                   # 唯一品牌 SVG 源
+├─ ui/                             # 无打包器的内置页面、共享样式与双语文案
+│  ├─ index.html + startup.*       # 启动页与首次配置
+│  ├─ control-center.*             # 余额/更新/插件/设置/关于
+│  ├─ titlebar.* / statusbar.*     # 主窗口子 WebView
+│  ├─ tray-menu.html + menu.js     # 托盘与菜单交互
+│  └─ common.* + i18n.js           # 共享工具、设计 token、文案
+├─ src-tauri/
+│  ├─ resources/                   # 内置插件清单与页面注入资源
+│  └─ src/
+│     ├─ bootstrap.rs / lib.rs     # 应用装配与公共边界
+│     ├─ app_state/                # 配置、状态、JSON/文本持久化
+│     ├─ commands/                 # 仅做 IPC 来源校验与转发
+│     ├─ runtime/                  # Node、dsh 包和服务启动
+│     ├─ updater/                  # 检查、平台更新与事务恢复
+│     ├─ plugins/                  # CLI 执行、维护策略与手动操作
+│     ├─ model_config/             # 模型路由解析、导入与导出
+│     ├─ webview/                  # 导航边界、自定义协议与注入
+│     └─ platform/windows/         # Windows 专属 WebView2 预检
+├─ scripts/                        # 一致性检查、图标、构建辅助
+└─ .github/workflows/              # 三平台 CI 与 tag 发布
 ```
 
-核心逻辑按职责拆分：`runtime` 负责运行环境，`dsh` 负责服务生命周期，`updater`/`update_txn` 负责更新与恢复，命令层只做 IPC 校验与转发。
+详细依赖方向和启动时序见[架构文档](docs/architecture.md)。
 
-## 边界与规划
+## 项目边界
 
-DSHBox 是 dsh 的**桌面封装**，而不是另一套实现：
+DSHBox 只通过三条通道与 dsh 协作：
 
-- **不改动 dsh**：主界面直接加载官方 `dsh web`，dsh 照常独立升级，外壳随之跟进
-- **只做桌面层**：托盘、标题栏、系统通知、更新、本地文件菜单等桌面体验；不重复实现 dsh 的对话与会话能力，也不另存一份会话数据
-- **交互克制**：仅通过 dsh 官方提供的页面、数据文件与 CLI 与之协作，不依赖任何未公开的内部接口
+1. 向官方 Web 页面注入受限的初始化/菜单脚本。
+2. 读取会话日志，行级合并写入 `$DSH_HOME/settings.yaml` 与 `.credentials.yaml`。
+3. 调用 `dsh web` 和 `dsh plugin ...`。
 
-更多设计取舍见 [docs/why-desktop.md](docs/why-desktop.md)。
+不 fork dsh、不 patch npm 包、不修改会话格式、不重复实现官方 Web UI。更多取舍见[为什么做 DSHBox](docs/why-desktop.md)。
 
-规划中的能力（尚未交付）：
+## 参与与许可
 
-- 手机远程控制：在手机浏览器/App 中继续本机会话
-- IM 通道：在微信/飞书等聊天工具中向 Agent 发起任务
-
-## 许可
-
-[MIT](LICENSE)。第三方依赖遵循其各自许可；dsh 本体使用官方 npm 包原样安装，不影响其官方升级。
-
-## 内置插件市场
-
-DSHBox 默认预装两个社区插件（经 `dsh plugin` CLI 安装；`dsh-file-drop` 为 BSD-3-Clause）：
-
-- [dsh-market](https://github.com/dsh-market/dsh-market)（npm 包 `dshmarket`）——dsh 内的可视化插件市场：社区插件目录浏览、搜索、一键安装、主题切换与备份恢复。
-- [dsh-file-drop](https://github.com/dannyvan/dsh-file-drop)（npm 包 `dsh-file-drop`）——拖拽/点击文件插入对话：Linux 经 uri-list 直取原始路径，Windows/macOS 走插件自带的工作区上传兜底。
-
-**自动安装**：dsh 服务就绪后自动安装未装的内置包并重启服务生效；仅首次引导执行（按包记录 `market_bootstrapped_<pkg>` 标记）。
-**自动更新**：每 24 小时检查一次 npm 最新版本，落后则后台升级并重启服务；检查与升级均静默失败重试，不阻塞使用。可在「设置 → 自动更新内置插件」关闭自动升级（首次预装引导不受影响），或随时在「插件管理」页手动「检查更新 / 更新」。
-**移除**：卸载任一内置包后（`dsh plugin --profile web remove <pkg>`），DSHBox 不会自动重装；更新检查也仅作用于仍已安装的包。
-**安全软件兼容**：插件安装/升级通过 Node.js 调用 pnpm 执行。若安全软件（如火绒）拦截 node.exe 并弹窗询问，请在信任区添加 DSHBox 数据目录（Windows 默认 `%LOCALAPPDATA%\DSHBox`）或其中的 `node\node.exe`；未放行时自动升级会退避重试（24 小时内不重复打扰），可改用「插件管理」页手动更新。
-市场内的插件均为第三方代码，安装前请确认来源可信；列表收录不等于安全背书（见上游 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 的免责声明）。
-
-## 致谢
-
-感谢 DeepSeek Harness 团队与开源社区，以及同类桌面端项目带来的启发；感谢 [dsh-market](https://github.com/dsh-market/dsh-market) 提供的插件市场与 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 维护的社区插件目录；感谢每一位参与测试与反馈的用户。
+提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [SECURITY.md](SECURITY.md)。项目代码采用 [MIT License](LICENSE)；依赖、运行时下载项和品牌资源说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
