@@ -2,17 +2,20 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="common.css" />
   <style>
     /* 与普通弹窗相同：透明宿主窗口只负责承载，卡片背景、圆角、阴影与
-       动效均由内容层绘制。阴影余量须与 tray_menu.rs 的常量同步。 */
+       动效均由内容层绘制。阴影余量须与 tray_menu.rs 的常量同步；DPI
+       取整产生的纵向余量留在透明区，避免拉伸卡片并改变菜单内边距。 */
     html, body { height: 100%; overflow: hidden; }
     * { box-sizing: border-box; }
     body {
-      display: flex; padding: 12px 16px 20px; background: transparent;
+      display: flex; align-items: flex-start;
+      padding: 24px 36px 48px; background: transparent;
     }
     #card {
-      flex: 1; min-width: 0; min-height: 0;
+      flex: none; width: 100%; min-width: 0; min-height: 0;
     }
     #list { display: flex; flex-direction: column; }
   </style>
@@ -27,7 +30,6 @@
   <script>
     dshdApplyI18n();
     const { invoke } = window.__TAURI__.core;
-    const { listen } = window.__TAURI__.event;
     const currentWindow = window.__TAURI__.window.getCurrentWindow();
 
     const card = document.getElementById('card');
@@ -44,13 +46,16 @@
     });
 
     function applyOpen(items, direction) {
-      menu.setItems(items);
+      // 每次展示都重建少量条目，清除 WebView2 在隐藏窗口上偶发保留的
+      // hover/pressed 栅格层；不能只比较数据后复用旧 DOM。
+      menu.setItems(items, true);
       if (document.activeElement && document.activeElement !== document.body) {
         document.activeElement.blur();
       }
       // 隐藏状态完成内容与初态准备；show 后下一绘制帧只改变 opacity/transform。
       // 快速重开会先取消旧帧，最终语义状态不依赖 transitionend。
-      menuMotion.open(direction === 'down' ? '-3px' : '3px');
+      menuMotion.open(direction === 'down' ? '-4px' : '4px');
+      return true;
     }
 
     function applyClose() {
@@ -85,7 +90,6 @@
     // 旧事件链与页面首次加载仍可刷新，作为 IPC/极早右键场景的兜底。
     window.__dshdRefresh = refresh;
 
-    listen('tray-menu-open', (e) => menu.setItems(e.payload));
     window.addEventListener('focus', () => {
       if (document.getElementById('list').children.length === 0) refresh();
       else menu.focusFirst();

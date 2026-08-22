@@ -1,6 +1,14 @@
 //! dsh web 服务命令与环境。
 
 use super::*;
+use std::process::Child;
+
+pub(crate) struct StartedServer {
+    pub child: Child,
+    pub guard: Option<TreeGuard>,
+    /// 本次启动前日志文件的字节偏移；`--port 0` 的实际端口从此处之后解析。
+    pub log_offset: u64,
+}
 
 // ---------- 服务启动 ----------
 
@@ -65,12 +73,13 @@ fn dsh_supports_no_open(config: &Config) -> bool {
     version_supports_no_open(version)
 }
 
-/// 隐藏窗口启动 `dsh web` 服务，返回 (pid, 进程树守卫)。
+/// 隐藏窗口启动 `dsh web` 服务。保留 Child 供调用方监控早退；只保留 PID
+/// 无法及时发现端口绑定失败，会让启动页误等完整超时。
 pub(crate) fn start_server(
     _app: &AppHandle,
     config: &Config,
     node_exe: &Path,
-) -> Result<(u32, Option<TreeGuard>), String> {
+) -> Result<StartedServer, String> {
     let mut args = vec![config.dsh_entry().to_string_lossy().into_owned()];
     args.push("web".into());
     // rc.8+ 支持 --no-open（桌面壳自己导航，不需要 dsh 自动弹浏览器）
@@ -81,6 +90,7 @@ pub(crate) fn start_server(
     args.push(config.port.to_string());
     let envs = base_envs(node_exe, config);
     let log = config.dsh_log();
+    let log_offset = std::fs::metadata(&log).map(|meta| meta.len()).unwrap_or(0);
     let child =
         processes::spawn_process(node_exe, &args, &envs, Some(&config.dsh_dir()), Some(&log))
             .map_err(|e| {
@@ -89,11 +99,11 @@ pub(crate) fn start_server(
                     format!("Failed to start the dsh service: {e}"),
                 )
             })?;
-    let pid = child.id();
-
     // 建立进程树守卫（Windows Job / Unix 进程组）；失败不致命，退出时另有兜底。
     let guard = processes::TreeGuard::from_child(&child);
-    // child 句柄随函数结束关闭；进程由守卫/taskkill 管理。
-    drop(child);
-    Ok((pid, guard))
+    Ok(StartedServer {
+        child,
+        guard,
+        log_offset,
+    })
 }

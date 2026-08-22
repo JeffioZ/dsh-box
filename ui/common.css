@@ -37,6 +37,8 @@
   --dshd-accent-surface: #4868b2;
   --dshd-accent-surface-hover: #3f5c99;
   --dshd-accent-surface-pressed: #33539f;
+  --dshd-accent-subtle: rgba(86, 134, 254, 0.08);
+  --dshd-accent-border: rgba(86, 134, 254, 0.32);
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
   --dshd-error: #f85149;
@@ -45,11 +47,13 @@
   --dshd-success: #3fb950;
   --dshd-success-text: #56d364;
   --dshd-warning: #d29922;
+  --dshd-input-bg: rgba(255, 255, 255, 0.06);
+  --dshd-input-hover: rgba(255, 255, 255, 0.1);
   --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
   --dshd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
-  /* 标题栏主菜单与独立托盘菜单共用同一层级阴影。 */
-  --dshd-menu-shadow: 0 1px 3px rgba(0, 0, 0, .24),
-    0 4px 12px rgba(0, 0, 0, .32);
+  /* dsh shadow-lv3：菜单、下拉与弹窗使用同一浮层层级。 */
+  --dshd-shadow-lv3: 0 0 1px rgba(0, 0, 0, .2),
+    0 0 4px rgba(0, 0, 0, .02), 0 12px 32px rgba(0, 0, 0, .08);
 
   /* 字号层级（正文基准 13px，与 dsh 界面一致） */
   --dshd-fs-xs: 11px;
@@ -59,7 +63,7 @@
   --dshd-fs-lg: 20px;
   --dshd-fs-xl: 22px;
 
-  /* 圆角层级（dsh 设计系统：菜单 7 / 卡片 10 / 面板 12 / 按钮 18 pill） */
+  /* 圆角层级（dsh 设计系统：紧凑菜单 7 / 条目 10 / 菜单面板 12） */
   --dshd-r-sm: 7px;
   --dshd-r-md: 10px;
   --dshd-r-lg: 12px;
@@ -129,14 +133,17 @@
     --dshd-accent-surface: #4868b2;
     --dshd-accent-surface-hover: #3f5c99;
     --dshd-accent-surface-pressed: #33539f;
+    --dshd-accent-subtle: rgba(65, 118, 230, 0.07);
+    --dshd-accent-border: rgba(65, 118, 230, 0.26);
     --dshd-error: #b42318;
     --dshd-error-text: #b42318;
     --dshd-success: #1a7f37;
     --dshd-success-text: #1a7f37;
     --dshd-warning: #9a6700;
+    --dshd-input-bg: rgba(38, 49, 72, 0.045);
+    --dshd-input-hover: rgba(38, 49, 72, 0.075);
     --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
     --dshd-scroll-thumb-hover: rgba(38, 49, 72, 0.4);
-    --dshd-menu-shadow: 0 4px 12px rgba(0, 0, 0, .10);
   }
 }
 
@@ -165,21 +172,22 @@
   padding: 4px;
   background: var(--dshd-card);
   border: 1px solid var(--dshd-border);
-  /* 底部由阴影收边；若沿用与组间分隔线相同的描边色，会让末项看起来
-     像还跟着一个空分组。透明边仍保留 1px 几何占位，不改变菜单尺寸。 */
-  border-bottom-color: transparent;
-  border-radius: var(--dshd-r-sm);
-  box-shadow: var(--dshd-menu-shadow);
+  border-radius: var(--dshd-r-lg);
+  box-shadow: var(--dshd-shadow-lv3);
+  --dsh-scrollbar-thumb: var(--dshd-scroll-thumb);
+  --dsh-scrollbar-thumb-hover: var(--dshd-scroll-thumb-hover);
 }
 
 /* 两种菜单宿主共用的可中断动效状态机。宿主只需设置进入方向变量，并在
    关闭完成后分别缩回子 WebView 或隐藏原生窗口。 */
 .dshd-menu-motion {
-  --dshd-menu-enter-y: -3px;
+  --dshd-menu-enter-y: -4px;
   opacity: 0;
   transform: translateY(var(--dshd-menu-enter-y));
   pointer-events: none;
   transition: none;
+}
+.dshd-menu-motion.dshd-menu-animating {
   will-change: opacity, transform;
 }
 .dshd-menu-motion.dshd-menu-open {
@@ -204,28 +212,30 @@
   }
 }
 
-/* WebView2/Chromium 与 Firefox 风格均覆盖；仅溢出时出现，不预留空槽。 */
+/* 滚动条与 dsh 官方实现保持互斥路径：若同时声明标准属性和 WebKit
+   伪元素，Chromium 会禁用 thumb:hover，导致悬停态永远不生效。 */
 .dshd-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: var(--dshd-scroll-thumb) transparent;
-  /* 常驻预留滚动条槽位：内容溢出出现滚动条时正文不横向跳动 */
-  scrollbar-gutter: stable;
+  --dsh-scrollbar-thumb: var(--dshd-scroll-thumb);
+  --dsh-scrollbar-thumb-hover: var(--dshd-scroll-thumb-hover);
 }
-.dshd-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-.dshd-scroll::-webkit-scrollbar-track { background: transparent; }
-.dshd-scroll::-webkit-scrollbar-thumb {
-  min-height: 32px;
-  border: 2px solid var(--dshd-card);
-  border-radius: 999px;
-  background: var(--dshd-scroll-thumb);
-  background-clip: padding-box;
+@supports not selector(::-webkit-scrollbar) {
+  .dshd-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--dsh-scrollbar-thumb) transparent;
+  }
 }
-.dshd-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--dshd-scroll-thumb-hover); }
-.dshd-scroll::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--dsh-scrollbar-thumb, var(--dshd-scroll-thumb));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--dsh-scrollbar-thumb-hover, var(--dshd-scroll-thumb-hover));
+}
 .dshd-scroll::-webkit-scrollbar-corner { background: transparent; }
 
-/* 菜单条目：min-h40 / pad 8-10 / 图标 16 / 分隔间距 8。
-   条目 4px 圆角与菜单表面 7px 圆角、4px 内边距保持同心观感。 */
+/* 菜单条目：与 dsh Menu_cell 保持 min-h40 / pad 8-10 / r10。 */
 .dshd-row {
   display: flex;
   align-items: center;
@@ -235,7 +245,7 @@
   padding: 8px 10px;
   box-sizing: border-box;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   background: transparent;
   color: var(--dshd-text);
   font: inherit;
@@ -249,18 +259,39 @@
 .dshd-row { transition: var(--dshd-anim-state); }
 .dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
-.dshd-row.danger:hover { background: var(--dshd-danger); color: #fff; }
-.dshd-row.danger:active, .dshd-row.danger.pressed { background: var(--dshd-danger-pressed); color: #fff; }
+.dshd-row.danger:not(:disabled):hover { background: var(--dshd-danger); color: #fff; }
+.dshd-row.danger:not(:disabled):active,
+.dshd-row.danger:not(:disabled).pressed { background: var(--dshd-danger-pressed); color: #fff; }
 .dshd-row:disabled { cursor: default; opacity: .55; }
 .dshd-row:disabled:hover { background: transparent; }
-.dshd-row .ic { flex: none; width: 16px; height: 16px; }
+.dshd-row .ic { flex: none; width: 16px; height: 16px; color: var(--dshd-text-dim); }
+.dshd-row.danger:not(:disabled):hover .ic,
+.dshd-row.danger:not(:disabled):active .ic,
+.dshd-row.danger:not(:disabled).pressed .ic { color: currentColor; }
 .dshd-row .ic svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .dshd-row .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dshd-row .dim { flex: none; font-size: 12px; color: var(--dshd-text-dim); }
 
+/* 内置输入框右键菜单复用应用菜单的表面、条目、阴影与键盘态。 */
+.dshd-text-context-menu {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  min-width: 168px;
+  max-width: calc(100vw - 16px);
+  font-size: 14px;
+  line-height: 22px;
+}
+.dshd-text-context-menu[hidden] { display: none; }
+.dshd-text-context-list {
+  min-width: 160px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
 /* 系统“减弱动态效果”：关闭 hover 过渡 */
 @media (prefers-reduced-motion: reduce) {
-  .dshd-row, .dshd-btn, .dshd-x { transition: none; }
+  .dshd-row, .dshd-btn, .dshd-x, .dshd-input { transition: none; }
 }
 
 .dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
@@ -268,7 +299,7 @@
 /* 弹窗按钮 */
 .dshd-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  height: 30px;
+  height: 32px;
   padding: 0 14px;
   border: 1px solid var(--dshd-border);
   /* dsh 按钮圆角：18px pill（design-platform.css） */
@@ -292,6 +323,75 @@
 .dshd-btn:disabled:hover { background: transparent; }
 .dshd-btn.primary:disabled:hover { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); }
 
+/* 文本输入控件共享多态。页面只通过 --dshd-input-height 和布局类调整密度，
+   颜色、边框、焦点、错误、禁用与占位符状态不再各自实现。 */
+.dshd-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--dshd-input-height, 34px);
+  padding: 0 10px;
+  border: 1px solid var(--dshd-border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dshd-input-bg);
+  color: var(--dshd-text);
+  font: inherit;
+  transition: var(--dshd-anim-state);
+  user-select: text;
+}
+.dshd-input::placeholder { color: var(--dshd-text-dim); opacity: .72; }
+.dshd-input:hover:not(:disabled):not(:focus) {
+  border-color: var(--dshd-border-strong);
+  background: var(--dshd-input-hover);
+}
+.dshd-input:focus-visible {
+  border-color: transparent;
+  outline: 2px solid var(--dshd-accent);
+  outline-offset: 1px;
+  background: var(--dshd-input-bg);
+}
+.dshd-input[aria-invalid="true"] { border-color: var(--dshd-error-text); }
+.dshd-input[aria-invalid="true"]:focus-visible { outline-color: var(--dshd-error-text); }
+.dshd-input:disabled { cursor: not-allowed; opacity: .55; }
+.dshd-textarea {
+  height: auto;
+  min-height: 72px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  resize: vertical;
+  line-height: 1.4;
+}
+.dshd-password-field {
+  --dshd-input-height: 34px;
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.dshd-password-field .dshd-input {
+  height: var(--dshd-input-height, 34px);
+  min-width: 0;
+  padding-right: 40px;
+}
+/* WebView2 会为 password 输入框添加系统 reveal 控件。已有自绘按钮时必须
+   隐藏该 UA 控件，否则输入后会同时出现两个可操作的眼睛图标。 */
+.dshd-password-field .dshd-input::-ms-reveal,
+.dshd-password-field .dshd-input::-ms-clear {
+  display: none;
+}
+.dshd-password-action {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 28px;
+  height: 28px;
+  transform: translateY(-50%);
+}
+.dshd-password-action[hidden] { display: none; }
+.dshd-password-action svg { width: 16px; height: 16px; }
+@media (prefers-reduced-motion: reduce) {
+  .dshd-password-action { transition: none; }
+}
+
 /* 弹窗头部/关闭按钮 */
 .dshd-head {
   display: flex;
@@ -306,22 +406,33 @@
   font-weight: 500;
   line-height: 24px;
 }
-.dshd-head .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshd-head .title {
+  flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font: inherit;
+}
 .dshd-x {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   border: none;
   /* dsh 设置弹窗关闭按钮：28px 圆形 */
   border-radius: 28px;
   background: transparent;
+  padding: 0;
   color: var(--dshd-text-dim);
-  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
-  font-size: 10px;
   cursor: pointer;
   outline: none;
 }
 .dshd-x:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 .dshd-x:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-x:active { background: var(--dshd-pressed); }
+.dshd-x:disabled { opacity: .55; cursor: default; }
+.dshd-x:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
 .dshd-x { transition: var(--dshd-anim-state); }
+.dshd-x svg {
+  width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}

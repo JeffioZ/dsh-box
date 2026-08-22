@@ -53,6 +53,7 @@ if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').match
 /// 可编辑区弹 剪切/复制/粘贴/全选（禁用态+快捷键提示），文件路径按钮弹
 /// 打开/打开文件所在位置/打开方式/复制路径。样式用 dsh 设计系统变量构建——深浅色、
 /// DPI 均自适应。经 navigate 后的 eval 注入（initialization_script 对外部 URL 导航不可靠）。
+const EDIT_CONTEXT_INJECT: &str = include_str!("../../../ui/edit-context.js");
 const MENU_INJECT: &str = include_str!("../../resources/injections/context-menu.js");
 
 /// 隐藏工具调用开关开启时注入的样式脚本（navigate 注入与托盘切换共用）。
@@ -232,7 +233,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
            fix(); \
            const el = document.querySelector('head > title'); \
            if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-           {menu} {heartbeat} {hide_tools} {hide_stats} \
+           {edit_context} {menu} {heartbeat} {hide_tools} {hide_stats} \
            window.__dshdInit = 'ready'; \
          }} catch (error) {{ \
            delete window.__dshdInit; \
@@ -241,6 +242,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
            delete window.__dshdProtocolToken; \
          }} \
          }})();",
+        edit_context = EDIT_CONTEXT_INJECT,
         menu = MENU_INJECT,
         heartbeat = HEARTBEAT_INJECT,
     );

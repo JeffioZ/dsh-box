@@ -13,6 +13,7 @@ pub fn preview_model_import(
     yaml: String,
 ) -> Result<crate::model_config::ImportPreview, String> {
     ensure_local_origin(&webview)?;
+    ensure_local_service_scope(&app)?;
     let config = app.state::<AppState>().config();
     crate::model_config::preview(&config, &yaml)
 }
@@ -26,6 +27,7 @@ pub fn apply_model_import(
     payload: crate::model_config::ImportApplyPayload,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    ensure_local_service_scope(&app)?;
     crate::model_config::apply(&app, payload)
 }
 
@@ -37,6 +39,7 @@ pub fn export_model_config(
     webview: tauri::Webview,
 ) -> Result<Option<String>, String> {
     ensure_local_origin(&webview)?;
+    ensure_local_service_scope(&app)?;
     let config = app.state::<AppState>().config();
     crate::model_config::export_yaml(&config)
 }

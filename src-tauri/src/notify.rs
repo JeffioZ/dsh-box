@@ -30,8 +30,18 @@ pub fn start_task_watch(app: AppHandle) {
         let mut watched: Option<WatchedSession> = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
-            if app.state::<AppState>().is_quitting() {
+            let state = app.state::<AppState>();
+            if state.is_quitting() {
                 return;
+            }
+            if state.service_ownership().is_external() {
+                watched = None;
+                continue;
+            }
+            if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
+                || state.phase() != crate::app_state::BootPhase::Ready
+            {
+                continue;
             }
             if let Err(e) = poll_once(&app, &mut watched) {
                 crate::logging::log(&format!("notify: 轮询失败：{e}"));
@@ -118,8 +128,8 @@ fn show_notification(app: &AppHandle) -> Result<(), String> {
         .title(crate::locale::text("任务完成", "Task complete").to_string())
         .body(
             crate::locale::text(
-                "Agent 已完成一轮任务，点击窗口查看。",
-                "The agent finished a task. Open the window to view it.",
+                "任务已完成，点击查看结果。",
+                "Task complete. Click to view the result.",
             )
             .to_string(),
         )

@@ -256,8 +256,8 @@ mod imp {
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
-             Name=DeepSeek Harness Box\n\
-             Comment=DeepSeek Harness Box\n\
+             Name=DSHBox\n\
+             Comment=DeepSeek Harness desktop client\n\
              Exec={exec}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n"

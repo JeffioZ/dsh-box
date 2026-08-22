@@ -1,6 +1,8 @@
 //! 更新查询、周期检查与结果 DTO。
 
+use super::powershell::parse_releases_atom;
 use super::*;
+use std::io::Read;
 
 #[derive(Serialize, Clone, Default)]
 pub struct CheckResult {
@@ -209,8 +211,26 @@ fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
 
 /// 查询 dsh 与 Node 是否有可用更新。
 pub fn check(app: &AppHandle) -> CheckResult {
-    let config = app.state::<AppState>().config();
+    let state = app.state::<AppState>();
+    let external_service = state.service_ownership().is_external();
+    let config = state.config();
     let mut result = CheckResult::default();
+
+    if external_service {
+        // 外部模式只检查 DSHBox 自身与可选系统工具；本地 dsh/Node/npm 既不
+        // 代表当前连接，也不可从此处更新，连版本网络请求都不应发起。
+        let app_handle = std::thread::spawn(check_app_update);
+        #[cfg(windows)]
+        let pwsh_handle = std::thread::spawn(check_pwsh_info);
+        if let Ok(app_info) = app_handle.join() {
+            result.app = app_info;
+        }
+        #[cfg(windows)]
+        if let Ok(info) = pwsh_handle.join() {
+            result.pwsh = Some(info);
+        }
+        return result;
+    }
 
     // 三个独立检测（npm HTTP / Node 检测 + LTS HTTP / GitHub HTTP）并行执行，
     // 检查弹窗等待时间从“三者之和”缩短为“最慢者”。
@@ -289,26 +309,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
 
     // PowerShell 7（可选增强，仅 Windows——macOS/Linux 有各自的系统终端）。
     #[cfg(windows)]
-    let pwsh_handle = std::thread::spawn(|| {
-        let installed = pwsh_version();
-        match latest_pwsh_version() {
-            Ok(latest) => (
-                installed.clone(),
-                Some(latest.clone()),
-                None,
-                match &installed {
-                    Some(cur) => {
-                        versions::compare_versions(&latest, cur) == std::cmp::Ordering::Greater
-                    }
-                    None => true,
-                },
-            ),
-            Err(error) => {
-                crate::logging::log(&format!("updater: PowerShell 最新版本查询失败：{error}"));
-                (installed, None, Some(error), false)
-            }
-        }
-    });
+    let pwsh_handle = std::thread::spawn(check_pwsh_info);
     // 应用自身更新（GitHub Releases；失败静默，不阻塞其他检查）
     let app_handle = std::thread::spawn(check_app_update);
 
@@ -378,13 +379,8 @@ pub fn check(app: &AppHandle) -> CheckResult {
         });
     }
     #[cfg(windows)]
-    if let Ok((installed, latest, latest_error, update_available)) = pwsh_handle.join() {
-        result.pwsh = Some(PwshInfo {
-            installed,
-            latest,
-            latest_error,
-            update_available,
-        });
+    if let Ok(info) = pwsh_handle.join() {
+        result.pwsh = Some(info);
     }
     if let Ok(app_info) = app_handle.join() {
         result.app = app_info;
@@ -396,6 +392,33 @@ pub fn check(app: &AppHandle) -> CheckResult {
         }
     }
     result
+}
+
+#[cfg(windows)]
+fn check_pwsh_info() -> PwshInfo {
+    let installed = pwsh_version();
+    match latest_pwsh_version() {
+        Ok(latest) => PwshInfo {
+            installed: installed.clone(),
+            latest: Some(latest.clone()),
+            latest_error: None,
+            update_available: installed
+                .as_ref()
+                .map(|current| {
+                    versions::compare_versions(&latest, current) == std::cmp::Ordering::Greater
+                })
+                .unwrap_or(true),
+        },
+        Err(error) => {
+            crate::logging::log(&format!("updater: PowerShell 最新版本查询失败：{error}"));
+            PwshInfo {
+                installed,
+                latest: None,
+                latest_error: Some(error),
+                update_available: false,
+            }
+        }
+    }
 }
 
 /// 应用自身更新检查：GitHub Releases latest 的版本号对比。

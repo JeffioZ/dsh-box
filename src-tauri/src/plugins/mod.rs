@@ -220,15 +220,18 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
         .get(&url)
         .header("User-Agent", "DSHBox")
         .call()
-        .map_err(|e| format!("搜索失败：{e}"))?;
+        .map_err(|e| crate::locale::error("搜索失败", "Search failed", e))?;
     use std::io::Read;
     let mut text = String::new();
     resp.into_body()
         .into_reader()
         .read_to_string(&mut text)
-        .map_err(|e| format!("读取搜索响应失败：{e}"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("解析搜索响应失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::error("读取搜索响应失败", "Failed to read the search response", e)
+        })?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        crate::locale::error("解析搜索响应失败", "Failed to parse the search response", e)
+    })?;
     let mut out = vec![];
     if let Some(objects) = json.get("objects").and_then(|v| v.as_array()) {
         for obj in objects {

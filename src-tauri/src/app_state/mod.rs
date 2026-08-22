@@ -10,7 +10,7 @@ use managed_file::merge_section_field;
 pub(crate) use managed_file::{atomic_write, update_text_file};
 pub(crate) use store::{load_state_value, save_config_value, save_state_value};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -20,10 +20,13 @@ use crate::processes::TreeGuard;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BootPhase {
     Starting,
+    SwitchingService,
+    ServiceChoice,
     InstallingNode,
     InstallingDsh,
     StartingServer,
     Ready,
+    Cancelled,
     Error,
 }
 
@@ -31,13 +34,47 @@ impl BootPhase {
     pub fn as_str(&self) -> &'static str {
         match self {
             BootPhase::Starting => "starting",
+            BootPhase::SwitchingService => "switching-service",
+            BootPhase::ServiceChoice => "service-choice",
             BootPhase::InstallingNode => "installing-node",
             BootPhase::InstallingDsh => "installing-dsh",
             BootPhase::StartingServer => "starting-server",
             BootPhase::Ready => "ready",
+            BootPhase::Cancelled => "cancelled",
             BootPhase::Error => "error",
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServiceOwnership {
+    None,
+    Managed,
+    External,
+    ExternalDisconnected,
+}
+
+impl ServiceOwnership {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Managed => "managed",
+            Self::External => "external",
+            Self::ExternalDisconnected => "external-disconnected",
+        }
+    }
+
+    pub fn is_external(self) -> bool {
+        matches!(self, Self::External | Self::ExternalDisconnected)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExternalServiceCandidate {
+    pub port: u16,
+    pub version: String,
+    pub cwd: String,
+    pub home: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -61,6 +98,33 @@ pub struct StatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     pub download_source: String,
+    /// 当前引导轮次。安装操作必须携带该值，过期页面不能影响新一轮安装。
+    pub install_generation: u64,
+    /// 当前阶段是否仍接受取消或切换下载源。
+    pub can_cancel: bool,
+    /// 服务归属决定哪些操作可由 DSHBox 执行（外部服务绝不停止或更新）。
+    pub service_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_service: Option<ExternalServiceCandidate>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum InstallAction {
+    None,
+    Cancel,
+    SwitchSource,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InstallControl {
+    generation: u64,
+    action: InstallAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ServiceChoice {
+    pub generation: u64,
+    pub reuse: bool,
 }
 
 /// dev 构建标记（setup 时按 bake 的 devUrl 判定一次）。dev 构建下
@@ -82,6 +146,11 @@ static ONBOARDING_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 pub(crate) fn mark_onboarding_done() {
     ONBOARDING_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn mark_onboarding_pending() {
+    ONBOARDING_DONE.store(false, std::sync::atomic::Ordering::Relaxed);
+    ONBOARDING_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub(crate) fn onboarding_done() -> bool {
@@ -113,6 +182,8 @@ pub(crate) fn onboarding_required(root: &Path) -> bool {
 
 pub(crate) struct Inner {
     config: Config,
+    /// 用户配置的托管服务首选端口；运行时接入外部/自动端口时不覆盖。
+    managed_port_preference: u16,
     phase: BootPhase,
     message: String,
     detail: String,
@@ -120,11 +191,15 @@ pub(crate) struct Inner {
     job: Option<TreeGuard>,
     /// 开发模式 UI 静态服务器守卫；正式版始终为 None。
     dev_ui_job: Option<TreeGuard>,
-    dsh_pid: Option<u32>,
+    /// 必须保留 Child 才能及时发现 EADDRINUSE 等启动失败，避免假等完整超时。
+    dsh_child: Option<std::process::Child>,
+    service_ownership: ServiceOwnership,
+    external_service: Option<ExternalServiceCandidate>,
     quitting: bool,
     /// 更新进行中（看门狗跳过自动重启）。
     updating: bool,
     retry_tx: Sender<()>,
+    service_choice_tx: Sender<ServiceChoice>,
     /// 启动页淡出完成通知；每次 Ready 前替换，旧页面的迟到通知不会影响下一轮。
     startup_transition_tx: Option<Sender<()>>,
     /// 当前使用 Node 的版本（boot 时检测一次缓存，get_status 免 spawn）。
@@ -154,6 +229,8 @@ pub(crate) struct Inner {
     /// 已后台预下载的应用更新（版本 + GitHub 资产 SHA-256，Windows 专属）。
     #[cfg(windows)]
     app_update_ready: Option<(String, String)>,
+    /// 安装控制与引导阶段共用同一把锁，避免“阶段已变但取消仍落到下一轮”的竞态。
+    install_control: InstallControl,
 }
 
 /// 全局状态（跨线程共享）。
@@ -163,7 +240,7 @@ pub struct AppState {
     lifecycle: Mutex<()>,
     /// 仅注入 dsh 主页面的自定义协议随机令牌。
     protocol_token: String,
-    install_cancelled: std::sync::atomic::AtomicBool,
+    service_choice_rx: Mutex<Receiver<ServiceChoice>>,
 }
 
 /// boot_loop 的“重试”信号接收端（启动时存入，仅取一次）。
@@ -185,6 +262,7 @@ impl AppState {
             .collect();
 
         let (retry_tx, retry_rx) = std::sync::mpsc::channel::<()>();
+        let (service_choice_tx, service_choice_rx) = std::sync::mpsc::channel::<ServiceChoice>();
         *RETRY_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(retry_rx);
         let config = Config::load();
         let language_override = std::env::var("DSHD_LANG").ok();
@@ -196,17 +274,22 @@ impl AppState {
             .or(config.load_dsh_locale())
             .or(config.ui_language.as_deref());
         crate::locale::set_preference(preference);
+        let managed_port_preference = config.port;
         let inner = Inner {
             config,
+            managed_port_preference,
             phase: BootPhase::Starting,
             message: String::new(),
             detail: String::new(),
             job: None,
             dev_ui_job: None,
-            dsh_pid: None,
+            dsh_child: None,
+            service_ownership: ServiceOwnership::None,
+            external_service: None,
             quitting: false,
             updating: false,
             retry_tx,
+            service_choice_tx,
             startup_transition_tx: None,
             node_version: None,
             npm_version: None,
@@ -224,12 +307,16 @@ impl AppState {
             heartbeat_failures: 0,
             #[cfg(windows)]
             app_update_ready: None,
+            install_control: InstallControl {
+                generation: 0,
+                action: InstallAction::None,
+            },
         };
         AppState {
             inner: Arc::new(Mutex::new(inner)),
             lifecycle: Mutex::new(()),
             protocol_token,
-            install_cancelled: std::sync::atomic::AtomicBool::new(false),
+            service_choice_rx: Mutex::new(service_choice_rx),
         }
     }
 
@@ -278,19 +365,39 @@ impl AppState {
         &self.protocol_token
     }
 
-    pub(crate) fn request_install_cancel(&self) {
-        self.install_cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
+    /// 开始新一轮引导并使旧页面持有的安装操作失效。
+    pub(crate) fn begin_boot_attempt(&self) -> u64 {
+        let mut inner = self.lock_inner();
+        inner.install_control.generation = inner.install_control.generation.wrapping_add(1).max(1);
+        inner.install_control.action = InstallAction::None;
+        inner.install_control.generation
     }
 
-    pub(crate) fn clear_install_cancel(&self) {
-        self.install_cancelled
-            .store(false, std::sync::atomic::Ordering::Release);
+    /// 请求终止当前安装。返回 false 表示页面轮次已过期或安装已结束；该情况
+    /// 属于幂等完成，不应再向用户显示“没有可取消的安装”。
+    pub(crate) fn request_install_action(&self, generation: u64, action: InstallAction) -> bool {
+        let mut inner = self.lock_inner();
+        if inner.install_control.generation != generation
+            || !matches!(
+                inner.phase,
+                BootPhase::InstallingNode | BootPhase::InstallingDsh
+            )
+        {
+            return false;
+        }
+        // 切源包含“取消当前下载并立即重启”，优先级高于普通取消。
+        if inner.install_control.action != InstallAction::SwitchSource {
+            inner.install_control.action = action;
+        }
+        true
     }
 
     pub(crate) fn install_cancelled(&self) -> bool {
-        self.install_cancelled
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.install_action() != InstallAction::None
+    }
+
+    pub(crate) fn install_action(&self) -> InstallAction {
+        self.lock_inner().install_control.action
     }
 
     pub fn config(&self) -> Config {
@@ -403,13 +510,37 @@ impl AppState {
         })
     }
 
-    pub fn set_download_source(&self, value: &str) -> Result<(), String> {
+    pub(crate) fn request_install_source(
+        &self,
+        generation: u64,
+        value: &str,
+    ) -> Result<bool, String> {
         if !matches!(value, "auto" | "official" | "mirror") {
             return Err(crate::locale::text("未知下载源。", "Unknown download source.").into());
         }
-        self.persist_config_change("download_source", serde_json::json!(value), |config| {
-            config.download_source = value.to_string()
-        })
+        let mut inner = self.lock_inner();
+        if inner.install_control.generation != generation {
+            return Ok(false);
+        }
+        let restart_install = matches!(
+            inner.phase,
+            BootPhase::InstallingNode | BootPhase::InstallingDsh
+        );
+        if !restart_install && inner.phase != BootPhase::Cancelled {
+            return Ok(false);
+        }
+        // 校验轮次、落盘和登记切源必须在同一临界区内完成：过期页面不能
+        // 只改配置不重启，落盘失败也不能误取消当前安装。
+        save_config_value(
+            &inner.config.root,
+            "download_source",
+            serde_json::json!(value),
+        )?;
+        inner.config.download_source = value.to_string();
+        if restart_install {
+            inner.install_control.action = InstallAction::SwitchSource;
+        }
+        Ok(restart_install)
     }
 
     /// 首次使用配置是否尚未完成；开发构建仍每次展示以便测试。
@@ -418,7 +549,19 @@ impl AppState {
     }
 
     pub fn snapshot(&self) -> StatusPayload {
-        let (phase, message, detail, port, config, node_version, npm_version) = {
+        let (
+            phase,
+            message,
+            detail,
+            port,
+            config,
+            node_version,
+            npm_version,
+            install_generation,
+            install_action,
+            service_ownership,
+            external_service,
+        ) = {
             let g = self.lock_inner();
             (
                 g.phase,
@@ -428,12 +571,18 @@ impl AppState {
                 g.config.clone(),
                 g.node_version.clone(),
                 g.npm_version.clone(),
+                g.install_control.generation,
+                g.install_control.action,
+                g.service_ownership,
+                g.external_service.clone(),
             )
         };
         // 缓存缺失时即时检测一次：启动页首帧就显示完整的版本信息
         // （Node 版本由 boot 线程稍后检测，直接等会导致信息出现太晚、
         // 启动快时刚显示就随页面导航消失）
-        let node_version = if node_version.is_some() {
+        let node_version = if external_service.is_some() {
+            None
+        } else if node_version.is_some() {
             node_version
         } else {
             let version = crate::runtime::current_node_version(&config);
@@ -442,7 +591,9 @@ impl AppState {
             }
             version
         };
-        let npm_version = if npm_version.is_some() {
+        let npm_version = if external_service.is_some() {
+            None
+        } else if npm_version.is_some() {
             npm_version
         } else {
             let version = crate::runtime::npm_version(&config);
@@ -456,11 +607,20 @@ impl AppState {
             message,
             detail,
             progress: None,
-            dsh_version: crate::runtime::installed_dsh_version(&config),
+            dsh_version: external_service
+                .as_ref()
+                .map(|service| service.version.clone())
+                .filter(|version| !version.is_empty())
+                .or_else(|| crate::runtime::installed_dsh_version(&config)),
             node_version,
             npm_version,
             port: Some(port),
             download_source: config.download_source,
+            install_generation,
+            can_cancel: matches!(phase, BootPhase::InstallingNode | BootPhase::InstallingDsh)
+                && install_action == InstallAction::None,
+            service_mode: service_ownership.as_str().to_string(),
+            external_service,
         }
     }
 
@@ -474,6 +634,10 @@ impl AppState {
     /// 端口回退后更新（供 watchdog/重启使用最新端口）。
     pub fn set_port(&self, port: u16) {
         self.lock_inner().config.port = port;
+    }
+
+    pub fn managed_port_preference(&self) -> u16 {
+        self.lock_inner().managed_port_preference
     }
 
     pub(crate) fn phase(&self) -> BootPhase {
@@ -490,7 +654,11 @@ impl AppState {
         if g.updating
             || matches!(
                 g.phase,
-                BootPhase::InstallingNode | BootPhase::InstallingDsh | BootPhase::StartingServer
+                BootPhase::ServiceChoice
+                    | BootPhase::SwitchingService
+                    | BootPhase::InstallingNode
+                    | BootPhase::InstallingDsh
+                    | BootPhase::StartingServer
             )
         {
             return false;
@@ -503,10 +671,89 @@ impl AppState {
         self.lock_inner().updating = v;
     }
 
-    pub fn set_running(&self, pid: u32, job: Option<TreeGuard>) {
+    pub fn set_running(&self, child: std::process::Child, job: Option<TreeGuard>) {
         let mut g = self.lock_inner();
-        g.dsh_pid = Some(pid);
+        g.dsh_child = Some(child);
         g.job = job;
+        g.service_ownership = ServiceOwnership::Managed;
+        g.external_service = None;
+    }
+
+    pub fn set_external_service(&self, service: ExternalServiceCandidate) {
+        let mut g = self.lock_inner();
+        g.config.port = service.port;
+        g.service_ownership = ServiceOwnership::External;
+        g.external_service = Some(service);
+    }
+
+    pub fn mark_external_disconnected(&self) {
+        let mut g = self.lock_inner();
+        if g.service_ownership == ServiceOwnership::External {
+            g.service_ownership = ServiceOwnership::ExternalDisconnected;
+        }
+    }
+
+    pub fn set_external_disconnected(&self, service: ExternalServiceCandidate) {
+        let mut g = self.lock_inner();
+        g.config.port = service.port;
+        g.service_ownership = ServiceOwnership::ExternalDisconnected;
+        g.external_service = Some(service);
+    }
+
+    pub fn clear_service_ownership(&self) {
+        let mut g = self.lock_inner();
+        g.service_ownership = ServiceOwnership::None;
+        g.external_service = None;
+    }
+
+    pub fn service_ownership(&self) -> ServiceOwnership {
+        self.lock_inner().service_ownership
+    }
+
+    pub fn external_service(&self) -> Option<ExternalServiceCandidate> {
+        self.lock_inner().external_service.clone()
+    }
+
+    pub fn set_service_candidate(&self, candidate: Option<ExternalServiceCandidate>) {
+        self.lock_inner().external_service = candidate;
+    }
+
+    pub fn request_service_choice(&self, generation: u64, reuse: bool) -> bool {
+        let inner = self.lock_inner();
+        if inner.install_control.generation != generation
+            || inner.phase != BootPhase::ServiceChoice
+            || inner.external_service.is_none()
+        {
+            return false;
+        }
+        inner
+            .service_choice_tx
+            .send(ServiceChoice { generation, reuse })
+            .is_ok()
+    }
+
+    pub(crate) fn wait_service_choice(&self, generation: u64) -> Result<bool, String> {
+        loop {
+            if self.is_quitting() {
+                return Err(crate::locale::text("应用已退出", "The app has quit").into());
+            }
+            let received = self
+                .service_choice_rx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .recv_timeout(std::time::Duration::from_millis(250));
+            match received {
+                Ok(choice) if choice.generation == generation => return Ok(choice.reuse),
+                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(crate::locale::text(
+                        "服务选择通道已关闭。",
+                        "The service selection channel was closed.",
+                    )
+                    .into());
+                }
+            }
+        }
     }
 
     pub(crate) fn set_dev_ui_job(&self, job: Option<TreeGuard>) {
@@ -515,7 +762,16 @@ impl AppState {
 
     /// 是否持有由本应用启动的 dsh 进程。
     pub fn has_running_process(&self) -> bool {
-        self.lock_inner().dsh_pid.is_some()
+        self.lock_inner().dsh_child.is_some()
+    }
+
+    /// 返回已退出的状态；仍在运行或没有托管进程时为 None。
+    pub fn managed_process_exit(&self) -> Result<Option<std::process::ExitStatus>, String> {
+        let mut inner = self.lock_inner();
+        let Some(child) = inner.dsh_child.as_mut() else {
+            return Ok(None);
+        };
+        child.try_wait().map_err(|e| e.to_string())
     }
 
     /// 缓存当前 Node 版本（boot 时检测一次，snapshot 直接读取，避免高频 spawn）。
@@ -608,9 +864,13 @@ impl AppState {
         self.lock_inner().pwsh_confirmed
     }
 
-    pub fn take_running(&self) -> (Option<u32>, Option<TreeGuard>) {
+    pub fn take_running(&self) -> (Option<std::process::Child>, Option<TreeGuard>) {
         let mut g = self.lock_inner();
-        (g.dsh_pid.take(), g.job.take())
+        let running = (g.dsh_child.take(), g.job.take());
+        if g.service_ownership == ServiceOwnership::Managed {
+            g.service_ownership = ServiceOwnership::None;
+        }
+        running
     }
 
     pub fn is_quitting(&self) -> bool {

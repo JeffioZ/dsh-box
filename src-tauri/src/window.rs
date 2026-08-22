@@ -1,38 +1,88 @@
-//! 主窗口：窗口位置/大小记忆（每次事件立即落盘）与按 DPI 设置图标。
+//! 主窗口：窗口位置/大小记忆（防抖落盘）与按 DPI 设置图标。
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
 use crate::app_state::AppState;
 use crate::{logging, main_window};
 
+/// shadow-lv3 的透明宿主安全区（逻辑像素）。所有独立浮层窗口共用，避免
+/// 阴影在宿主边缘被硬裁切；CSS padding 必须与这组三值保持一致。
+pub(crate) const OVERLAY_SHADOW_SIDES: f64 = 36.0;
+pub(crate) const OVERLAY_SHADOW_TOP: f64 = 24.0;
+pub(crate) const OVERLAY_SHADOW_BOTTOM: f64 = 48.0;
+
 /// 启动后一段时间内的落盘静默期：恢复/系统协商产生的 Resized/Moved 事件
 /// 不写入 config，避免系统微调后的尺寸被持久化、逐次启动累积变大。
 static SAVE_SETTLE_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// 移动/缩放会高频触发窗口事件。单工作线程等待操作停顿后再落盘，
+/// 避免文件原子替换与 WebView 布局抢占 I/O/CPU；关闭和退出仍强制保存。
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
+static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SAVE_WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+
 /// 设置落盘静默期（启动恢复完成后调用；期间 save_now 直接跳过）。
 pub fn start_save_settle(millis: u64) {
     *SAVE_SETTLE_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Instant::now() + std::time::Duration::from_millis(millis));
+        Some(Instant::now() + Duration::from_millis(millis));
 }
 
 /// 保存主窗口位置/大小到 state.json（Resized/Moved 事件）。
-/// 不做节流：节流窗口内进程被强制结束会丢失最后一次调整。
-/// state.json 仅几百字节，拖动/缩放期间的写入频率完全可接受。
+/// 250ms 安静期后落盘；持续拖动时只保留一个工作线程。
 pub fn save_window_state(app: &AppHandle) {
-    if let Some(until) = *SAVE_SETTLE_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) {
-        if Instant::now() < until {
-            return; // 启动静默期：不把系统微调后的几何持久化
-        }
+    if in_save_settle_period() {
+        return;
     }
-    save_now(app);
+    SAVE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    if SAVE_WORKER_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || save_debounce_worker(handle));
 }
 
 /// 保存主窗口位置/大小到 state.json（强制版，供关闭/退出事件，确保最后位置落盘）。
 pub fn save_window_state_now(app: &AppHandle) {
+    // 使已排队的防抖任务失效，避免强制保存后又重复落盘。
+    SAVE_GENERATION.fetch_add(1, Ordering::AcqRel);
     save_now(app);
+}
+
+fn in_save_settle_period() -> bool {
+    SAVE_SETTLE_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some_and(|until| Instant::now() < until)
+}
+
+fn save_debounce_worker(app: AppHandle) {
+    loop {
+        let observed = SAVE_GENERATION.load(Ordering::Acquire);
+        std::thread::sleep(SAVE_DEBOUNCE);
+        if SAVE_GENERATION.load(Ordering::Acquire) != observed {
+            continue;
+        }
+
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if SAVE_GENERATION.load(Ordering::Acquire) == observed {
+                save_now(&handle);
+            }
+        });
+
+        SAVE_WORKER_RUNNING.store(false, Ordering::Release);
+        if SAVE_GENERATION.load(Ordering::Acquire) == observed
+            || SAVE_WORKER_RUNNING
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            break;
+        }
+    }
 }
 
 /// 上次落盘的窗口几何（物理整数坐标）；仅值变化时记录日志，

@@ -11,6 +11,7 @@ pub fn plugin_list(
     webview: tauri::Webview,
 ) -> Result<Vec<crate::plugins::PluginInfo>, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     Ok(crate::plugins::list(&app))
 }
 
@@ -22,6 +23,7 @@ pub async fn plugin_search(
     query: String,
 ) -> Result<Vec<crate::plugins::PluginInfo>, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::plugins::search(&query).map(|mut list| {
             // 标注已安装状态（与 list 结果合并）
@@ -36,7 +38,12 @@ pub async fn plugin_search(
         })
     })
     .await
-    .map_err(|e| format!("插件搜索任务异常结束：{e}"))?
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("插件搜索任务异常结束：{e}"),
+            format!("The plugin search task ended unexpectedly: {e}"),
+        )
+    })?
 }
 
 /// 安装插件（成功后进入待应用状态，可继续批量操作）。
@@ -47,9 +54,15 @@ pub async fn plugin_install(
     name: String,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || crate::plugins::install(&app, &name))
         .await
-        .map_err(|e| format!("插件安装任务异常结束：{e}"))?
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("插件安装任务异常结束：{e}"),
+                format!("The plugin installation task ended unexpectedly: {e}"),
+            )
+        })?
 }
 
 /// 卸载插件（成功后进入待应用状态，可继续批量操作）。
@@ -60,9 +73,15 @@ pub async fn plugin_remove(
     name: String,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || crate::plugins::remove(&app, &name))
         .await
-        .map_err(|e| format!("插件卸载任务异常结束：{e}"))?
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("插件卸载任务异常结束：{e}"),
+                format!("The plugin removal task ended unexpectedly: {e}"),
+            )
+        })?
 }
 
 /// 检查内置插件（dshmarket/dsh-file-drop）是否有新版本（只读）。
@@ -72,9 +91,15 @@ pub async fn plugin_updates(
     webview: tauri::Webview,
 ) -> Result<Vec<crate::plugins::UpdateStatus>, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || crate::plugins::check_updates(&app))
         .await
-        .map_err(|e| format!("插件更新检查任务异常结束：{e}"))?
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("插件更新检查任务异常结束：{e}"),
+                format!("The plugin update check ended unexpectedly: {e}"),
+            )
+        })?
 }
 
 /// 手动升级单个插件（绕过退避与门控；成功后进入待应用状态）。
@@ -85,16 +110,24 @@ pub async fn plugin_update(
     name: String,
 ) -> Result<crate::plugins::UpdateStatus, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || crate::plugins::update_pkg(&app, &name))
         .await
-        .map_err(|e| format!("插件更新任务异常结束：{e}"))?
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("插件更新任务异常结束：{e}"),
+                format!("The plugin update task ended unexpectedly: {e}"),
+            )
+        })?
 }
 
 #[tauri::command]
 pub fn plugin_apply_status(
+    app: AppHandle,
     webview: tauri::Webview,
 ) -> Result<crate::plugins::PluginApplyStatus, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     Ok(crate::plugins::plugin_apply_status())
 }
 
@@ -104,5 +137,6 @@ pub fn plugin_apply_changes(
     webview: tauri::Webview,
 ) -> Result<crate::plugins::PluginApplyStatus, String> {
     ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
     Ok(crate::plugins::apply_plugin_changes(&app))
 }

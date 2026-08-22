@@ -129,8 +129,8 @@ fn download_node_archive(
 ) -> Result<(), NodeDownloadError> {
     let resp = download_client().get(url).call().map_err(|error| {
         NodeDownloadError::Source(crate::locale::owned(
-            format!("从 {source} 下载 Node.js 失败：{error}"),
-            format!("Failed to download Node.js from {source}: {error}"),
+            format!("Node.js 下载失败（{source}）：{error}"),
+            format!("Failed to download Node.js ({source}): {error}"),
         ))
     })?;
     let total: u64 = resp
@@ -214,7 +214,7 @@ fn download_node_archive(
                     BootPhase::InstallingNode,
                     &message,
                     &format!(
-                        "{} · {:.1} MB / {:.1} MB",
+                        "{} · {:.1}/{:.1} MB",
                         source,
                         done as f64 / 1048576.0,
                         total as f64 / 1048576.0
@@ -314,8 +314,8 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     } else {
         format!("Downloading Node.js {version}…")
     };
-    let official_source = crate::locale::text("下载源：Node.js 官方", "Source: Node.js official");
-    let mirror_source = crate::locale::text("下载源：国内镜像", "Source: mirror");
+    let official_source = crate::locale::text("官方源", "Official");
+    let mirror_source = crate::locale::text("镜像源", "Mirror");
     let sources: Vec<(&str, &str)> = match config.download_source.as_str() {
         "official" => vec![(&url, official_source)],
         "mirror" => vec![(&mirror_url, mirror_source)],
@@ -476,9 +476,9 @@ pub(crate) fn upgrade_portable_npm(
     };
     for registry in registries {
         let source = if registry.contains("npmmirror") {
-            crate::locale::text("下载源：国内镜像", "Source: mirror")
+            crate::locale::text("镜像源", "Mirror")
         } else {
-            crate::locale::text("下载源：npm 官方", "Source: npm official")
+            crate::locale::text("npm 官方源", "Official npm registry")
         };
         emit_status(
             app,
@@ -723,7 +723,7 @@ fn extract_zip(zip: &Path, dest: &Path) -> Result<(), String> {
             Ok(_) => {
                 last_err = crate::locale::owned(
                     format!("{name} 解压失败"),
-                    format!("{name} could not extract the archive"),
+                    format!("Archive extraction with {name} failed"),
                 )
             }
             Err(e) => {

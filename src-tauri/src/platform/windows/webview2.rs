@@ -227,7 +227,7 @@ pub fn ensure_webview2() -> bool {
             msgbox(
                 locale::text(
                     "缺少 WebView2 运行时，程序无法启动。\n可到微软官网搜索“WebView2 Runtime”手动安装后重试。",
-                    "The app cannot start without the WebView2 Runtime.\nSearch Microsoft's website for “WebView2 Runtime”, install it, and try again.",
+                    "The app cannot start without the WebView2 Runtime.\nSearch the Microsoft website for “WebView2 Runtime”, install it, and try again.",
                 ),
                 APP_TITLE,
                 MB_OK | MB_ICONERROR,
@@ -265,7 +265,7 @@ pub fn ensure_webview2() -> bool {
                 )
             } else {
                 format!(
-                    "Failed to download the WebView2 installer: {e}\nCheck the network and try again, or install “WebView2 Runtime” from Microsoft's website."
+                    "Failed to download the WebView2 installer: {e}\nCheck the network and try again, or install “WebView2 Runtime” from the Microsoft website."
                 )
             },
             APP_TITLE,
@@ -310,7 +310,7 @@ pub fn ensure_webview2() -> bool {
     msgbox(
         locale::text(
             "未能确认 WebView2 安装完成，请重试。\n或到微软官网搜索“WebView2 Runtime”手动安装。",
-            "The WebView2 installation could not be confirmed. Try again, or install “WebView2 Runtime” from Microsoft's website.",
+            "The WebView2 installation could not be confirmed. Try again, or install “WebView2 Runtime” from the Microsoft website.",
         ),
         APP_TITLE,
         MB_OK | MB_ICONERROR,

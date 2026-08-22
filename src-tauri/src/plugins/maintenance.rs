@@ -326,22 +326,43 @@ pub(super) fn builtin_plugins_enabled(config: &crate::app_state::Config) -> bool
 /// 未安装的包逐个自动安装并重启服务；此后每 24h 检查一次 npm 最新版，
 /// 落后时后台升级（`dsh plugin add` 重复执行即升级语义）并重启。
 /// 全部失败静默：安装/升级失败退避后重试，不阻塞主流程。
+static MARKET_MAINTENANCE_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn start_market_bootstrap(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+    if MARKET_MAINTENANCE_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
     std::thread::spawn(move || {
-        let config = app.state::<AppState>().config();
+        struct RunningReset;
+        impl Drop for RunningReset {
+            fn drop(&mut self) {
+                MARKET_MAINTENANCE_RUNNING.store(false, Ordering::Release);
+            }
+        }
+        let _running_reset = RunningReset;
         // 等待 dsh 服务就绪（最多 5 分钟）：插件命令依赖 dsh CLI 与 profile
         // 结构；超时放弃，下次启动再试
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-        loop {
-            if crate::dsh::health_check(config.port) {
-                break;
+        let config = loop {
+            let state = app.state::<AppState>();
+            if state.service_ownership().is_external() {
+                crate::logging::log("market: 当前为外部 dsh 服务，跳过本地插件维护");
+                return;
+            }
+            let config = state.config();
+            if state.service_ownership() == crate::app_state::ServiceOwnership::Managed
+                && crate::dsh::health_check(config.port)
+            {
+                break config;
             }
             if std::time::Instant::now() > deadline {
                 crate::logging::log("market: dsh 服务 5 分钟内未就绪，跳过本次引导");
                 return;
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
-        }
+        };
         // 必须等用户明确选择，不能把“尚未提交”误当作默认开启。
         while builtin_plugins_consent(&config).is_none() {
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -358,6 +379,10 @@ pub fn start_market_bootstrap(app: AppHandle) {
         // 生效；应用退出线程随之结束，下次启动重新开始）。
         std::thread::sleep(std::time::Duration::from_secs(90));
         loop {
+            if app.state::<AppState>().service_ownership().is_external() {
+                crate::logging::log("market: 服务已切换为外部归属，停止本地插件维护");
+                return;
+            }
             if builtin_plugins_enabled(&config)
                 && market_check_due(&config)
                 && sync_market_versions(&app, &config)

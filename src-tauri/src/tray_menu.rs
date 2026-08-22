@@ -5,9 +5,9 @@
 //! 关键实现约束：窗口在启动时预创建一次、此后只 定位/显示/隐藏——
 //! 绝不在事件回调里新建或销毁 WebView 窗口（否则主线程卡死）。
 
-use tauri::{AppHandle, Manager};
 #[cfg(windows)]
-use tauri::{Emitter, WebviewUrl};
+use tauri::WebviewUrl;
+use tauri::{AppHandle, Manager};
 
 #[cfg(windows)]
 use crate::app_state::AppState;
@@ -28,6 +28,9 @@ pub struct TrayMenuItem {
     /// 图标名（menu.js 的 ICONS 表）；None 不显示图标
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<&'static str>,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
 }
 
 impl TrayMenuItem {
@@ -37,6 +40,8 @@ impl TrayMenuItem {
             label: label.to_string(),
             sep: false,
             icon: None,
+            enabled: true,
+            disabled_reason: None,
         }
     }
     fn row_icon(id: &str, icon: &'static str, label: &str) -> Self {
@@ -51,8 +56,113 @@ impl TrayMenuItem {
             label: String::new(),
             sep: true,
             icon: None,
+            enabled: true,
+            disabled_reason: None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct MenuContext {
+    phase: crate::app_state::BootPhase,
+    ownership: crate::app_state::ServiceOwnership,
+    updating: bool,
+}
+
+impl MenuContext {
+    fn from_app(app: &AppHandle) -> Self {
+        let state = app.state::<crate::app_state::AppState>();
+        Self {
+            phase: state.phase(),
+            ownership: state.service_ownership(),
+            updating: state.is_updating(),
+        }
+    }
+
+    fn service_ready(self) -> bool {
+        self.phase == crate::app_state::BootPhase::Ready
+            && matches!(
+                self.ownership,
+                crate::app_state::ServiceOwnership::Managed
+                    | crate::app_state::ServiceOwnership::External
+            )
+    }
+
+    fn managed_ready(self) -> bool {
+        self.phase == crate::app_state::BootPhase::Ready
+            && self.ownership == crate::app_state::ServiceOwnership::Managed
+    }
+}
+
+fn enabled_for(context: MenuContext, id: &str) -> bool {
+    match id {
+        "open_browser" => context.service_ready(),
+        "restart" => context.managed_ready() && !context.updating,
+        "plugins" => context.managed_ready() && !context.updating,
+        // 余额直接查询 DeepSeek API，不依赖 dsh 进程是否已启动；但外部服务的
+        // 凭据不归 DSHBox 管理，不能误用本地凭据展示另一套账户。
+        "balance" => !context.ownership.is_external(),
+        _ => true,
+    }
+}
+
+fn disabled_reason(context: MenuContext, id: &str) -> Option<String> {
+    if enabled_for(context, id) {
+        return None;
+    }
+    if context.ownership.is_external() && matches!(id, "restart" | "plugins" | "balance") {
+        return Some(
+            crate::locale::text(
+                "请在外部服务的原环境中管理",
+                "Manage this in the external service's environment",
+            )
+            .into(),
+        );
+    }
+    if matches!(id, "restart" | "plugins") && context.updating {
+        return Some(
+            crate::locale::text("更新完成后可用", "Available after the update finishes").into(),
+        );
+    }
+    Some(
+        crate::locale::text(
+            "dsh 服务就绪后可用",
+            "Available when the dsh service is ready",
+        )
+        .into(),
+    )
+}
+
+pub fn action_enabled(app: &AppHandle, id: &str) -> bool {
+    enabled_for(MenuContext::from_app(app), id)
+}
+
+pub fn managed_service_ready(app: &AppHandle) -> bool {
+    MenuContext::from_app(app).managed_ready()
+}
+
+/// 原生托盘只在能力签名变化时重建，避免下载进度事件高频刷新菜单资源。
+#[cfg(not(windows))]
+pub fn capability_signature(app: &AppHandle) -> u8 {
+    let context = MenuContext::from_app(app);
+    u8::from(enabled_for(context, "open_browser"))
+        | (u8::from(enabled_for(context, "restart")) << 1)
+        | (u8::from(enabled_for(context, "balance")) << 2)
+        | (u8::from(enabled_for(context, "plugins")) << 3)
+}
+
+pub fn contextual_items(app: &AppHandle, tray_surface: bool) -> Vec<TrayMenuItem> {
+    let context = MenuContext::from_app(app);
+    items(tray_surface)
+        .into_iter()
+        .map(|mut item| {
+            if !item.sep {
+                item.enabled = enabled_for(context, &item.id);
+                item.disabled_reason = disabled_reason(context, &item.id);
+            }
+            item
+        })
+        .collect()
 }
 
 /// 托盘与标题栏共用的菜单模型。标题栏版本不含窗口内已有的动作
@@ -67,7 +177,7 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         rows.push(TrayMenuItem::row_icon(
             "open",
             "window",
-            crate::locale::text("打开", "Open"),
+            crate::locale::text("打开 DSHBox", "Open DSHBox"),
         ));
     }
     rows.push(TrayMenuItem::row_icon(
@@ -80,7 +190,7 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows.push(TrayMenuItem::row_icon(
         "restart",
         "restart",
-        crate::locale::text("重启服务", "Restart service"),
+        crate::locale::text("重启 dsh 服务", "Restart dsh service"),
     ));
     rows.push(TrayMenuItem::row_icon(
         "check_update",
@@ -93,25 +203,25 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         rows.push(TrayMenuItem::row_icon(
             "balance",
             "wallet",
-            crate::locale::text("查询 API 余额…", "Check API balance…"),
+            crate::locale::text("API 余额…", "API balance…"),
         ));
     }
     rows.push(TrayMenuItem::row_icon(
         "plugins",
         "puzzle",
-        crate::locale::text("插件管理…", "Plugin manager…"),
+        crate::locale::text("管理插件…", "Manage plugins…"),
     ));
     rows.push(TrayMenuItem::row_icon(
         "settings",
         "gear",
-        crate::locale::text("桌面端设置…", "Desktop settings…"),
+        crate::locale::text("设置…", "Settings…"),
     ));
     rows.push(TrayMenuItem::sep());
     // 关于/退出
     rows.push(TrayMenuItem::row_icon(
         "about",
         "info",
-        crate::locale::text("关于", "About"),
+        crate::locale::text("关于 DSHBox", "About DSHBox"),
     ));
     rows.push(TrayMenuItem::row_icon(
         "quit",
@@ -122,17 +232,17 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
 }
 
 /// 透明宿主窗口的自绘阴影余量。与 tray-menu.html 的 body padding 同步；
-/// 菜单使用标题栏主菜单的 0 4px 12px 阴影，底部多留位移空间。
+/// 菜单使用 dsh shadow-lv3；透明余量只承载阴影，不参与卡片布局。
 #[cfg(windows)]
-const SHADOW_SIDES: f64 = 16.0;
+const SHADOW_SIDES: f64 = crate::window::OVERLAY_SHADOW_SIDES;
 #[cfg(windows)]
-const SHADOW_TOP: f64 = 12.0;
+const SHADOW_TOP: f64 = crate::window::OVERLAY_SHADOW_TOP;
 #[cfg(windows)]
-const SHADOW_BOTTOM: f64 = 20.0;
+const SHADOW_BOTTOM: f64 = crate::window::OVERLAY_SHADOW_BOTTOM;
 #[cfg(windows)]
 const MENU_CARD_WIDTH: f64 = 220.0;
 
-/// 菜单卡片尺寸：1px 描边、4px 内边距、行高 40、分隔线 9；宽 220
+/// 菜单卡片尺寸：完整 1px 描边、上下各 4px 内边距、行高 40、分隔线 9；宽 220
 /// 与标题栏主菜单完全一致，容纳最长条目（含图标/内边距约 180px）。
 /// 注意：Windows 自绘托盘菜单宽度与 ui/titlebar.html 的 .main-menu-panel
 /// （220px）保持一致，改动需同步两处。
@@ -258,7 +368,7 @@ fn open_menu_when_ready(app: &AppHandle, at: (f64, f64), attempt: u8) {
     };
     // 新一代打开使尚未执行的退场隐藏失效；窗口当前可见时先静默收起，
     // 避免透明宿主在重新定位过程中被用户看到横跨屏幕移动。
-    bump_popup_gen();
+    let generation = bump_popup_gen();
     if win.is_visible().unwrap_or(false) {
         let _ = win.hide();
         let _ = win.eval("window.__dshdReset && window.__dshdReset()");
@@ -275,38 +385,44 @@ fn open_menu_when_ready(app: &AppHandle, at: (f64, f64), attempt: u8) {
     let (x, y, physical_width, physical_height, scale, opens_up) = if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let area = monitor.work_area();
+        let monitor_position = monitor.position();
+        let monitor_size = monitor.size();
         let physical_width = (width * scale).round() as u32;
         let physical_height = (height * scale).round() as u32;
         let physical_card_width = (card_width * scale).round();
         let physical_card_height = (card_height * scale).round();
         let shadow_left = SHADOW_SIDES * scale;
         let shadow_top = SHADOW_TOP * scale;
-        let left = area.position.x as f64;
-        let top = area.position.y as f64;
-        let right = left + area.size.width as f64;
-        let bottom = top + area.size.height as f64;
+        let work_left = area.position.x as f64;
+        let work_top = area.position.y as f64;
+        let work_right = work_left + area.size.width as f64;
+        let work_bottom = work_top + area.size.height as f64;
+        let screen_left = monitor_position.x as f64;
+        let screen_top = monitor_position.y as f64;
+        let screen_right = screen_left + monitor_size.width as f64;
+        let screen_bottom = screen_top + monitor_size.height as f64;
         let win_w = physical_width as f64;
         let win_h = physical_height as f64;
         // 先按视觉卡片定位，再向外扩出透明阴影窗口；这样阴影余量不会改变
-        // 菜单相对托盘图标的锚点。
+        // 菜单相对托盘图标的锚点。卡片限制在工作区，透明阴影宿主限制在
+        // 完整屏幕；否则扩大阴影余量会把菜单整体推离任务栏约 48px。
         let preferred_card_x = at.0 - physical_card_width + 2.0 * scale;
-        let card_x = if preferred_card_x - shadow_left < left {
-            at.0 - 2.0 * scale
-        } else {
-            preferred_card_x
-        };
+        let card_x =
+            preferred_card_x.clamp(work_left, (work_right - physical_card_width).max(work_left));
         let preferred_card_y = at.1 - physical_card_height - 6.0 * scale;
-        let opens_up = preferred_card_y - shadow_top >= top;
-        let card_y = if opens_up {
+        let opens_up = preferred_card_y >= work_top;
+        let preferred_card_y = if opens_up {
             preferred_card_y
         } else {
             at.1 + 6.0 * scale
         };
+        let card_y =
+            preferred_card_y.clamp(work_top, (work_bottom - physical_card_height).max(work_top));
         let x = (card_x - shadow_left)
-            .clamp(left, (right - win_w).max(left))
+            .clamp(screen_left, (screen_right - win_w).max(screen_left))
             .round() as i32;
         let y = (card_y - shadow_top)
-            .clamp(top, (bottom - win_h).max(top))
+            .clamp(screen_top, (screen_bottom - win_h).max(screen_top))
             .round() as i32;
         (x, y, physical_width, physical_height, scale, opens_up)
     } else {
@@ -337,54 +453,118 @@ fn open_menu_when_ready(app: &AppHandle, at: (f64, f64), attempt: u8) {
     ))) {
         crate::logging::log(&format!("tray-menu: 设置尺寸失败：{e}"));
     }
-    // 与统一弹窗一致：等待异步几何真正生效。否则第一次打开会先按预创建
-    // 位置/尺寸绘制一帧，再跳到托盘附近；第二次因几何已热身才看似正常。
-    for _ in 0..30 {
-        let position_ok = win
-            .outer_position()
-            .map(|p| p.x == x && p.y == y)
-            .unwrap_or(false);
-        let size_ok = win
-            .inner_size()
-            .map(|s| s.width == physical_width && s.height == physical_height)
-            .unwrap_or(false);
-        if position_ok && size_ok {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-
-    // 几何等待期间可能有旧退场刚启动；再次推进代次，确保其延迟隐藏失效。
-    bump_popup_gen();
-    // 隐藏窗口内先同步填入菜单并复位入场初态，show 的首帧不会先出现空底板。
-    let rows = items(true);
+    // 隐藏窗口内先同步填入菜单并复位入场初态。eval 本身只代表脚本已下发，
+    // eval_with_callback 才保证 JS 已执行完；在回调前 show 是首次展示残留底边/
+    // 旧 hover 层的根因。
+    let rows = contextual_items(app, true);
     let json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
     let direction = if opens_up { "up" } else { "down" };
-    let _ = win.eval(format!(
-        "window.__dshdOpen && window.__dshdOpen({json}, {direction:?})"
-    ));
-    let _ = win.set_ignore_cursor_events(false);
-    if let Err(e) = win.show() {
-        crate::logging::log(&format!("tray-menu: show 失败：{e}"));
-    } else {
-        crate::logging::log(&format!(
-            "tray-menu: 已显示 is_visible={}",
-            win.is_visible().unwrap_or(false)
-        ));
-    }
     // 点击外部收起按视觉卡片矩形判定，透明阴影区域不算菜单内部。
     let card_x = x + (SHADOW_SIDES * scale).round() as i32;
     let card_y = y + (SHADOW_TOP * scale).round() as i32;
     let card_w = (card_width * scale).round() as i32;
     let card_h = (card_height * scale).round() as i32;
-    watch_outside_click(
+    let card_rect = (card_x, card_y, card_x + card_w, card_y + card_h);
+    let script =
+        format!("(() => window.__dshdOpen ? window.__dshdOpen({json}, {direction:?}) : false)()");
+    wait_for_geometry_then_prepare(
         app.clone(),
-        TRAY_MENU_WINDOW,
-        (card_x, card_y, card_x + card_w, card_y + card_h),
+        win,
+        generation,
+        (x, y, physical_width, physical_height),
+        card_rect,
+        script,
+        0,
     );
-    if let Err(e) = app.emit_to(TRAY_MENU_WINDOW, "tray-menu-open", rows) {
-        crate::logging::log(&format!("tray-menu: 事件下发失败：{e}"));
+}
+
+#[cfg(windows)]
+fn wait_for_geometry_then_prepare(
+    app: AppHandle,
+    win: tauri::WebviewWindow,
+    generation: u64,
+    target: (i32, i32, u32, u32),
+    card_rect: (i32, i32, i32, i32),
+    script: String,
+    attempt: u8,
+) {
+    use std::sync::atomic::Ordering;
+    if POPUP_GEN.load(Ordering::Relaxed) != generation {
+        return;
     }
+    let (x, y, width, height) = target;
+    let position_ok = win
+        .outer_position()
+        .map(|position| position.x == x && position.y == y)
+        .unwrap_or(false);
+    let size_ok = win
+        .inner_size()
+        .map(|size| size.width == width && size.height == height)
+        .unwrap_or(false);
+
+    // SetWindowPos 在 WebView2 上可能异步完成。不能在 UI 主线程 sleep 轮询，
+    // 否则恰好阻塞几何消息和应用其他窗口；短延迟后重入主线程等待首帧稳定。
+    if (!position_ok || !size_ok) && attempt < 30 {
+        let scheduler = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if POPUP_GEN.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let handle = scheduler.clone();
+            let _ = scheduler.run_on_main_thread(move || {
+                wait_for_geometry_then_prepare(
+                    handle,
+                    win,
+                    generation,
+                    target,
+                    card_rect,
+                    script,
+                    attempt + 1,
+                );
+            });
+        });
+        return;
+    }
+    if !position_ok || !size_ok {
+        crate::logging::log("tray-menu: 几何 600ms 内未稳定，按最新位置继续显示");
+    }
+
+    let callback_app = app.clone();
+    let callback_win = win.clone();
+    if let Err(e) = win.eval_with_callback(script, move |result| {
+        if result != "true" {
+            crate::logging::log(&format!("tray-menu: 首帧准备失败，取消显示：{result}"));
+            return;
+        }
+        present_prepared_menu(&callback_app, &callback_win, generation, card_rect);
+    }) {
+        crate::logging::log(&format!("tray-menu: 首帧脚本下发失败：{e}"));
+    }
+}
+
+#[cfg(windows)]
+fn present_prepared_menu(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+    generation: u64,
+    card_rect: (i32, i32, i32, i32),
+) {
+    use std::sync::atomic::Ordering;
+    // JS 回调可能晚于下一次打开/关闭请求；旧代次绝不能把已取消窗口重新显示。
+    if POPUP_GEN.load(Ordering::Relaxed) != generation {
+        return;
+    }
+    let _ = win.set_ignore_cursor_events(false);
+    if let Err(e) = win.show() {
+        crate::logging::log(&format!("tray-menu: show 失败：{e}"));
+        return;
+    }
+    crate::logging::log(&format!(
+        "tray-menu: 已显示 is_visible={}",
+        win.is_visible().unwrap_or(false)
+    ));
+    watch_outside_click(app.clone(), TRAY_MENU_WINDOW, card_rect);
     let _ = win.set_focus();
 }
 
@@ -422,6 +602,10 @@ pub fn hide_menu(app: &AppHandle) {
 /// 两处自绘菜单的动作分发（menu_choose 调用）。
 pub fn run_action(app: &AppHandle, id: &str) {
     // 菜单页面共用同一套 70ms 按压反馈与关闭状态机；后端只负责立即分发动作。
+    if !action_enabled(app, id) {
+        crate::logging::log(&format!("menu: 已忽略当前不可用的动作 {id}"));
+        return;
+    }
     crate::tray::run_action(app, id);
 }
 
@@ -530,6 +714,45 @@ mod tests {
                 "quit",
             ]
         );
+    }
+
+    #[test]
+    fn service_actions_follow_ownership_and_phase() {
+        let starting = MenuContext {
+            phase: crate::app_state::BootPhase::Starting,
+            ownership: crate::app_state::ServiceOwnership::None,
+            updating: false,
+        };
+        assert!(!enabled_for(starting, "open_browser"));
+        assert!(!enabled_for(starting, "restart"));
+        assert!(!enabled_for(starting, "plugins"));
+        assert!(enabled_for(starting, "balance"));
+
+        let managed = MenuContext {
+            phase: crate::app_state::BootPhase::Ready,
+            ownership: crate::app_state::ServiceOwnership::Managed,
+            updating: false,
+        };
+        assert!(enabled_for(managed, "open_browser"));
+        assert!(enabled_for(managed, "restart"));
+        assert!(enabled_for(managed, "plugins"));
+
+        let updating = MenuContext {
+            updating: true,
+            ..managed
+        };
+        assert!(!enabled_for(updating, "restart"));
+        assert!(!enabled_for(updating, "plugins"));
+
+        let external = MenuContext {
+            phase: crate::app_state::BootPhase::Ready,
+            ownership: crate::app_state::ServiceOwnership::External,
+            updating: false,
+        };
+        assert!(enabled_for(external, "open_browser"));
+        assert!(!enabled_for(external, "restart"));
+        assert!(!enabled_for(external, "plugins"));
+        assert!(!enabled_for(external, "balance"));
     }
 
     #[cfg(windows)]

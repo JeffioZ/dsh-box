@@ -5,13 +5,13 @@ var css = [
   '.__dshd_cm{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
   'background:var(--dsw-specific-menu,#353638);',
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.06));',
-  // dsh 菜单圆角 7px（compact list）+ dsh 字体栈
-  'border-radius:7px;box-shadow:var(--dsw-shadow-lv3,0 12px 32px rgba(0,0,0,.4));',
+  // dsh 默认菜单圆角 12px + shadow-lv3 + dsh 字体栈
+  'border-radius:12px;box-shadow:var(--dsw-shadow-lv3,0 0 1px rgba(0,0,0,.2),0 0 4px rgba(0,0,0,.02),0 12px 32px rgba(0,0,0,.08));',
   'font:14px/22px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;',
   'color:var(--dsw-alias-label-primary,#f9fafb);user-select:none;',
   'animation:dshd-cm-in .11s ease-out;}',
-  '@keyframes dshd-cm-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}',
-  '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:7px;cursor:default;white-space:nowrap;',
+  '@keyframes dshd-cm-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}',
+  '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:10px;cursor:default;white-space:nowrap;',
   'display:flex;align-items:center;gap:8px;box-sizing:border-box;',
   // hover 淡入淡出：与托盘/标题栏菜单、弹窗按钮的过渡节奏一致
   'transition:background-color .12s ease,color .12s ease;}',
@@ -45,7 +45,7 @@ var css = [
   'box-shadow:var(--dsw-shadow-lv2,0 6px 18px rgba(0,0,0,.28));animation:dshd-toast-in .1s ease-out;}',
   '.__dshd_cm_toast.__dshd_cm_error{border-color:var(--dsw-alias-state-error,#e85c5c);}',
   '@keyframes dshd-toast-in{from{opacity:0;transform:translate(-50%,3px)}to{opacity:1;transform:translate(-50%,0)}}',
-  '@media (prefers-reduced-motion:reduce){.__dshd_cm_toast{animation:none;}}'
+  '@media (prefers-reduced-motion:reduce){.__dshd_cm,.__dshd_cm_toast{animation:none;}}'
 ].join('');
 var styleEl = document.createElement('style');
 styleEl.textContent = css;
@@ -58,6 +58,9 @@ var subTimer = null;
 var subParent = null;
 var contextSequence = 0;
 var PRESS_DELAY_MS = 70;
+var SHADOW_SIDE = 36;
+var SHADOW_TOP = 24;
+var SHADOW_BOTTOM = 48;
 var IS_MAC = /Mac/i.test(navigator.userAgent);
 var IS_WIN = /Windows/i.test(navigator.userAgent);
 var UI_ZH = String(window.__DSHD_LANG || navigator.language || '').toLowerCase().indexOf('zh') === 0;
@@ -110,22 +113,6 @@ function hide() {
     try { focusReturn.focus(); } catch (e) {}
     focusReturn = null;
   }
-}
-
-function execOn(el, cmd) {
-  el.focus();
-  try { return document.execCommand(cmd); } catch (e) { return false; }
-}
-
-function pasteInto(el) {
-  el.focus();
-  try {
-    if (document.execCommand('paste')) return;
-    navigator.clipboard.readText().then(function (t) {
-      el.focus();
-      document.execCommand('insertText', false, t);
-    }).catch(function () {});
-  } catch (e) {}
 }
 
 // —— 本地文件路径识别 ——
@@ -348,6 +335,8 @@ var ICON_SVGS = {
   copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
   paste: '<svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
   select: '<svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M20 16v2a2 2 0 0 1-2 2h-2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M8.5 8.5h7v7h-7z"></path></svg>',
+  undo: '<svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"></path><path d="M4 12h10a6 6 0 0 1 6 6"></path></svg>',
+  redo: '<svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"></path><path d="M20 12H10a6 6 0 0 0-6 6"></path></svg>',
   save: '<svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></svg>',
   link: '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
   folder: '<svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>',
@@ -411,11 +400,21 @@ function openSub(parentNode, list) {
   var pr = parentNode.getBoundingClientRect();
   var sr = subEl.getBoundingClientRect();
   var left = pr.right + 6;
-  if (left + sr.width > window.innerWidth - 4) left = pr.left - sr.width - 6;
+  if (left + sr.width > window.innerWidth - SHADOW_SIDE) left = pr.left - sr.width - 6;
+  left = clampSurface(left, sr.width, window.innerWidth, SHADOW_SIDE, SHADOW_SIDE);
   var top = pr.bottom - sr.height + 4;
-  top = Math.max(4, Math.min(top, window.innerHeight - sr.height - 4));
+  top = clampSurface(top, sr.height, window.innerHeight, SHADOW_TOP, SHADOW_BOTTOM);
   subEl.style.left = left + 'px';
   subEl.style.top = top + 'px';
+}
+
+function clampSurface(value, surfaceSize, viewportSize, leadingShadow, trailingShadow) {
+  // 正常视口完整保留 shadow-lv3 的透明扩散区；极窄/极矮时退回 6px 内容
+  // 安全边距，优先保证菜单本体可用。
+  if (viewportSize >= surfaceSize + leadingShadow + trailingShadow) {
+    return Math.max(leadingShadow, Math.min(value, viewportSize - surfaceSize - trailingShadow));
+  }
+  return Math.max(6, Math.min(value, Math.max(6, viewportSize - surfaceSize - 6)));
 }
 
 function closeSubSoon() {
@@ -453,11 +452,11 @@ function renderItems(list) {
 }
 
 function placeMenu(x, y) {
-  // 边界处理：菜单不能超出主 webview 视口，按视口尺寸翻转并贴边 6px；
+  // 边界处理：常规视口给 shadow-lv3 留出完整扩散区；极小视口退回 6px；
   // clientX/Y 与 fixed 定位同为 CSS 逻辑像素，任意 DPI 一致
   var r = menuEl.getBoundingClientRect();
-  var mx = Math.max(6, Math.min(x, Math.max(6, window.innerWidth - r.width - 6)));
-  var my = Math.max(6, Math.min(y, Math.max(6, window.innerHeight - r.height - 6)));
+  var mx = clampSurface(x, r.width, window.innerWidth, SHADOW_SIDE, SHADOW_SIDE);
+  var my = clampSurface(y, r.height, window.innerHeight, SHADOW_TOP, SHADOW_BOTTOM);
   menuEl.style.left = mx + 'px';
   menuEl.style.top = my + 'px';
 }
@@ -593,32 +592,18 @@ function onCtx(e) {
   if (e.defaultPrevented) return; // dsh 自带右键菜单：放行
   var t = e.target;
   // 可编辑区优先：输入框内即便文本长得像路径，也应提供标准编辑菜单。
-  var el = t && t.closest
-    ? t.closest('input,textarea,[contenteditable="true"],[contenteditable=""],[role="textbox"]')
-    : null;
+  var editContext = window.__DSHD_EDIT_CONTEXT;
+  var el = editContext ? editContext.findEditable(t) : null;
   if (el) {
     e.preventDefault();
-    var isInput = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
-    var hasSel = isInput
-      ? (el.selectionStart !== el.selectionEnd)
-      : (function () {
-          var s = window.getSelection();
-          return !!(s && s.toString() && s.anchorNode && el.contains(s.anchorNode));
-        })();
-    var hasContent = !!(isInput
-      ? el.value.length > 0
-      : el.textContent.trim().length > 0);
-    var m = MOD();
-    show(e.clientX, e.clientY, [
-      { label: T('剪切', 'Cut'), icon: 'ic:cut', key: m + '+X', enabled: hasSel, act: function () { execOn(el, 'cut'); } },
-      { label: T('复制', 'Copy'), icon: 'ic:copy', key: m + '+C', enabled: hasSel, act: function () { execOn(el, 'copy'); } },
-      { label: T('粘贴', 'Paste'), icon: 'ic:paste', key: m + '+V', act: function () { pasteInto(el); } },
-      { sep: true },
-      { label: T('全选', 'Select all'), icon: 'ic:select', key: m + '+A', enabled: hasContent, act: function () {
-        el.focus();
-        if (el.select) { el.select(); } else { document.execCommand('selectAll'); }
-      } }
-    ]);
+    show(e.clientX, e.clientY, editContext.createMenuItems(el, {
+      undo: T('撤销', 'Undo'),
+      redo: T('重做', 'Redo'),
+      cut: T('剪切', 'Cut'),
+      copy: T('复制', 'Copy'),
+      paste: T('粘贴', 'Paste'),
+      selectAll: T('全选', 'Select all')
+    }, 'ic:'));
     return;
   }
   var f = findPathTarget(t);

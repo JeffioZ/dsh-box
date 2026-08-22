@@ -31,8 +31,12 @@ function renderPlugins() {
   const body = $('body');
   body.innerHTML =
     '<div class="psearch">' +
+    '<div class="psearch-field">' +
+    '<label class="psearch-label" for="p-query">' + esc(dshdT('pluginSearchHint')) + '</label>' +
+    '<div class="psearch-control">' +
     '<span class="psearch-ic" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg></span>' +
-    '<input class="pinput" id="p-query" type="search" aria-label="' + esc(dshdT('pluginSearchHint')) + '" placeholder="' + esc(dshdT('pluginSearchHint')) + '" autocomplete="off" spellcheck="false" />' +
+    '<input class="dshd-input pinput" id="p-query" type="search" placeholder="dshmarket" autocomplete="off" spellcheck="false" />' +
+    '</div></div>' +
     '<button type="button" class="dshd-btn" id="p-search">' + esc(dshdT('pluginSearch')) + '</button>' +
     '</div>' +
     '<div class="pcats">' +

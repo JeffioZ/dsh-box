@@ -1,6 +1,5 @@
 //! 更新协调：检查并分派应用、dsh、Node 与 PowerShell 更新。
 
-use std::io::Read;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -23,13 +22,16 @@ pub use app::prefetch_app_update;
 use app::update_app_exe;
 #[cfg(test)]
 use app::{parse_app_release_asset, windows_replace_script};
-use check::check_app_update;
 pub use check::{check, check_and_report, silent_check, start_periodic_check, CheckResult};
 use dsh_update::update_dsh;
 use node::update_node;
 #[cfg(test)]
 use powershell::parse_pwsh_metadata;
-use powershell::{latest_pwsh_version, parse_releases_atom, pwsh_version, update_pwsh};
+#[cfg(test)]
+use powershell::parse_releases_atom;
+use powershell::update_pwsh;
+#[cfg(windows)]
+use powershell::{latest_pwsh_version, pwsh_version};
 use transaction as update_txn;
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -66,6 +68,13 @@ fn emit_progress(app: &AppHandle, message: &str) {
 /// 应用更新（which: "dsh" | "node" | "pwsh"）。
 pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
+    if state.service_ownership().is_external() && matches!(which, "dsh" | "node" | "npm") {
+        return Err(crate::locale::text(
+            "当前连接由外部 dsh 服务管理，请在原服务环境中执行这项更新。",
+            "The current connection is managed by an external dsh service. Update it in that service's environment.",
+        )
+        .into());
+    }
     if !state.try_begin_update() {
         let msg = crate::locale::text(
             "启动或更新流程正在进行，请稍后再试。",
@@ -120,6 +129,13 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
 /// 持有生命周期锁，与 boot_once 互斥，杜绝双服务并发。
 pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
+    if state.service_ownership().is_external() {
+        return Err(crate::locale::text(
+            "当前连接的是外部 dsh 服务，DSHBox 不会重启它。",
+            "The current dsh service is external, so DSHBox will not restart it.",
+        )
+        .into());
+    }
     if state.is_updating() {
         return Err(crate::locale::text(
             "更新流程正在进行，请稍后再重启。",
@@ -142,7 +158,14 @@ pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
 /// 调用方已持有生命周期锁时使用。
 fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let config = state.config();
+    if state.service_ownership().is_external() {
+        return Err(crate::locale::text(
+            "当前连接的是外部 dsh 服务，DSHBox 不会重启它。",
+            "The current dsh service is external, so DSHBox will not restart it.",
+        )
+        .into());
+    }
+    let mut config = state.config();
     let resume_url = crate::main_webview(app)
         .and_then(|webview| webview.url().ok())
         .filter(|url| crate::is_dsh_url(url, &config))
@@ -157,16 +180,8 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
         let node = runtime::ensure_node(app, &config)?;
         state.set_node_version(Some(node.version.clone()));
         state.set_npm_version(runtime::npm_version(&config));
-        let (pid, job) = runtime::start_server(app, &config, &node.executable)?;
-        state.set_running(pid, job);
-        if !dsh::wait_ready(config.port, Duration::from_secs(60)) {
-            processes::kill_tree(pid);
-            return Err(crate::locale::text(
-                "重启后服务未就绪",
-                "The service did not become ready after restarting",
-            )
-            .into());
-        }
+        let port = dsh::launch_managed(app, &mut config, &node.executable)?;
+        config.port = port;
         Ok(())
     })();
     match &result {
@@ -175,7 +190,9 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
             state.set_phase(BootPhase::Ready, ready, "");
             // 唤醒可能阻塞在错误页等待的 boot_loop，让其重入引导（复用本服务）进入看门狗
             state.signal_retry();
-            let target = resume_url.unwrap_or_else(|| config.web_url());
+            let target = resume_url
+                .and_then(|url| remap_service_url(&url, config.port))
+                .unwrap_or_else(|| config.web_url());
             dsh::enter_web_app(app, &target);
         }
         Err(msg) => {
@@ -188,10 +205,19 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     result
 }
 
+fn remap_service_url(url: &str, port: u16) -> Option<String> {
+    let mut parsed = url::Url::parse(url).ok()?;
+    parsed.set_scheme("http").ok()?;
+    parsed.set_host(Some("127.0.0.1")).ok()?;
+    parsed.set_port(Some(port)).ok()?;
+    Some(parsed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_app_release_asset, parse_pwsh_metadata, parse_releases_atom, windows_replace_script,
+        parse_app_release_asset, parse_pwsh_metadata, parse_releases_atom, remap_service_url,
+        windows_replace_script,
     };
 
     #[test]
@@ -210,6 +236,15 @@ mod tests {
   <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.1.0"/>
 </entry></feed>"#;
         assert_eq!(parse_releases_atom(xml), vec!["v0.2.0", "v0.1.0"]);
+    }
+
+    #[test]
+    fn service_restart_preserves_route_when_port_changes() {
+        assert_eq!(
+            remap_service_url("http://127.0.0.1:18080/session/abc?view=chat#latest", 49152)
+                .as_deref(),
+            Some("http://127.0.0.1:49152/session/abc?view=chat#latest")
+        );
     }
 
     #[test]

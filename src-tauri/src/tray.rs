@@ -57,7 +57,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
-    let model = crate::tray_menu::items(true);
+    let model = crate::tray_menu::contextual_items(app, true);
     let item = |id: &str| -> tauri::Result<&crate::tray_menu::TrayMenuItem> {
         model.iter().find(|entry| entry.id == id).ok_or_else(|| {
             std::io::Error::new(
@@ -68,18 +68,34 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         })
     };
 
-    let open_item = MenuItem::with_id(app, "open", &item("open")?.label, true, None::<&str>)?;
-    let balance_item =
-        MenuItem::with_id(app, "balance", &item("balance")?.label, true, None::<&str>)?;
+    let open_item = MenuItem::with_id(
+        app,
+        "open",
+        &item("open")?.label,
+        item("open")?.enabled,
+        None::<&str>,
+    )?;
+    let balance_item = MenuItem::with_id(
+        app,
+        "balance",
+        &item("balance")?.label,
+        item("balance")?.enabled,
+        None::<&str>,
+    )?;
     let browser_item = MenuItem::with_id(
         app,
         "open_browser",
         &item("open_browser")?.label,
-        true,
+        item("open_browser")?.enabled,
         None::<&str>,
     )?;
-    let restart_item =
-        MenuItem::with_id(app, "restart", &item("restart")?.label, true, None::<&str>)?;
+    let restart_item = MenuItem::with_id(
+        app,
+        "restart",
+        &item("restart")?.label,
+        item("restart")?.enabled,
+        None::<&str>,
+    )?;
     let check_item = MenuItem::with_id(
         app,
         "check_update",
@@ -87,8 +103,13 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         true,
         None::<&str>,
     )?;
-    let plugins_item =
-        MenuItem::with_id(app, "plugins", &item("plugins")?.label, true, None::<&str>)?;
+    let plugins_item = MenuItem::with_id(
+        app,
+        "plugins",
+        &item("plugins")?.label,
+        item("plugins")?.enabled,
+        None::<&str>,
+    )?;
     let settings_item = MenuItem::with_id(
         app,
         "settings",
@@ -123,6 +144,26 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
 }
 
 #[cfg(not(windows))]
+static NATIVE_MENU_SIGNATURE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(u8::MAX);
+
+/// dsh 状态事件可能包含高频下载进度；只有菜单能力位变化时才重建原生菜单。
+#[cfg(not(windows))]
+pub(crate) fn sync_menu_state(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    let signature = crate::tray_menu::capability_signature(app);
+    if NATIVE_MENU_SIGNATURE.swap(signature, Ordering::AcqRel) == signature {
+        return;
+    }
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("main-tray"), native_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn sync_menu_state(_app: &AppHandle) {}
+
+#[cfg(not(windows))]
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let menu = native_menu(app)?;
 
@@ -141,6 +182,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
 /// 托盘菜单项动作分发（自绘菜单 menu_choose 与 macOS/Linux 原生菜单共用）。
 pub(crate) fn run_action(app: &AppHandle, id: &str) {
+    if !crate::tray_menu::action_enabled(app, id) {
+        crate::logging::log(&format!("menu: 已忽略当前不可用的动作 {id}"));
+        return;
+    }
     match id {
         "open" => show_main(app),
         "balance" => crate::control_center::open_balance(app),
@@ -207,6 +252,7 @@ pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
             crate::DARK_BG
         };
         let _ = main.set_background_color(Some(color));
+        crate::titlebar::set_statusbar_theme_background(app, light);
     }
     // 弹窗与托盘菜单：透明宿主只更新 prefers-color-scheme。
     for label in [
@@ -225,7 +271,11 @@ static LAST_THEME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 
 /// 单次比对 dsh 设置并应用变化（语言/主题）。需在主线程调用。
 pub fn check_dsh_settings_now(app: &AppHandle) {
-    let config = app.state::<AppState>().config();
+    let state = app.state::<AppState>();
+    if state.service_ownership().is_external() {
+        return;
+    }
+    let config = state.config();
     // 语言跟随（DSHD_LANG 显式覆盖时跳过）
     if std::env::var("DSHD_LANG").is_err() {
         if let Some(language) = config.load_dsh_locale() {
@@ -280,10 +330,15 @@ pub fn start_follow_dsh_settings(app: AppHandle) {
         let mut last_mtime = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
-            if app.state::<AppState>().is_quitting() {
+            let state = app.state::<AppState>();
+            if state.is_quitting() {
                 return;
             }
-            let config = app.state::<AppState>().config();
+            if state.service_ownership().is_external() {
+                last_mtime = None;
+                continue;
+            }
+            let config = state.config();
             // mtime 门控：文件未变时跳过读取与解析
             let path = config.dsh_home().join("settings.yaml");
             let Ok(meta) = std::fs::metadata(&path) else {
@@ -374,6 +429,19 @@ fn open_browser(app: &AppHandle) {
 fn restart_from_tray(app: &AppHandle) {
     use tauri_plugin_dialog::MessageDialogKind;
     let state = app.state::<AppState>();
+    if state.service_ownership().is_external() {
+        crate::native_dialog::show_message(
+            app,
+            crate::locale::text(
+                "当前连接的是外部 dsh 服务，请在原服务环境中重启。",
+                "The current dsh service is external. Restart it in that service's environment.",
+            )
+            .into(),
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
+            MessageDialogKind::Info,
+        );
+        return;
+    }
     if state.is_updating() {
         crate::native_dialog::show_message(
             app,
@@ -382,7 +450,7 @@ fn restart_from_tray(app: &AppHandle) {
                 "An update is in progress. Please restart the service later.",
             )
             .into(),
-            crate::locale::text("重启服务", "Restart service"),
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
             MessageDialogKind::Warning,
         );
         return;
@@ -390,7 +458,9 @@ fn restart_from_tray(app: &AppHandle) {
     let phase = state.phase();
     if matches!(
         phase,
-        crate::app_state::BootPhase::InstallingNode
+        crate::app_state::BootPhase::SwitchingService
+            | crate::app_state::BootPhase::ServiceChoice
+            | crate::app_state::BootPhase::InstallingNode
             | crate::app_state::BootPhase::InstallingDsh
             | crate::app_state::BootPhase::StartingServer
     ) {
@@ -401,7 +471,7 @@ fn restart_from_tray(app: &AppHandle) {
                 "Startup is in progress. Please try again later.",
             )
             .into(),
-            crate::locale::text("重启服务", "Restart service"),
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
             MessageDialogKind::Warning,
         );
         return;
@@ -415,9 +485,9 @@ fn restart_from_tray(app: &AppHandle) {
                 &handle,
                 format!(
                     "{}: {e}",
-                    crate::locale::text("重启服务失败", "Failed to restart the service")
+                    crate::locale::text("重启 dsh 服务失败", "Failed to restart the dsh service")
                 ),
-                crate::locale::text("重启服务", "Restart service"),
+                crate::locale::text("重启 dsh 服务", "Restart dsh service"),
                 MessageDialogKind::Warning,
             );
         }

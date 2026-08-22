@@ -1,10 +1,16 @@
 //! PowerShell 7 检测与 winget 更新。
 
+#[cfg(windows)]
 use super::{emit_progress, truncate};
+#[cfg(windows)]
 use crate::app_state::AppState;
+#[cfg(windows)]
 use crate::{processes, runtime};
+#[cfg(windows)]
 use std::io::Read;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(windows)]
+use tauri::Manager;
 
 // ---------- PowerShell 7（可选增强，仅 Windows） ----------
 
@@ -117,8 +123,13 @@ fn github_latest_stable() -> Result<String, String> {
             best_tag = tag.to_string();
         }
     }
-    best.map(|_| best_tag)
-        .ok_or_else(|| "GitHub API: 未找到稳定版本".to_string())
+    best.map(|_| best_tag).ok_or_else(|| {
+        crate::locale::text(
+            "GitHub Releases 中未找到稳定版本。",
+            "No stable version was found in GitHub Releases.",
+        )
+        .to_string()
+    })
 }
 
 /// 解析 GitHub releases.atom 页面的 tag 列表（按发布顺序，最新在前）。

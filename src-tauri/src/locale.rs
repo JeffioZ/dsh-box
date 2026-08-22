@@ -42,6 +42,11 @@ pub fn owned(zh: String, en: String) -> String {
     }
 }
 
+/// Adds a technical cause to a localized user-facing operation label.
+pub fn error(zh: &str, en: &str, cause: impl std::fmt::Display) -> String {
+    owned(format!("{zh}：{cause}"), format!("{en}: {cause}"))
+}
+
 pub fn code() -> &'static str {
     if is_chinese() {
         "zh-CN"
@@ -101,10 +106,18 @@ fn detect_chinese() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::text;
+    use super::{error, text};
 
     #[test]
     fn selects_one_complete_translation() {
         assert!(matches!(text("中文", "English"), "中文" | "English"));
+    }
+
+    #[test]
+    fn technical_cause_keeps_the_selected_language() {
+        assert!(matches!(
+            error("读取失败", "Read failed", "disk error").as_str(),
+            "读取失败：disk error" | "Read failed: disk error"
+        ));
     }
 }

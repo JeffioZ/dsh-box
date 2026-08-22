@@ -3,57 +3,59 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DeepSeek Harness Box</title>
+  <title>DSHBox</title>
   <link rel="icon" href="assets/app-icon.svg" />
   <link rel="stylesheet" href="common.css" />
   <link rel="stylesheet" href="startup.css" />
 </head>
 <body>
-  <main class="stage">
+  <main class="stage dshd-scroll">
     <div class="card">
       <div class="logo-wrap" aria-hidden="true">
         <!-- 使用与窗口图标同源的 app-icon.svg，避免多份品牌资源漂移。 -->
         <img class="logo" src="assets/app-icon.svg" alt="" />
       </div>
-      <h1 class="title">DeepSeek Harness Box</h1>
+      <h1 class="title">DSHBox</h1>
       <p class="tagline" data-i18n="tagline">本地智能体 · 一键启航</p>
 
       <div id="ob-box" class="ob-box hidden">
         <div class="ob-head">
-          <h2 class="ob-title" data-i18n="onboardingTitle">首次使用配置</h2>
-          <p class="ob-sub" data-i18n="onboardingSub">配置 API Key、语言与主题，之后随时可改。</p>
+          <h2 class="ob-title" data-i18n="onboardingTitle">首次设置</h2>
+          <p class="ob-sub" data-i18n="onboardingSub">设置凭据和偏好，之后可随时修改。</p>
         </div>
         <div class="ob-section">
-          <div class="ob-sec-label">API</div>
-          <label class="ob-field">
-            <span class="ob-label">DeepSeek API Key</span>
-            <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" aria-describedby="ob-apikey-hint ob-error" />
+          <div class="ob-field">
+            <label class="ob-label" for="ob-apikey" data-i18n="deepSeekApiKey">DeepSeek API Key</label>
+            <span class="dshd-password-field ob-api-key-row">
+              <input id="ob-apikey" class="dshd-input ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" aria-describedby="ob-apikey-hint ob-error" />
+              <button type="button" id="ob-apikey-toggle" class="dshd-x dshd-password-action" aria-controls="ob-apikey" aria-pressed="false" hidden></button>
+            </span>
             <span id="ob-apikey-hint" class="ob-hint" data-i18n="apiKeyHint">留空则之后可在桌面端设置中配置</span>
-          </label>
+          </div>
         </div>
         <div class="ob-section">
           <div class="ob-sec-label" data-i18n="preferences">偏好设置</div>
           <div class="ob-row">
-            <span class="ob-label" data-i18n="language">语言</span>
+            <span class="ob-label" id="ob-lang-label" data-i18n="language">语言</span>
             <div class="dshd-select" id="ob-lang">
-              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false">
-                <span class="dshd-select-value">中文</span>
+              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="ob-lang-list" aria-labelledby="ob-lang-label ob-lang-value">
+                <span class="dshd-select-value" id="ob-lang-value">中文</span>
                 <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
               </button>
-              <ul class="dshd-select-list" role="listbox" data-i18n-aria-label="language" hidden>
+              <ul class="dshd-select-list" id="ob-lang-list" role="listbox" data-i18n-aria-label="language" hidden>
                 <li role="option" data-value="zh-CN" aria-selected="true">中文</li>
                 <li role="option" data-value="en" aria-selected="false">English</li>
               </ul>
             </div>
           </div>
           <div class="ob-row">
-            <span class="ob-label" data-i18n="theme">主题</span>
+            <span class="ob-label" id="ob-theme-label" data-i18n="theme">主题</span>
             <div class="dshd-select" id="ob-theme">
-              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false">
-                <span class="dshd-select-value">跟随系统</span>
+              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="ob-theme-list" aria-labelledby="ob-theme-label ob-theme-value">
+                <span class="dshd-select-value" id="ob-theme-value">跟随系统</span>
                 <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
               </button>
-              <ul class="dshd-select-list" role="listbox" data-i18n-aria-label="theme" hidden>
+              <ul class="dshd-select-list" id="ob-theme-list" role="listbox" data-i18n-aria-label="theme" hidden>
                 <li role="option" data-value="light" aria-selected="false" data-i18n="themeLight">浅色</li>
                 <li role="option" data-value="dark" aria-selected="false" data-i18n="themeDark">深色</li>
                 <li role="option" data-value="system" aria-selected="true" data-i18n="themeSystem">跟随系统</li>
@@ -70,7 +72,7 @@
           <label class="ob-row ob-switch-row ob-consent-row">
             <span class="ob-option-copy">
               <span class="ob-label" data-i18n="builtinPluginsOptIn">安装推荐插件</span>
-              <span class="ob-hint" data-i18n="builtinPluginsOptInDesc">自动安装 DSH Market 与 File Drop，并每日检查更新；可取消勾选。</span>
+              <span class="ob-hint" data-i18n="builtinPluginsOptInDesc">安装 DSH Market 和 File Drop，并每日自动更新。</span>
             </span>
             <span class="ob-switch">
               <input id="ob-builtin-plugins" type="checkbox" role="switch" checked />
@@ -78,6 +80,30 @@
             </span>
           </label>
         </div>
+        <section id="ob-runtime" class="ob-runtime hidden" aria-labelledby="ob-runtime-label">
+          <div class="ob-runtime-summary">
+            <div class="ob-runtime-heading">
+              <span class="ob-sec-label" id="ob-runtime-label" data-i18n="runtimeEnvironment">运行环境</span>
+              <span id="ob-runtime-state" class="ob-runtime-state" role="status" aria-live="polite" aria-atomic="true"></span>
+            </div>
+            <button type="button" id="ob-runtime-toggle" class="ob-runtime-toggle hidden" aria-expanded="false" aria-controls="ob-runtime-actions" data-i18n-aria-label="changeDownloadSource">
+              <span data-i18n="change">更换</span>
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+            </button>
+            <span id="ob-runtime-detail" class="ob-runtime-detail"></span>
+            <span id="ob-runtime-source" class="ob-runtime-source"></span>
+          </div>
+          <div id="ob-runtime-progress" class="bar ob-runtime-progress" role="progressbar" data-i18n-aria-label="startProgress" aria-valuemin="0" aria-valuemax="100"><div id="ob-runtime-progress-fill" class="bar-fill"></div></div>
+          <div id="ob-runtime-actions" class="ob-runtime-actions hidden">
+            <div class="install-source" role="group" data-i18n-aria-label="installSource">
+              <button type="button" class="btn small source-choice" data-source="auto" aria-pressed="true" data-i18n="installSourceAuto">自动</button>
+              <button type="button" class="btn small source-choice" data-source="official" aria-pressed="false" data-i18n="installSourceOfficial">官方</button>
+              <button type="button" class="btn small source-choice" data-source="mirror" aria-pressed="false" data-i18n="installSourceMirror">镜像</button>
+            </div>
+            <button type="button" class="btn small install-cancel-control hidden" data-install-cancel data-i18n="cancelInstall">取消安装</button>
+            <button type="button" class="btn small primary install-reinstall-control hidden" data-install-reinstall data-i18n="reinstall">重新安装</button>
+          </div>
+        </section>
         <div class="ob-actions">
           <button type="button" id="ob-start" class="btn primary ob-primary" data-i18n="startUsing">开始使用</button>
           <button type="button" id="ob-skip" class="ob-skip-btn" data-i18n="skip">跳过</button>
@@ -95,24 +121,49 @@
         <div id="install-actions" class="install-actions hidden">
           <span class="install-source-label" data-i18n="installSource">下载源</span>
           <div class="install-source" role="group" data-i18n-aria-label="installSource">
-            <button type="button" class="btn small source-choice" data-source="auto" data-i18n="installSourceAuto">自动</button>
-            <button type="button" class="btn small source-choice" data-source="official" data-i18n="installSourceOfficial">官方</button>
-            <button type="button" class="btn small source-choice" data-source="mirror" data-i18n="installSourceMirror">镜像</button>
+            <button type="button" class="btn small source-choice" data-source="auto" aria-pressed="true" data-i18n="installSourceAuto">自动</button>
+            <button type="button" class="btn small source-choice" data-source="official" aria-pressed="false" data-i18n="installSourceOfficial">官方</button>
+            <button type="button" class="btn small source-choice" data-source="mirror" aria-pressed="false" data-i18n="installSourceMirror">镜像</button>
           </div>
-          <button type="button" id="btn-cancel-install" class="btn small" data-i18n="cancelInstall">取消安装</button>
+          <button type="button" id="btn-cancel-install" class="btn small install-cancel-control" data-install-cancel data-i18n="cancelInstall">取消安装</button>
+          <button type="button" id="btn-reinstall" class="btn small primary install-reinstall-control hidden" data-install-reinstall data-i18n="reinstall">重新安装</button>
         </div>
       </div>
 
-      <div id="error-box" class="error-box hidden" role="alert" aria-live="assertive" tabindex="-1">
+      <section id="service-choice-box" class="service-choice-box hidden" aria-labelledby="service-choice-title" aria-describedby="service-choice-desc">
+        <div class="service-choice-head">
+          <svg class="service-choice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"></rect><rect x="3" y="14" width="18" height="6" rx="2"></rect><path d="M7 7h.01M7 17h.01"></path></svg>
+          <div>
+            <div id="service-choice-title" class="service-choice-title" tabindex="-1" data-i18n="serviceChoiceTitle">发现正在运行的 dsh</div>
+            <div id="service-choice-desc" class="service-choice-desc" data-i18n="serviceChoiceDesc">连接后将使用该服务的数据；DSHBox 不会停止、重启或更新它。</div>
+          </div>
+        </div>
+        <dl class="service-choice-meta">
+          <div><dt data-i18n="servicePort">端口</dt><dd id="service-choice-port"></dd></div>
+          <div><dt data-i18n="serviceWorkingDirectory">工作目录</dt><dd id="service-choice-cwd"></dd></div>
+        </dl>
+        <div class="service-choice-actions">
+          <button type="button" id="btn-connect-external" class="btn primary" data-i18n="connectExistingService">连接现有服务</button>
+          <button type="button" id="btn-start-local" class="btn" data-i18n="startLocalService">启动本地服务</button>
+        </div>
+        <div id="service-choice-feedback" class="service-choice-feedback hidden" role="alert" aria-live="assertive"></div>
+      </section>
+
+      <div id="error-box" class="error-box hidden" role="alert" aria-live="assertive" aria-labelledby="startup-error-title" aria-describedby="startup-error-hint">
         <div class="error-head">
           <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-          <div class="error-title" data-i18n="startupFailed">启动失败</div>
+          <div class="error-title" id="startup-error-title" tabindex="-1" data-i18n="startupFailed">启动失败</div>
         </div>
-        <div class="error-hint" data-i18n="startupFailedHint">请重试；若持续失败，可打开日志查看详情。</div>
-        <div id="error-msg" class="error-msg dshd-scroll"></div>
+        <div class="error-hint" id="startup-error-hint" data-i18n="startupFailedHint">请重试；若持续失败，可打开日志查看详情。</div>
+        <details class="error-details">
+          <summary data-i18n="errorDetails">错误详情</summary>
+          <pre id="error-msg" class="error-msg dshd-scroll"></pre>
+        </details>
         <div class="error-actions">
           <button type="button" id="btn-retry" class="btn primary" data-i18n="retry">重试</button>
-          <button type="button" id="btn-logs" class="btn" data-i18n="openLogs">打开日志</button>
+          <button type="button" id="btn-use-local" class="btn hidden" data-i18n="useLocalService">改用本地服务</button>
+          <button type="button" id="btn-logs" class="btn" data-i18n="openLogs">打开日志文件夹</button>
+          <button type="button" id="btn-copy-error" class="btn" data-i18n="copyError">复制错误信息</button>
           <button type="button" id="btn-quit" class="btn" data-i18n="quit">退出</button>
         </div>
       </div>
@@ -132,7 +183,9 @@
   </main>
 
   <script src="i18n.js"></script>
+  <script src="edit-context.js"></script>
   <script src="common.js"></script>
+  <script src="menu.js"></script>
   <script src="startup.js"></script>
 </body>
 </html>

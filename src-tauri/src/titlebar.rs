@@ -15,8 +15,7 @@ use crate::MAIN_WINDOW;
 pub const TITLEBAR_HEIGHT: f64 = 36.0;
 /// 浮层高度默认值：页面未提供实测高度时使用（36px 标题栏 + 浮层 + 阴影余量）。
 pub const TITLEBAR_EXPANDED_HEIGHT: f64 = 260.0;
-/// 浮层高度上限：主窗口最小高度为 620px；完整主菜单也能容纳，
-/// 常规菜单仍按页面实测高度展开。
+/// 浮层高度上限；常规菜单仍按页面实测高度展开，窄窗口由 WebView 边界裁切。
 pub const TITLEBAR_MENU_HEIGHT: f64 = 620.0;
 /// 标题栏子 webview 的 label。
 pub const TITLEBAR_LABEL: &str = "titlebar";
@@ -24,6 +23,8 @@ pub const TITLEBAR_LABEL: &str = "titlebar";
 pub const STATUSBAR_HEIGHT: f64 = 26.0;
 /// 状态栏子 webview 的 label。
 pub const STATUSBAR_LABEL: &str = "statusbar";
+const STATUSBAR_DARK_BG: tauri::window::Color = tauri::window::Color(0x18, 0x18, 0x19, 0xFF);
+const STATUSBAR_LIGHT_BG: tauri::window::Color = tauri::window::Color(0xFC, 0xFC, 0xFD, 0xFF);
 
 /// 当前标题栏子 WebView 高度；用整数逻辑像素即可，避免跨线程浮点原子。
 static OVERLAY_HEIGHT: AtomicU64 = AtomicU64::new(TITLEBAR_HEIGHT as u64);
@@ -48,6 +49,29 @@ pub fn repaint_pulse(app: &AppHandle) {
         if wv.label() == TITLEBAR_LABEL || wv.label() == STATUSBAR_LABEL {
             let _ = wv.eval("window.__dshdRepaint && window.__dshdRepaint()");
         }
+    }
+}
+
+/// 同步状态栏子 WebView 的原生底色。主窗口主题变化时只改 Window 底色并
+/// 不会自动更新子 WebView；显式同步可避免后续缩放再次露出旧主题底色。
+pub fn set_statusbar_theme_background(app: &AppHandle, light: bool) {
+    let Some(window) = app.get_window(MAIN_WINDOW) else {
+        return;
+    };
+    if let Some(statusbar) = window
+        .webviews()
+        .into_iter()
+        .find(|webview| webview.label() == STATUSBAR_LABEL)
+    {
+        let _ = statusbar.set_background_color(Some(statusbar_background(light)));
+    }
+}
+
+fn statusbar_background(light: bool) -> tauri::window::Color {
+    if light {
+        STATUSBAR_LIGHT_BG
+    } else {
+        STATUSBAR_DARK_BG
     }
 }
 
@@ -104,8 +128,12 @@ pub fn set_expanded(app: &AppHandle, expanded: bool, requested_height: Option<f6
 /// 固定为不透明 26px 高度，避免透明子 WebView 动态合成产生绘制残影。
 pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
     let window = main_window(app)?;
+    let background = statusbar_background(window.theme().ok() == Some(tauri::Theme::Light));
     let navigation_app = app.clone();
     let child = WebviewBuilder::new(STATUSBAR_LABEL, WebviewUrl::App("statusbar.html".into()))
+        // 子 WebView 有独立的原生底色；创建时即与主窗口一致，缩放期间即使
+        // WebView2 尚未完成一帧合成，也不会从透明缝隙露出默认白色。
+        .background_color(background)
         // 禁用后台节流：状态栏实时更新（会话统计/余额），失焦节流会导致
         // 首次渲染滞后（loading 界面先出、状态栏后出的跳跃感）
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
@@ -139,6 +167,13 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     // 尺寸记忆逐次累积变大，并附加 1px 白边）。
     #[cfg(not(target_os = "macos"))]
     window.set_decorations(false)?;
+
+    // 主 WebView 默认会跟随父窗口自动缩放，而本模块还必须为标题栏和状态栏
+    // 手动让位；保留自动缩放会让一次 Resized 触发两轮 SetBounds/重排。
+    // 关闭后由 sync_bounds 成为三个 WebView 唯一的布局所有者。
+    if let Some(main) = crate::main_webview(app) {
+        main.set_auto_resize(false)?;
+    }
 
     // 子 webview 透明：浮层展开加高时透出下层的 dsh 界面（浮层“盖在”其上而非推挤）；
     // 导航白名单与主窗口一致（IPC 另有来源校验兜底）
@@ -179,51 +214,54 @@ pub fn sync_bounds(app: &AppHandle) {
     let Ok(size) = window.inner_size() else {
         return;
     };
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let w = size.width as f64 / scale;
-    let h = size.height as f64 / scale;
-    let top_h = OVERLAY_HEIGHT.load(Ordering::SeqCst) as f64;
-    // 隐藏状态栏时高度为 0、主 webview 直到底部；重新开启恢复固定高度。
-    let status_h = if app.state::<AppState>().config().hide_statusbar {
-        0.0
-    } else {
-        STATUSBAR_HEIGHT
+    sync_bounds_for_size(app, size);
+}
+
+/// 使用 Resized 事件携带的物理尺寸同步边界，避免再读一次可能已经变化的窗口
+/// 几何。所有分区先在物理像素中取整，再把主内容设为精确余量，因此任意 DPI
+/// 下标题栏、内容区、状态栏都能无缝拼合。
+pub fn sync_bounds_for_size(app: &AppHandle, size: tauri::PhysicalSize<u32>) {
+    let Some(window) = app.get_window(MAIN_WINDOW) else {
+        return;
     };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    // 隐藏状态栏时高度为 0、主 webview 直到底部；重新开启恢复固定高度。
+    let status_visible = !app.state::<AppState>().config().hide_statusbar;
+    let layout = ChromeLayout::new(
+        size,
+        scale,
+        OVERLAY_HEIGHT.load(Ordering::SeqCst) as f64,
+        status_visible,
+    );
     let top = tauri::Rect {
-        position: tauri::Position::Logical((0.0, 0.0).into()),
-        size: tauri::Size::Logical((w, top_h).into()),
+        position: tauri::Position::Physical((0, 0).into()),
+        size: tauri::Size::Physical((size.width, layout.overlay_height).into()),
     };
     // 主 webview 从标题栏底部开始，并为可见状态栏让出固定高度。
     let main = tauri::Rect {
-        position: tauri::Position::Logical((0.0, TITLEBAR_HEIGHT).into()),
-        size: tauri::Size::Logical((w, (h - TITLEBAR_HEIGHT - status_h).max(0.0)).into()),
+        position: tauri::Position::Physical((0, layout.titlebar_height as i32).into()),
+        size: tauri::Size::Physical((size.width, layout.main_height).into()),
     };
     // 状态栏始终贴底，不因 hover 改变边界。
     let status = tauri::Rect {
-        position: tauri::Position::Logical((0.0, (h - status_h).max(TITLEBAR_HEIGHT)).into()),
-        size: tauri::Size::Logical((w, status_h).into()),
+        position: tauri::Position::Physical((0, layout.status_y as i32).into()),
+        size: tauri::Size::Physical((size.width, layout.status_height).into()),
     };
-    for wv in window.webviews() {
-        let is_titlebar = wv.label() == TITLEBAR_LABEL;
-        let is_statusbar = wv.label() == STATUSBAR_LABEL;
-        let rect = if is_titlebar {
-            top
-        } else if is_statusbar {
-            status
-        } else {
-            main
+
+    // 固定顺序：先铺满主内容，再盖标题栏，最后盖状态栏。单次 resize 不再
+    // 依赖 HashMap 的遍历顺序，能缩短边缘短暂露出宿主底色的时间窗口。
+    let webviews = window.webviews();
+    for (label, rect, guard) in [
+        (MAIN_WINDOW, main, &LAST_MAIN_KEY),
+        (TITLEBAR_LABEL, top, &LAST_TOP_KEY),
+        (STATUSBAR_LABEL, status, &LAST_STATUS_KEY),
+    ] {
+        let Some(wv) = webviews.iter().find(|webview| webview.label() == label) else {
+            continue;
         };
         // 矩形未变时跳过 set_bounds：重复设置会触发无谓的重布局/重绘，
-        // 是标题栏文案偶发闪烁的来源之一（tauri::Rect 无 PartialEq，
-        // 以逻辑分量记录上次设置值比较）
+        // 是标题栏文案偶发闪烁的来源之一。
         let key = rect_key(&rect);
-        let guard = if is_titlebar {
-            &LAST_TOP_KEY
-        } else if is_statusbar {
-            &LAST_STATUS_KEY
-        } else {
-            &LAST_MAIN_KEY
-        };
         let mut last = guard.lock().unwrap_or_else(|e| e.into_inner());
         if *last == Some(key) {
             continue;
@@ -233,29 +271,95 @@ pub fn sync_bounds(app: &AppHandle) {
     }
 }
 
-fn rect_key(rect: &tauri::Rect) -> (f64, f64, f64) {
+#[derive(Debug, PartialEq, Eq)]
+struct ChromeLayout {
+    titlebar_height: u32,
+    overlay_height: u32,
+    main_height: u32,
+    status_y: u32,
+    status_height: u32,
+}
+
+impl ChromeLayout {
+    fn new(
+        size: tauri::PhysicalSize<u32>,
+        scale: f64,
+        overlay_height: f64,
+        status_visible: bool,
+    ) -> Self {
+        let physical = |logical: f64| (logical * scale).round().max(0.0) as u32;
+        let titlebar_height = physical(TITLEBAR_HEIGHT).min(size.height);
+        let overlay_height = physical(overlay_height).min(size.height);
+        let status_height = if status_visible {
+            physical(STATUSBAR_HEIGHT).min(size.height.saturating_sub(titlebar_height))
+        } else {
+            0
+        };
+        let status_y = size.height.saturating_sub(status_height);
+        let main_height = status_y.saturating_sub(titlebar_height);
+        Self {
+            titlebar_height,
+            overlay_height,
+            main_height,
+            status_y,
+            status_height,
+        }
+    }
+}
+
+fn rect_key(rect: &tauri::Rect) -> (u32, u32, i32) {
     let (w, h) = match rect.size {
-        tauri::Size::Logical(l) => (l.width, l.height),
-        tauri::Size::Physical(p) => (p.width as f64, p.height as f64),
+        tauri::Size::Logical(l) => (
+            l.width.round().max(0.0) as u32,
+            l.height.round().max(0.0) as u32,
+        ),
+        tauri::Size::Physical(p) => (p.width, p.height),
     };
     (w, h, rect_y(rect))
 }
 
-fn rect_y(rect: &tauri::Rect) -> f64 {
+fn rect_y(rect: &tauri::Rect) -> i32 {
     match rect.position {
-        tauri::Position::Logical(l) => l.y,
-        tauri::Position::Physical(p) => p.y as f64,
+        tauri::Position::Logical(l) => l.y.round() as i32,
+        tauri::Position::Physical(p) => p.y,
     }
 }
 
-/// 上次设置的标题栏/主 webview/状态栏矩形（宽、高、y 的逻辑分量），
+/// 上次设置的标题栏/主 webview/状态栏矩形（宽、高、y 的物理分量），
 /// 供冗余 set_bounds 跳过。
-static LAST_TOP_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
-static LAST_MAIN_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
-static LAST_STATUS_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
+static LAST_TOP_KEY: std::sync::Mutex<Option<(u32, u32, i32)>> = std::sync::Mutex::new(None);
+static LAST_MAIN_KEY: std::sync::Mutex<Option<(u32, u32, i32)>> = std::sync::Mutex::new(None);
+static LAST_STATUS_KEY: std::sync::Mutex<Option<(u32, u32, i32)>> = std::sync::Mutex::new(None);
 
 fn main_window(app: &AppHandle) -> tauri::Result<tauri::Window> {
     app.get_window(MAIN_WINDOW).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "main window is unavailable").into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_layout_tiles_window_without_gaps_at_fractional_dpi() {
+        let layout = ChromeLayout::new(tauri::PhysicalSize::new(1280, 1000), 1.25, 36.0, true);
+        assert_eq!(layout.titlebar_height, 45);
+        assert_eq!(layout.status_height, 33);
+        assert_eq!(layout.main_height, 922);
+        assert_eq!(
+            layout.titlebar_height + layout.main_height + layout.status_height,
+            1000
+        );
+        assert_eq!(layout.status_y, 967);
+    }
+
+    #[test]
+    fn hidden_statusbar_gives_its_exact_pixels_to_main_webview() {
+        let layout = ChromeLayout::new(tauri::PhysicalSize::new(900, 575), 1.5, 240.0, false);
+        assert_eq!(layout.titlebar_height, 54);
+        assert_eq!(layout.status_height, 0);
+        assert_eq!(layout.main_height, 521);
+        assert_eq!(layout.status_y, 575);
+    }
 }

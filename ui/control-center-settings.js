@@ -1,11 +1,11 @@
 // 控制中心：用户设置与模型配置导入/导出。
 
-// —— 设置（统一弹窗内：开机自启 / 隐藏工具调用 / 隐藏统计行） ——
+// —— 设置（按桌面行为 / 界面 / 服务能力 / 凭据与模型分组） ——
 let settingsBusy = false;
 const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'auto_update_plugins'];
-function settingsRow(key, nameKey, descKey) {
+function settingsRow(key, nameKey, descKey, className) {
   return (
-    '<label class="srow">' +
+    '<label class="srow' + (className ? ' ' + className : '') + '">' +
     '<span class="srow-txt">' +
     '<span class="srow-name">' + dshdT(nameKey) + '</span>' +
     '<span class="srow-desc">' + dshdT(descKey) + '</span>' +
@@ -25,38 +25,9 @@ function behaviorRow(key, nameKey, descKey, firstValue, firstLabel, secondValue,
     '</span></div>'
   );
 }
-function renderSettings() {
-  const body = $('body');
-  body.innerHTML =
-    '<div class="psection api-key-box">' +
-    '<h3>' + dshdT('settingsApiKeyTitle') + '</h3>' +
-    '<div class="mi-card">' +
-    '<div class="mi-card-head">' +
-    '<label class="mi-card-name" for="settings-api-key">DeepSeek API Key</label>' +
-    '<span id="settings-api-key-help" class="mi-card-desc">' + dshdT('settingsApiKeyDesc') + '</span>' +
-    '</div>' +
-    '<div class="api-key-input-row">' +
-    '<input id="settings-api-key" class="mi-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="settings-api-key-help settings-api-key-feedback" />' +
-    '<button type="button" id="settings-api-key-toggle" class="mi-btn" aria-controls="settings-api-key" aria-pressed="false">' + dshdT('settingsApiKeyShow') + '</button>' +
-    '</div>' +
-    '<div class="mi-actions">' +
-    '<button type="button" id="settings-api-key-save" class="mi-btn primary">' + dshdT('settingsApiKeySave') + '</button>' +
-    '<button type="button" id="settings-api-key-clear" class="mi-btn">' + dshdT('settingsApiKeyClear') + '</button>' +
-    '<span id="settings-api-key-feedback" class="mi-feedback api-key-feedback" role="status" aria-live="polite"></span>' +
-    '</div>' +
-    '</div>' +
-    '</div>' +
-    '<div class="psection">' +
-    '<h3>' + dshdT('preferences') + '</h3>' +
-    settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
-    behaviorRow('close_behavior', 'settingsCloseBehavior', 'settingsCloseBehaviorDesc', 'tray', 'settingsCloseTray', 'quit', 'settingsCloseQuit') +
-    behaviorRow('launch_behavior', 'settingsLaunchBehavior', 'settingsLaunchBehaviorDesc', 'window', 'settingsLaunchWindow', 'tray', 'settingsLaunchTray') +
-    settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
-    settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
-    settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
-    settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc') +
-    settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
-    '<label class="srow">' +
+function dshChannelRow() {
+  return (
+    '<div class="srow">' +
     '<span class="srow-txt">' +
     '<span class="srow-name">' + dshdT('settingsDshChannel') + '</span>' +
     '<span class="srow-desc">' + dshdT('settingsDshChannelDesc') + '</span>' +
@@ -65,17 +36,58 @@ function renderSettings() {
     '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="latest" /><span>' + esc(dshdT('settingsChannelLatest')) + '</span></label>' +
     '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="next" /><span>' + esc(dshdT('settingsChannelNext')) + '</span></label>' +
     '</span>' +
-    '</label>' +
+    '</div>'
+  );
+}
+function renderSettings() {
+  const body = $('body');
+  body.innerHTML =
+    '<section class="psection settings-section" aria-labelledby="settings-desktop-heading">' +
+    '<h3 id="settings-desktop-heading">' + dshdT('settingsDesktopTitle') + '</h3>' +
+    settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
+    behaviorRow('launch_behavior', 'settingsLaunchBehavior', 'settingsLaunchBehaviorDesc', 'window', 'settingsLaunchWindow', 'tray', 'settingsLaunchTray') +
+    behaviorRow('close_behavior', 'settingsCloseBehavior', 'settingsCloseBehaviorDesc', 'tray', 'settingsCloseTray', 'quit', 'settingsCloseQuit') +
+    '</section>' +
+    '<section class="psection settings-section" aria-labelledby="settings-interface-heading">' +
+    '<h3 id="settings-interface-heading">' + dshdT('settingsInterfaceTitle') + '</h3>' +
+    settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
+    settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
+    settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
+    settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc', 'srow-dependent') +
+    '</section>' +
+    '<section class="psection settings-section" aria-labelledby="settings-runtime-heading">' +
+    '<h3 id="settings-runtime-heading">' + dshdT('settingsRuntimeTitle') + '</h3>' +
+    '<div id="settings-external-note" class="settings-scope-note" role="status" hidden>' +
+    '<span>' + dshdT('settingsExternalServiceNote') + '</span>' +
+    '<button type="button" id="settings-use-local" class="mi-btn">' + dshdT('useLocalService') + '</button>' +
     '</div>' +
+    '<div class="mi-card settings-service-card">' +
+    '<div class="mi-card-head">' +
+    '<label class="mi-card-name" for="settings-api-key">' + dshdT('deepSeekApiKey') + '</label>' +
+    '<span id="settings-api-key-help" class="mi-card-desc">' + dshdT('settingsApiKeyDesc') + '</span>' +
+    '</div>' +
+    '<div class="dshd-password-field api-key-input-row">' +
+    '<input id="settings-api-key" class="dshd-input mi-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="settings-api-key-help settings-api-key-feedback" />' +
+    '<button type="button" id="settings-api-key-toggle" class="dshd-x dshd-password-action" aria-controls="settings-api-key" aria-pressed="false" hidden></button>' +
+    '</div>' +
+    '<div class="mi-actions">' +
+    '<button type="button" id="settings-api-key-save" class="mi-btn primary">' + dshdT('settingsApiKeySave') + '</button>' +
+    '<button type="button" id="settings-api-key-clear" class="mi-btn">' + dshdT('settingsApiKeyClear') + '</button>' +
+    '<span id="settings-api-key-feedback" class="mi-feedback api-key-feedback" role="status" aria-live="polite"></span>' +
+    '</div>' +
+    '</div>' +
+    dshChannelRow() +
+    settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
+    '</section>' +
     // 模型配置导入/导出：独立卡片，随时可用
-    '<div class="psection mi-box">' +
-    '<h3>' + dshdT('modelImportTitle') + '</h3>' +
+    '<section class="psection settings-section mi-box" aria-labelledby="settings-model-heading">' +
+    '<h3 id="settings-model-heading">' + dshdT('modelImportTitle') + '</h3>' +
     '<div class="mi-card">' +
     '<div class="mi-card-head">' +
     '<label class="mi-card-name" for="mi-textarea">' + dshdT('modelImportPaste') + '</label>' +
     '<span class="mi-card-desc">' + dshdT('modelImportHint') + '</span>' +
     '</div>' +
-    '<textarea id="mi-textarea" class="mi-textarea" rows="5" spellcheck="false" placeholder="' + esc(dshdT('modelImportPlaceholder')) + '"></textarea>' +
+    '<textarea id="mi-textarea" class="dshd-input dshd-textarea mi-textarea" rows="5" spellcheck="false" placeholder="' + esc(dshdT('modelImportPlaceholder')) + '"></textarea>' +
     '<div class="mi-actions">' +
     '<button type="button" id="mi-preview" class="mi-btn primary">' + dshdT('modelImportPreview') + '</button>' +
     '<button type="button" id="mi-export" class="mi-btn">' + dshdT('modelExport') + '</button>' +
@@ -83,7 +95,7 @@ function renderSettings() {
     '</div>' +
     '<div id="mi-result" class="mi-result" hidden role="status" aria-live="polite"></div>' +
     '</div>' +
-    '</div>' +
+    '</section>' +
     '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
   body.querySelectorAll('.sswitch').forEach((el) => {
     el.addEventListener('change', onSettingToggle);
@@ -120,6 +132,20 @@ function renderSettings() {
     });
   });
   invoke('settings_get').then(applySettingState).catch((e) => showSettingError(e));
+  $('settings-use-local').addEventListener('click', async () => {
+    const button = $('settings-use-local');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    hideSettingError();
+    try {
+      await invoke('use_local_service');
+      await invoke('app_dialog_close');
+    } catch (e) {
+      showSettingError(dshdT('settingsFailed', { message: String(e) }));
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  });
   initApiKeySettings();
   initModelImport();
 }
@@ -141,13 +167,7 @@ function initApiKeySettings() {
   const save = $('settings-api-key-save');
   const clear = $('settings-api-key-clear');
   if (!input || !toggle || !save || !clear) return;
-  toggle.addEventListener('click', () => {
-    const show = input.type === 'password';
-    input.type = show ? 'text' : 'password';
-    toggle.textContent = dshdT(show ? 'settingsApiKeyHide' : 'settingsApiKeyShow');
-    toggle.setAttribute('aria-pressed', show ? 'true' : 'false');
-    input.focus();
-  });
+  dshdBindPasswordToggle(input, toggle);
   input.addEventListener('input', () => {
     input.removeAttribute('aria-invalid');
     apiKeyFeedback('', false);
@@ -165,6 +185,8 @@ function initApiKeySettings() {
     try {
       const state = await invoke('set_deepseek_api_key', { apiKey: value });
       input.value = '';
+      input.type = 'password';
+      if (toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
       applySettingState(state);
       apiKeyFeedback(dshdT('settingsApiKeySaved'), true);
     } catch (e) {
@@ -179,6 +201,8 @@ function initApiKeySettings() {
     try {
       const state = await invoke('set_deepseek_api_key', { apiKey: null });
       input.value = '';
+      input.type = 'password';
+      if (toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
       applySettingState(state);
       apiKeyFeedback(dshdT('settingsApiKeyCleared'), true);
     } catch (e) {
@@ -257,23 +281,34 @@ function miRenderResult(preview) {
     ok.textContent = dshdT('modelImportNoKeys');
     box.appendChild(ok);
   } else {
-    for (const ref of miPreviewRefs) {
-      const row = document.createElement('label');
+    miPreviewRefs.forEach((ref, index) => {
+      const row = document.createElement('div');
       row.className = 'mi-key-row';
-      const label = document.createElement('span');
+      const label = document.createElement('label');
       label.className = 'mi-key-label';
       label.textContent = dshdT('modelImportKeyLabel', { ref });
       const input = document.createElement('input');
-      input.className = 'mi-key-input';
+      input.id = 'model-import-key-' + index;
+      input.className = 'dshd-input mi-key-input';
       input.type = 'password';
       input.autocomplete = 'off';
       input.spellcheck = false;
       input.dataset.ref = ref;
-      input.placeholder = dshdT('modelImportKeyHint');
-      row.appendChild(label);
-      row.appendChild(input);
+      input.placeholder = 'sk-...';
+      label.htmlFor = input.id;
+      const inputRow = document.createElement('div');
+      inputRow.className = 'dshd-password-field';
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'dshd-x dshd-password-action';
+      toggle.setAttribute('aria-controls', input.id);
+      toggle.setAttribute('aria-pressed', 'false');
+      toggle.hidden = true;
+      inputRow.append(input, toggle);
+      dshdBindPasswordToggle(input, toggle);
+      row.append(label, inputRow);
       box.appendChild(row);
-    }
+    });
   }
   const actions = document.createElement('div');
   actions.className = 'mi-actions';
@@ -299,6 +334,12 @@ function miRenderResult(preview) {
     applyBtn.textContent = dshdT('modelImportApplying');
     try {
       await invoke('apply_model_import', { payload: { yaml, keys } });
+      box.querySelectorAll('input[data-ref]').forEach((input) => {
+        input.value = '';
+        input.type = 'password';
+        const toggle = input.parentElement && input.parentElement.querySelector('[data-dshd-password-toggle]');
+        if (toggle && toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
+      });
       const ok = document.createElement('div');
       ok.className = 'mi-ok';
       ok.textContent = dshdT('modelImportSuccess');
@@ -317,12 +358,20 @@ function miRenderResult(preview) {
 }
 function applySettingState(state) {
   const body = $('body');
+  const external = Boolean(state.external_service);
+  const externalNote = $('settings-external-note');
+  if (externalNote) externalNote.hidden = !external;
   SETTING_KEYS.forEach((key) => {
     const el = body.querySelector('.sswitch[data-key="' + key + '"]');
-    if (el) el.checked = Boolean(state[key]);
+    if (el) {
+      el.checked = Boolean(state[key]);
+      if (key === 'auto_update_plugins') el.disabled = external;
+      if (key === 'hide_balance') el.disabled = Boolean(state.hide_statusbar);
+    }
   });
   body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
     el.checked = el.value === state.dsh_update_channel;
+    el.disabled = external;
   });
   body.querySelectorAll('input[name="close_behavior"], input[name="launch_behavior"]').forEach((el) => {
     el.checked = el.value === state[el.name];
@@ -333,17 +382,22 @@ function applySettingState(state) {
   const apiToggle = $('settings-api-key-toggle');
   [apiInput, apiSave, apiToggle].forEach((el) => {
     if (!el) return;
-    el.dataset.locked = state.api_key_external ? '1' : '';
-    el.disabled = Boolean(state.api_key_external);
+    el.dataset.locked = state.api_key_external || external ? '1' : '';
+    el.disabled = Boolean(state.api_key_external || external);
   });
   if (apiInput) {
     apiInput.placeholder = state.api_key_set ? dshdT('settingsApiKeyConfigured') : 'sk-...';
   }
   if (apiClear) {
-    apiClear.dataset.locked = state.api_key_external || !state.api_key_set ? '1' : '';
-    apiClear.disabled = Boolean(state.api_key_external || !state.api_key_set);
+    apiClear.dataset.locked = state.api_key_external || external || !state.api_key_set ? '1' : '';
+    apiClear.disabled = Boolean(state.api_key_external || external || !state.api_key_set);
   }
-  if (state.api_key_external) apiKeyFeedback(dshdT('settingsApiKeyExternal'), true);
+  ['mi-textarea', 'mi-preview', 'mi-export'].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = external;
+  });
+  if (external) apiKeyFeedback(dshdT('settingsExternalServiceShort'), true);
+  else if (state.api_key_external) apiKeyFeedback(dshdT('settingsApiKeyExternal'), true);
 }
 function showSettingError(message) {
   const err = $('serr');
@@ -376,6 +430,8 @@ async function onSettingToggle(ev) {
     showSettingError(dshdT('settingsFailed', { message: String(e) }));
   } finally {
     settingsBusy = false;
-    input.disabled = false;
+    if (input.dataset.key === 'auto_update_plugins') input.disabled = Boolean(document.querySelector('#settings-external-note:not([hidden])'));
+    else if (input.dataset.key === 'hide_balance') input.disabled = Boolean($('body').querySelector('.sswitch[data-key="hide_statusbar"]')?.checked);
+    else input.disabled = false;
   }
 }

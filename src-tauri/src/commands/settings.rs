@@ -20,6 +20,8 @@ pub struct SettingsState {
     pub dsh_update_channel: String,
     pub close_behavior: String,
     pub launch_behavior: String,
+    /// 外部服务的数据目录与生命周期不归 DSHBox 管理。
+    pub external_service: bool,
 }
 
 fn settings_state(app: &AppHandle) -> SettingsState {
@@ -39,6 +41,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         dsh_update_channel: config.dsh_update_channel.clone(),
         close_behavior: config.close_behavior.clone(),
         launch_behavior: config.launch_behavior.clone(),
+        external_service: app.state::<AppState>().service_ownership().is_external(),
     }
 }
 
@@ -51,6 +54,7 @@ pub fn set_deepseek_api_key(
     api_key: Option<String>,
 ) -> Result<SettingsState, String> {
     ensure_local_origin(&webview)?;
+    ensure_local_service_scope(&app)?;
     let current = settings_state(&app);
     if current.api_key_external {
         return Err(crate::locale::text(
@@ -65,7 +69,7 @@ pub fn set_deepseek_api_key(
             if value.len() > 4096 || value.chars().any(char::is_control) {
                 return Err(crate::locale::text(
                     "API Key 含有无效字符或长度异常。",
-                    "The API Key contains invalid characters or is too long.",
+                    "The API key contains invalid characters or is too long.",
                 )
                 .into());
             }
@@ -146,6 +150,7 @@ pub fn settings_set(
             // 即时生效：余额 chip 显示/隐藏由状态栏前端据此渲染
         }
         "auto_update_plugins" => {
+            ensure_local_service_scope(&app)?;
             state.set_auto_update_plugins(value)?;
         }
         // 更新通道字段不改走 bool 开关逻辑（settings_set 的 value 是 bool，
@@ -167,6 +172,7 @@ pub fn set_dsh_channel(
     channel: String,
 ) -> Result<SettingsState, String> {
     ensure_local_origin(&webview)?;
+    ensure_local_service_scope(&app)?;
     if !matches!(channel.as_str(), "latest" | "next") {
         return Err(crate::locale::text("未知更新通道。", "Unknown update channel.").into());
     }

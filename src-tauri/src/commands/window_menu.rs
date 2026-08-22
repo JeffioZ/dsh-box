@@ -69,12 +69,12 @@ pub fn titlebar_expand(
 /// 两处菜单读取同一模型；模型按托盘/标题栏场景处理少量专属项。
 #[tauri::command]
 pub fn menu_get(
-    _app: AppHandle,
+    app: AppHandle,
     webview: tauri::Webview,
     tray_surface: bool,
 ) -> Result<Vec<crate::tray_menu::TrayMenuItem>, String> {
     ensure_local_origin(&webview)?;
-    Ok(crate::tray_menu::items(tray_surface))
+    Ok(crate::tray_menu::contextual_items(&app, tray_surface))
 }
 
 /// 两处菜单共用动作分发。

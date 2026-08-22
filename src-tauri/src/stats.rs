@@ -265,7 +265,13 @@ fn build_groups(config: &Config) -> Option<BuiltGroups> {
         if stats.steps > 0 {
             let counts = crate::locale::owned(
                 format!("{} 轮 · {} 步", stats.turns, stats.steps),
-                format!("{} turns · {} steps", stats.turns, stats.steps),
+                format!(
+                    "{} turn{} · {} step{}",
+                    stats.turns,
+                    if stats.turns == 1 { "" } else { "s" },
+                    stats.steps,
+                    if stats.steps == 1 { "" } else { "s" }
+                ),
             );
             push_group("counts", counts, Vec::new());
             let mut durations = Vec::new();
@@ -388,10 +394,22 @@ pub(crate) fn start_live_rate(app: AppHandle) {
         let mut cached_at = std::time::Instant::now() - SESSION_ID_TTL;
         loop {
             std::thread::sleep(LIVE_RATE_INTERVAL);
-            if app.state::<AppState>().is_quitting() {
+            let state = app.state::<AppState>();
+            if state.is_quitting() {
                 return;
             }
-            let config = app.state::<AppState>().config();
+            if state.service_ownership().is_external() {
+                cached_sid = None;
+                cached_at = std::time::Instant::now() - SESSION_ID_TTL;
+                let _ = app.emit("live-rate-updated", serde_json::json!({ "tps": null }));
+                continue;
+            }
+            if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
+                || state.phase() != crate::app_state::BootPhase::Ready
+            {
+                continue;
+            }
+            let config = state.config();
             if config.hide_statusbar || !config.hide_stats_line || !crate::main_is_visible(&app) {
                 cached_sid = None;
                 cached_at = std::time::Instant::now() - SESSION_ID_TTL;

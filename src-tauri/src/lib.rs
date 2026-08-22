@@ -90,7 +90,7 @@ pub fn log_panic(line: &str) {
 }
 
 /// 对外产品名（窗口标题/托盘/exe 属性等统一显示名）。
-pub const APP_TITLE: &str = "DeepSeek Harness Box";
+pub const APP_TITLE: &str = "DSHBox";
 
 /// 本地启动页（生产环境 Tauri 资源源）。
 pub const SPLASH_ORIGIN: &str = "tauri://localhost";
@@ -127,8 +127,13 @@ pub fn emit_status_progress(
         npm_version: snapshot.npm_version,
         port: snapshot.port,
         download_source: snapshot.download_source,
+        install_generation: snapshot.install_generation,
+        can_cancel: snapshot.can_cancel,
+        service_mode: snapshot.service_mode,
+        external_service: snapshot.external_service,
     };
     let _ = app.emit("dsh-status", payload);
+    crate::tray::sync_menu_state(app);
 }
 
 /// 主窗口（Window 级操作：show/icon/title/scale 等）。

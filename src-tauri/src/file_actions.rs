@@ -122,17 +122,17 @@ pub fn open_default(path: &Path) -> Result<(), String> {
     {
         let mut cmd = std::process::Command::new("open");
         cmd.arg(path.as_os_str());
-        status_ok(cmd, "默认程序打开")
+        status_ok(cmd, "默认程序打开", "Open with the default app")
     }
     #[cfg(target_os = "linux")]
     {
         let mut cmd = std::process::Command::new("xdg-open");
         cmd.arg(path.as_os_str());
-        status_ok(cmd, "默认程序打开")
+        status_ok(cmd, "默认程序打开", "Open with the default app")
     }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
-        Err("当前平台不支持".into())
+        Err(crate::locale::text("当前平台不支持", "This platform is not supported").into())
     }
 }
 
@@ -148,7 +148,7 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     {
         let mut cmd = std::process::Command::new("open");
         cmd.arg("-R").arg(path.as_os_str());
-        status_ok(cmd, "在 Finder 中定位")
+        status_ok(cmd, "在 Finder 中定位", "Reveal in Finder")
     }
     #[cfg(target_os = "linux")]
     {
@@ -159,11 +159,11 @@ pub fn reveal(path: &Path) -> Result<(), String> {
             .unwrap_or_else(|| PathBuf::from("."));
         let mut cmd = std::process::Command::new("xdg-open");
         cmd.arg(dir.as_os_str());
-        status_ok(cmd, "打开所在目录")
+        status_ok(cmd, "打开所在目录", "Open the containing folder")
     }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
-        Err("当前平台不支持".into())
+        Err(crate::locale::text("当前平台不支持", "This platform is not supported").into())
     }
 }
 
@@ -235,7 +235,7 @@ pub fn open_browser(url: &str) -> Result<(), String> {
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err(crate::locale::text(
             "仅支持打开 http/https 链接",
-            "Only valid http/https links can be opened",
+            "Only valid HTTP or HTTPS links can be opened",
         )
         .into());
     }
@@ -247,17 +247,17 @@ pub fn open_browser(url: &str) -> Result<(), String> {
     {
         let mut cmd = std::process::Command::new("open");
         cmd.arg(url);
-        status_ok(cmd, "在浏览器打开")
+        status_ok(cmd, "在浏览器打开", "Open in the browser")
     }
     #[cfg(target_os = "linux")]
     {
         let mut cmd = std::process::Command::new("xdg-open");
         cmd.arg(url);
-        status_ok(cmd, "在浏览器打开")
+        status_ok(cmd, "在浏览器打开", "Open in the browser")
     }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
-        Err("当前平台不支持".into())
+        Err(crate::locale::text("当前平台不支持", "This platform is not supported").into())
     }
 }
 
@@ -266,10 +266,17 @@ pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         let exe = match app {
-            "code" => vscode_exe().ok_or_else(|| "未找到 VS Code 安装".to_string())?,
+            "code" => vscode_exe().ok_or_else(|| {
+                crate::locale::text("未找到 VS Code", "VS Code was not found").to_string()
+            })?,
             "notepad" => system32("notepad.exe"),
             "paint" => system32("mspaint.exe"),
-            other => return Err(format!("未知应用：{other}")),
+            other => {
+                return Err(crate::locale::owned(
+                    format!("未知应用：{other}"),
+                    format!("Unknown app: {other}"),
+                ))
+            }
         };
         let params = format!("\"{}\"", path.display());
         shell_execute("open", &exe, Some(&params))
@@ -375,11 +382,17 @@ pub fn read_text_file(path: &Path, max_bytes: usize) -> Result<String, String> {
 
 /// 等待命令退出并按状态码判断成功与否（macOS/Linux）。
 #[cfg(not(windows))]
-fn status_ok(mut cmd: std::process::Command, what: &str) -> Result<(), String> {
+fn status_ok(mut cmd: std::process::Command, zh: &str, en: &str) -> Result<(), String> {
     match cmd.status() {
         Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!("{what}失败（退出码 {:?}）", s.code())),
-        Err(e) => Err(format!("{what}失败：{e}")),
+        Ok(s) => Err(crate::locale::owned(
+            format!("{zh}失败（退出码 {:?}）", s.code()),
+            format!("{en} failed (exit code {:?})", s.code()),
+        )),
+        Err(e) => Err(crate::locale::owned(
+            format!("{zh}失败：{e}"),
+            format!("{en} failed: {e}"),
+        )),
     }
 }
 
@@ -412,7 +425,10 @@ fn shell_execute(verb: &str, path: &Path, params: Option<&str>) -> Result<(), St
     if ret as isize > 32 {
         Ok(())
     } else {
-        Err(format!("ShellExecuteW 失败（错误码 {}）", ret as isize))
+        Err(crate::locale::owned(
+            format!("ShellExecuteW 失败（错误码 {}）", ret as isize),
+            format!("ShellExecuteW failed (error code {})", ret as isize),
+        ))
     }
 }
 

@@ -108,7 +108,7 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         if vi > 0 {
             let msg = crate::locale::owned(
                 format!("目标版本装不上，自动尝试 {target}…"),
-                format!("The target version failed; trying {target}…"),
+                format!("The target version could not be installed. Trying {target}…"),
             );
             emit_status(app, BootPhase::InstallingDsh, &msg, "");
         }
@@ -120,9 +120,9 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
         let last_attempt = registries.len().saturating_sub(1);
         for (attempt, registry) in registries.into_iter().enumerate() {
             let source = if registry.is_some() {
-                crate::locale::text("下载源：国内镜像", "Source: mirror")
+                crate::locale::text("镜像源", "Mirror")
             } else {
-                crate::locale::text("下载源：npm 官方", "Source: npm official")
+                crate::locale::text("npm 官方源", "Official npm registry")
             };
             emit_status(
                 app,
@@ -217,7 +217,7 @@ pub(crate) fn ensure_dsh(app: &AppHandle, config: &Config, node_exe: &Path) -> R
     // 所有版本 + 两个 registry 都试遍仍失败：报最终错误
     Err(crate::locale::owned(
         format!("安装 dsh 失败（目标版本与降级版本均无法安装）：{last_error}",),
-        format!("Failed to install dsh (target and fallback versions all failed): {last_error}",),
+        format!("Failed to install dsh (neither the target nor fallback versions could be installed): {last_error}",),
     ))
 }
 
@@ -331,23 +331,14 @@ fn run_npm_install_with_progress(
                     let downloaded = mb.saturating_sub(cache_base_mb);
                     let detail = if downloaded > 0 {
                         if crate::locale::is_chinese() {
-                            format!(
-                                "{} · 已下载约 {downloaded} MB · 已用时 {secs}s",
-                                attempt.source
-                            )
+                            format!("{} · 约 {downloaded} MB · {secs}s", attempt.source)
                         } else {
-                            format!(
-                                "{} · ~{downloaded} MB downloaded · {secs}s elapsed",
-                                attempt.source
-                            )
+                            format!("{} · ~{downloaded} MB · {secs}s", attempt.source)
                         }
                     } else if crate::locale::is_chinese() {
-                        format!("{} · 正在下载依赖… 已用时 {secs}s", attempt.source)
+                        format!("{} · 下载依赖 · {secs}s", attempt.source)
                     } else {
-                        format!(
-                            "{} · Fetching dependencies… {secs}s elapsed",
-                            attempt.source
-                        )
+                        format!("{} · Fetching · {secs}s", attempt.source)
                     };
                     emit_status(
                         app,

@@ -37,10 +37,22 @@ pub async fn session_stats_get(
     webview: tauri::Webview,
 ) -> Result<crate::stats::StatsPayload, String> {
     ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取会话统计。",
+            "Session statistics are available when the dsh service is ready.",
+        )
+        .into());
+    }
     let config = app.state::<AppState>().config();
     tauri::async_runtime::spawn_blocking(move || crate::stats::snapshot(&config))
         .await
-        .map_err(|e| format!("会话统计任务异常结束：{e}"))
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("会话统计任务异常结束：{e}"),
+                format!("The session statistics task ended unexpectedly: {e}"),
+            )
+        })
 }
 
 /// 余额弹窗内“刷新”按钮：后台重新查询，结果经轮询通道返回。
@@ -48,6 +60,13 @@ pub async fn session_stats_get(
 #[tauri::command]
 pub fn app_dialog_refresh_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    if !crate::tray_menu::action_enabled(&app, "balance") {
+        return Err(crate::locale::text(
+            "余额由外部 dsh 管理。",
+            "Balance is managed by the external dsh service.",
+        )
+        .into());
+    }
     std::thread::spawn(move || {
         let config = app.state::<AppState>().config();
         let payload = crate::balance::query_balance(&config);

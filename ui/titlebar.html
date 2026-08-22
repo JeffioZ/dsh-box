@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="common.css" />
   <style>
 /* 自绘标题栏：36px 顶条；整条可拖动（按钮/余额区除外）。
@@ -11,7 +12,7 @@
   /* 浮层定位规则（主菜单）：
      - 垂直：标题栏底边（分层线）下方，间距 0——紧贴分层线，不重叠；
      - 水平：右缘与入口按钮右缘对齐，向左展开；
-     - 卡片：使用共享菜单表面规格（7px 圆角、1px 描边、轻量双层阴影）。
+     - 卡片：使用共享菜单表面规格（12px 圆角、1px 描边、shadow-lv3）。
      标题栏展开高度预留的 24px 足以容纳共享阴影。 */
   --tb-overlay-top: 36px;
 }
@@ -52,7 +53,7 @@ body.window-inactive .tb-btn { color: #5b5c66; }
   /* 定位规则与余额浮层统一：入口下方 0 间距、右缘对齐 */
   /* 宽度与 Windows 自绘托盘菜单窗口（tray_menu.rs::menu_size）保持一致：
      220px，改动需同步两处 */
-  position: absolute; top: var(--tb-overlay-top); right: 0; width: 220px; padding: 4px;
+  position: absolute; top: var(--tb-overlay-top); right: 0; width: 220px;
   box-sizing: border-box; z-index: 10;
   /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px + dsh 字体栈）：
      标题栏页面无基础字号，不显式设置会落到浏览器默认 16px */
@@ -78,6 +79,14 @@ body.window-inactive .tb-btn { color: #5b5c66; }
 .main-menu-wrap.open .tb-btn.menu { background: var(--dshd-pressed); color: var(--dshd-text); }
 .tb-btn.close:hover { background: var(--dshd-danger); color: #fff; }
 .tb-btn.close:active { background: var(--dshd-danger-pressed); color: #fff; }
+body.hover-suspended .tb-btn:hover,
+body.hover-suspended .tb-btn.close:hover {
+  background: transparent;
+  color: var(--dshd-text-dim);
+}
+.tb-btn:disabled { opacity: .55; cursor: default; }
+.tb-btn:disabled:hover,
+.tb-btn.close:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
 .tb-glyph {
   font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
   font-size: 10px; line-height: 1; -webkit-font-smoothing: antialiased;
@@ -146,7 +155,7 @@ body.macos .titlebar { padding-left: 82px; }
   <div class="titlebar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
       <img class="brand-icon" src="assets/app-icon.svg" alt="" draggable="false" data-tauri-drag-region />
-      <span data-tauri-drag-region>DeepSeek Harness Box</span>
+      <span data-tauri-drag-region>DSHBox</span>
     </div>
     <div class="drag-space" data-tauri-drag-region></div>
     <div id="main-menu-wrap" class="main-menu-wrap">

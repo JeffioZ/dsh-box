@@ -3,6 +3,23 @@
 use crate::*;
 use tauri::Manager;
 
+const MAIN_MIN_WIDTH: f64 = 720.0;
+const MAIN_MIN_HEIGHT: f64 = 460.0;
+const MAIN_PREFERRED_MIN_WIDTH: f64 = 820.0;
+const MAIN_PREFERRED_MIN_HEIGHT: f64 = 520.0;
+const MAIN_MAX_WIDTH: f64 = 1280.0;
+const MAIN_MAX_HEIGHT: f64 = 820.0;
+
+fn preferred_main_size(work_width: f64, work_height: f64) -> (f64, f64) {
+    let width = (work_width * 0.8)
+        .clamp(MAIN_PREFERRED_MIN_WIDTH, MAIN_MAX_WIDTH)
+        .min(work_width.max(MAIN_MIN_WIDTH));
+    let height = (work_height * 0.82)
+        .clamp(MAIN_PREFERRED_MIN_HEIGHT, MAIN_MAX_HEIGHT)
+        .min(work_height.max(MAIN_MIN_HEIGHT));
+    (width, height)
+}
+
 pub(crate) fn run() {
     let app = tauri::Builder::default()
         .register_uri_scheme_protocol("dshd", handle_dshd_scheme)
@@ -45,7 +62,9 @@ pub(crate) fn run() {
             )
             .title(APP_TITLE)
             .inner_size(1280.0, 820.0)
-            .min_inner_size(960.0, 620.0)
+            // 默认尺寸不变；只放宽高 DPI/小屏下的最小逻辑视口。dsh 官方
+            // 在 560/680/720/760px 设有响应式断点，720×460 仍保留完整功能。
+            .min_inner_size(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT)
             .resizable(true)
             .center()
             .visible(false)
@@ -141,8 +160,8 @@ pub(crate) fn run() {
                         });
                     if let Some((px, py, pw, ph)) = target {
                         // 硬性收敛进工作区：尺寸不超工作区，位置完整可见
-                        let wc = lw.min(pw);
-                        let hc = lh.min(ph);
+                        let wc = lw.clamp(MAIN_MIN_WIDTH.min(pw), pw);
+                        let hc = lh.clamp(MAIN_MIN_HEIGHT.min(ph), ph);
                         let xc = lx.clamp(px, px + pw - wc);
                         let yc = ly.clamp(py, py + ph - hc);
                         logging::log(&format!(
@@ -172,8 +191,7 @@ pub(crate) fn run() {
                         let wa = monitor.work_area();
                         let ww = wa.size.width as f64 / scale;
                         let wh = wa.size.height as f64 / scale;
-                        let w = (ww * 0.8).clamp(960.0, 1280.0);
-                        let h = (wh * 0.82).clamp(620.0, 820.0);
+                        let (w, h) = preferred_main_size(ww, wh);
                         let _ =
                             win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
                         applied_size = (w, h);
@@ -392,20 +410,37 @@ pub(crate) fn run() {
                     crate::titlebar::repaint_pulse(window.app_handle());
                 }
             }
-            tauri::WindowEvent::Resized(_) => {
+            tauri::WindowEvent::ThemeChanged(theme) if window.label() == MAIN_WINDOW => {
+                let color = if *theme == tauri::Theme::Light {
+                    LIGHT_BG
+                } else {
+                    DARK_BG
+                };
+                let _ = window.set_background_color(Some(color));
+                titlebar::set_statusbar_theme_background(
+                    window.app_handle(),
+                    *theme == tauri::Theme::Light,
+                );
+            }
+            tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. }
+                if window.label() == MAIN_WINDOW =>
+            {
+                titlebar::sync_bounds_for_size(window.app_handle(), *new_inner_size);
+            }
+            tauri::WindowEvent::Resized(size) => {
                 if window.label() != MAIN_WINDOW {
                     return;
                 }
                 // 标题栏/主 webview 边界跟随窗口尺寸（必须先于带 guard 的臂执行，
                 // 否则 resize 时 sync_bounds 永不触发，标题栏被主 webview 覆盖）
-                titlebar::sync_bounds(window.app_handle());
+                titlebar::sync_bounds_for_size(window.app_handle(), *size);
                 if !window
                     .app_handle()
                     .state::<AppState>()
                     .inner()
                     .is_quitting()
                 {
-                    // 拖动/缩放时节流保存（500ms 内最多落盘一次）
+                    // 拖动/缩放停顿 250ms 后保存，退出时另行强制落盘。
                     window::save_window_state(window.app_handle());
                 }
             }
@@ -436,4 +471,25 @@ pub(crate) fn run() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferred_main_size_keeps_default_caps_on_large_displays() {
+        assert_eq!(preferred_main_size(1920.0, 1080.0), (1280.0, 820.0));
+    }
+
+    #[test]
+    fn preferred_main_size_fits_high_dpi_work_area() {
+        assert_eq!(preferred_main_size(1024.0, 600.0), (820.0, 520.0));
+        assert_eq!(preferred_main_size(853.0, 493.0), (820.0, 493.0));
+    }
+
+    #[test]
+    fn preferred_main_size_never_drops_below_window_minimum() {
+        assert_eq!(preferred_main_size(640.0, 400.0), (720.0, 460.0));
+    }
 }

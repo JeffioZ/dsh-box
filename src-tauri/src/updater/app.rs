@@ -1,6 +1,10 @@
 //! DSHBox Windows 单文件更新与预下载。
 
+#[cfg(windows)]
+use super::check::check_app_update;
 use super::*;
+#[cfg(windows)]
+use std::io::Read;
 
 // ---------- 应用自身更新（Windows：下载 → 替换 → 重启） ----------
 
@@ -23,16 +27,33 @@ fn fetch_app_release_asset(version: &str) -> Result<AppReleaseAsset, String> {
         .header("X-GitHub-Api-Version", "2026-03-10")
         .header("User-Agent", "DSHBox")
         .call()
-        .map_err(|e| format!("读取 Release 元数据失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::error(
+                "读取 Release 元数据失败",
+                "Failed to fetch release metadata",
+                e,
+            )
+        })?;
     let mut text = String::new();
     response
         .into_body()
         .into_reader()
         .take(1024 * 1024)
         .read_to_string(&mut text)
-        .map_err(|e| format!("读取 Release 元数据失败：{e}"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("解析 Release 元数据失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::error(
+                "读取 Release 元数据失败",
+                "Failed to read release metadata",
+                e,
+            )
+        })?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        crate::locale::error(
+            "解析 Release 元数据失败",
+            "Failed to parse release metadata",
+            e,
+        )
+    })?;
     let (asset_url, sha256) = parse_app_release_asset(&json, version)?;
     Ok(AppReleaseAsset {
         version: version.to_string(),
@@ -138,14 +159,16 @@ pub(super) fn update_app_exe(
     #[cfg(windows)]
     {
         let dir = config.root.join("exe-update");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败：{e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            crate::locale::error("创建更新目录失败", "Failed to create the update folder", e)
+        })?;
         let target = dir.join("DSHBox.exe");
         let info = check_app_update()
             .filter(|info| info.update_available)
             .ok_or_else(|| {
                 crate::locale::text(
                     "暂时无法确认可用的应用更新。",
-                    "No app update can be confirmed right now.",
+                    "Could not confirm an app update right now.",
                 )
                 .to_string()
             })?;
@@ -254,14 +277,16 @@ fn download_app_exe_inner(
         .get(&release.url)
         .header("User-Agent", "DSHBox")
         .call()
-        .map_err(|e| format!("下载失败：{e}"))?;
+        .map_err(|e| crate::locale::error("下载失败", "Download failed", e))?;
     // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
     const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
     let mut reader = resp.into_body().into_reader().take(MAX_APP_EXE_BYTES + 1);
     let part = target.with_extension("exe.part");
     let _ = std::fs::remove_file(&part);
-    let mut file = std::fs::File::create(&part).map_err(|e| format!("写入失败：{e}"))?;
-    let copied = std::io::copy(&mut reader, &mut file).map_err(|e| format!("下载中断：{e}"))?;
+    let mut file = std::fs::File::create(&part)
+        .map_err(|e| crate::locale::error("写入失败", "Failed to write the update", e))?;
+    let copied = std::io::copy(&mut reader, &mut file)
+        .map_err(|e| crate::locale::error("下载中断", "Download interrupted", e))?;
     if copied > MAX_APP_EXE_BYTES {
         return Err(crate::locale::text(
             "下载内容超出预期大小，已取消更新。",
@@ -269,15 +294,26 @@ fn download_app_exe_inner(
         )
         .into());
     }
-    file.flush().map_err(|e| format!("写入更新包失败：{e}"))?;
-    file.sync_all()
-        .map_err(|e| format!("写入更新包失败：{e}"))?;
+    file.flush().map_err(|e| {
+        crate::locale::error("写入更新包失败", "Failed to write the update package", e)
+    })?;
+    file.sync_all().map_err(|e| {
+        crate::locale::error("写入更新包失败", "Failed to write the update package", e)
+    })?;
     drop(file);
     verify_downloaded_exe(&part, &release.sha256)?;
     if target.exists() {
-        std::fs::remove_file(target).map_err(|e| format!("清理旧更新包失败：{e}"))?;
+        std::fs::remove_file(target).map_err(|e| {
+            crate::locale::error(
+                "清理旧更新包失败",
+                "Failed to remove the previous update package",
+                e,
+            )
+        })?;
     }
-    std::fs::rename(&part, target).map_err(|e| format!("提交更新包失败：{e}"))?;
+    std::fs::rename(&part, target).map_err(|e| {
+        crate::locale::error("提交更新包失败", "Failed to finalize the update package", e)
+    })?;
     Ok(())
 }
 
@@ -353,11 +389,23 @@ fn apply_downloaded_exe(
 
     // 4) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
     // File.Replace 原子替换；断电发生在提交前时旧 exe 始终保持可启动。
-    let exe = std::env::current_exe().map_err(|e| format!("无法定位当前程序路径：{e}"))?;
+    let exe = std::env::current_exe().map_err(|e| {
+        crate::locale::error(
+            "无法定位当前程序路径",
+            "Failed to locate the current executable",
+            e,
+        )
+    })?;
     let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
     let script = dir.join("replace.ps1");
     let script_text = windows_replace_script(target, &exe, expected_sha256);
-    std::fs::write(&script, script_text).map_err(|e| format!("写入替换脚本失败：{e}"))?;
+    std::fs::write(&script, script_text).map_err(|e| {
+        crate::locale::error(
+            "写入替换脚本失败",
+            "Failed to write the replacement script",
+            e,
+        )
+    })?;
 
     // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
     let mut replace_cmd = std::process::Command::new("powershell");
@@ -467,9 +515,7 @@ fn prompt_apply_prefetched(app: &AppHandle, target: &std::path::Path, version: &
     use tauri_plugin_dialog::MessageDialogKind;
     let msg = crate::locale::owned(
         format!("新版本 {version} 已下载完成。\n是否立即重启应用以完成更新？"),
-        format!(
-            "Version {version} has been downloaded.\nRestart the app now to finish the update?"
-        ),
+        format!("Version {version} has been downloaded.\nRestart DSHBox now to finish the update?"),
     );
     if crate::native_dialog::ask(
         app,

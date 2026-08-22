@@ -10,6 +10,32 @@ let mainMenuMotion = null;
 let mainMenuRequest = 0;
 let mainMenuSelectionPending = false;
 let closeBehavior = 'tray';
+let hoverSuspendPoint = null;
+let lastPointerPoint = null;
+
+function suspendWindowControlHover(event) {
+  if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+    hoverSuspendPoint = { x: event.clientX, y: event.clientY };
+  } else if (!document.body.classList.contains('hover-suspended')) {
+    hoverSuspendPoint = lastPointerPoint;
+  }
+  document.body.classList.add('hover-suspended');
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.classList.contains('tb-btn')) active.blur();
+}
+
+function resumeWindowControlHover(event) {
+  if (!document.body.classList.contains('hover-suspended')) return;
+  // 最小化/失焦期间的 pointerleave 不代表用户真正移动了指针。
+  // 等窗口重新激活后再由真实 pointermove 解除悬停，避免恢复时残留 hover。
+  if (document.body.classList.contains('window-inactive')) return;
+  // 恢复窗口时 WebView2 偶尔会在原坐标补发 pointermove。忽略这一帧；
+  // 用户真正移动哪怕 1px 后立即恢复 hover，不要求先离开整组按钮。
+  if (event && hoverSuspendPoint
+      && event.clientX === hoverSuspendPoint.x && event.clientY === hoverSuspendPoint.y) return;
+  document.body.classList.remove('hover-suspended');
+  hoverSuspendPoint = null;
+}
 
 function applyCloseBehavior(value) {
   closeBehavior = value === 'quit' ? 'quit' : 'tray';
@@ -32,12 +58,12 @@ function initPlatform() {
   }
 }
 
-// 浮层高度按内容实测（+36px 标题栏 + 24px 阴影余量）：
-// 当前阴影 blur 12px + y 偏移 4px，24px 余量足够；不足会被 webview
+// 浮层高度按内容实测（+36px 标题栏 + 48px shadow-lv3 底部余量）：
+// 与独立弹窗/托盘菜单使用同一阴影安全区；不足会被 webview
 // 底缘硬切（阴影边缘突然截断）。Rust 端再按 36..620 收敛
 function syncOverlayHeight() {
   const content = mainMenuOpen && $('main-menu-panel') ? $('main-menu-panel').offsetHeight : 0;
-  const height = content > 0 ? 36 + content + 24 : 36;
+  const height = content > 0 ? 36 + content + 48 : 36;
   return invoke('titlebar_expand', { expand: height > 36, height }).catch(() => {});
 }
 
@@ -67,7 +93,7 @@ function setMainMenuOpen(open, focusMenu = false) {
       if (request !== mainMenuRequest || !mainMenuOpen) return;
       await syncOverlayHeight();
       if (request !== mainMenuRequest || !mainMenuOpen) return;
-      mainMenuMotion.open('-3px');
+      mainMenuMotion.open('-4px');
       if (focusMenu) mainMenu.focusFirst();
     });
     return;
@@ -125,7 +151,10 @@ function bindMainMenu() {
 }
 
 function bindWindowControls() {
-  $('btn-min').addEventListener('click', () => invoke('titlebar_minimize').catch(() => {}));
+  $('btn-min').addEventListener('click', (event) => {
+    suspendWindowControlHover(event);
+    invoke('titlebar_minimize').catch(() => resumeWindowControlHover());
+  });
   $('btn-max').addEventListener('click', async () => {
     try {
       applyMaxState(await invoke('titlebar_toggle_maximize'));
@@ -134,6 +163,11 @@ function bindWindowControls() {
     }
   });
   $('btn-close').addEventListener('click', () => invoke('titlebar_close').catch(() => {}));
+  document.addEventListener('pointermove', (event) => {
+    resumeWindowControlHover(event);
+    lastPointerPoint = { x: event.clientX, y: event.clientY };
+  }, { passive: true });
+  $('win-buttons').addEventListener('pointerleave', resumeWindowControlHover);
 }
 
 function applyMaxState(maximized) {
@@ -155,7 +189,6 @@ async function init() {
   initPlatform();
   bindMainMenu();
   bindWindowControls();
-  document.addEventListener('contextmenu', (event) => event.preventDefault());
 
   let maxCheckTimer = null;
   window.addEventListener('resize', () => {
@@ -200,6 +233,7 @@ async function init() {
   // 与主窗口焦点不同步），挂载全局函数供 Rust eval 直呼
   window.__dshdSetWindowActive = (active) => {
     document.body.classList.toggle('window-inactive', !active);
+    if (!active) suspendWindowControlHover();
   };
   refreshMainMenu();
   // 初始化完成回报：Rust 启动自愈看门狗据此判断本页面是否加载成功

@@ -46,14 +46,14 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
     if yaml.len() > MAX_IMPORT_BYTES {
         return Err(crate::locale::text(
             "模型配置超过 1 MB 上限。",
-            "The model config exceeds the 1 MB limit.",
+            "The model configuration exceeds the 1 MB limit.",
         )
         .into());
     }
     let document: ImportedDocument = serde_saphyr::from_str(yaml).map_err(|error| {
         crate::locale::owned(
             format!("模型配置 YAML 无效：{error}"),
-            format!("Invalid model config YAML: {error}"),
+            format!("Invalid model configuration YAML: {error}"),
         )
     })?;
     if extract_section_text(yaml).trim().is_empty() {
@@ -66,7 +66,7 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
     if document.llm_pi_ai.providers.is_empty() {
         return Err(crate::locale::text(
             "模型配置中没有识别到任何提供方路由（providers）。",
-            "No provider routes found in the model config.",
+            "No provider routes were found in the model configuration.",
         )
         .into());
     }
@@ -79,7 +79,7 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
         {
             return Err(crate::locale::text(
                 "模型配置 provider 路由名不合法。",
-                "Invalid provider route name in model config.",
+                "The model configuration contains an invalid provider route name.",
             )
             .into());
         }

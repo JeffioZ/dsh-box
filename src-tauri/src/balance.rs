@@ -93,7 +93,7 @@ fn resolve_api_key(config: &Config) -> Result<String, String> {
     }
     Err(crate::locale::text(
         "未找到 DeepSeek API Key。\n请在应用设置中配置，或设置 DSH_BOX_API_KEY / DEEPSEEK_API_KEY 环境变量。",
-        "No DeepSeek API Key was found.\nConfigure it in the app, or set DSH_BOX_API_KEY / DEEPSEEK_API_KEY.",
+        "No DeepSeek API key was found.\nConfigure it in the app, or set DSH_BOX_API_KEY / DEEPSEEK_API_KEY.",
     )
     .into())
 }
@@ -117,7 +117,7 @@ pub(crate) fn query_balance(config: &Config) -> BalancePayload {
                     Some("invalid_key"),
                     crate::locale::text(
                         "API Key 无效，请检查配置的密钥是否正确。",
-                        "The API Key is invalid. Check the configured key.",
+                        "The API key is invalid. Check the configured key.",
                     )
                     .to_string(),
                 ),
@@ -158,6 +158,16 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
         if state.is_quitting() {
             return;
         }
+        if state.service_ownership().is_external() {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+        if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
+            || state.phase() != crate::app_state::BootPhase::Ready
+        {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
         let config = state.config();
         if config.hide_statusbar || config.hide_balance || !crate::main_is_visible(&app) {
             std::thread::sleep(std::time::Duration::from_secs(300));
@@ -173,6 +183,14 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
 pub(crate) fn refresh_once(app: AppHandle) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
+        if state.service_ownership().is_external() {
+            return;
+        }
+        if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
+            || state.phase() != crate::app_state::BootPhase::Ready
+        {
+            return;
+        }
         let config = state.config();
         if !config.hide_statusbar && !config.hide_balance && crate::main_is_visible(&app) {
             let payload = query_balance(&config);
@@ -185,6 +203,15 @@ pub(crate) fn refresh_once(app: AppHandle) {
 pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayload {
     if let Err(error) = crate::commands::ensure_local_origin(&webview) {
         return denied_payload(error);
+    }
+    if app.state::<AppState>().service_ownership().is_external() {
+        return denied_payload(
+            crate::locale::text(
+                "余额使用外部 dsh 的凭据，请在原服务环境中查询。",
+                        "The external dsh service manages the credentials used for balance queries. Check the balance in that service's environment.",
+            )
+            .into(),
+        );
     }
     run_balance_query(app).await
 }

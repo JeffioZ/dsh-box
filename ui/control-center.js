@@ -80,12 +80,14 @@ function updBtn(id, label, which, primary) {
   btn.disabled = updateRunning;
   btn.addEventListener('click', () => {
     updateRunning = true;
+    renderNav(openKind);
     document.querySelectorAll('.uprow .dshd-btn').forEach((button) => {
       button.disabled = true;
     });
     btn.textContent = dshdT('processing');
     invoke('app_dialog_update', { which }).catch((e) => {
       updateRunning = false;
+      renderNav(openKind);
       btn.disabled = false;
       btn.textContent = label;
       renderUpdateDone({ ok: false, message: dshdT('operationNotStarted', { message: e }) });
@@ -219,6 +221,7 @@ function renderUpdateDone(p) {
   if (openKind !== 'check') return;
   // 更新流程结束：此后按钮按结果复位
   updateRunning = false;
+  renderNav(openKind);
   // UAC“继续”期间页脚被替换为确认按钮：完成后恢复“关闭”
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
@@ -297,12 +300,11 @@ function renderAbout(initial) {
   $('body').innerHTML =
     '<div class="about">' +
     ABOUT_LOGO +
-    '<div class="nm">DeepSeek Harness Box</div>' +
+    '<div class="nm">DSHBox</div>' +
     '<div class="tag">' + dshdT('aboutTagline') + '</div>' +
     '<div class="ver-row">' +
     '<span>' + dshdT('appVersion', { version: esc(initial.app_version) }) + '</span>' +
     '<span>dsh ' + esc(initial.dsh_version || '—') + '</span>' +
-    '<span>' + dshdT('marketRow') + '</span>' +
     '</div>' +
     '<button type="button" class="dshd-btn" id="about-check">' + dshdT('checkUpdates') + '</button>' +
     '<div class="cp">© ' + new Date().getFullYear() + ' JeffioZ</div>' +
@@ -315,13 +317,32 @@ function renderAbout(initial) {
 
 // —— 左侧导航（单窗口多功能切换） ——
 const NAV_ITEMS = [
-  { kind: 'stats', label: 'navStats', icon: 'chart' },
-  { kind: 'balance', label: 'navBalance', icon: 'wallet' },
-  { kind: 'check', label: 'navCheck', icon: 'refresh' },
-  { kind: 'plugins', label: 'navPlugins', icon: 'puzzle' },
+  { kind: 'stats', label: 'navStats', icon: 'chart', capability: 'managed-ready' },
+  { kind: 'balance', label: 'navBalance', icon: 'wallet', capability: 'local' },
+  { separator: true },
+  { kind: 'plugins', label: 'navPlugins', icon: 'puzzle', capability: 'managed-ready' },
   { kind: 'settings', label: 'navSettings', icon: 'gear' },
+  { separator: true },
+  { kind: 'check', label: 'navCheck', icon: 'download' },
   { kind: 'about', label: 'navAbout', icon: 'info' },
 ];
+function navCapability(item) {
+  if (!item || !item.capability) return { enabled: true, reason: '' };
+  const initial = (currentOpen && currentOpen.initial) || {};
+  const external = initial.service_mode === 'external' || initial.service_mode === 'external-disconnected';
+  if (item.capability === 'local') {
+    return external
+      ? { enabled: false, reason: dshdT('navManagedOnly') }
+      : { enabled: true, reason: '' };
+  }
+  if (external) return { enabled: false, reason: dshdT('navManagedOnly') };
+  if (item.kind === 'plugins' && updateRunning) {
+    return { enabled: false, reason: dshdT('navUpdateRunning') };
+  }
+  return initial.service_ready && initial.service_mode === 'managed'
+    ? { enabled: true, reason: '' }
+    : { enabled: false, reason: dshdT('navRequiresReady') };
+}
 const NAV_TITLE_KEY = {
   stats: 'statsTitle', balance: 'balanceTitle', check: 'checkUpdates', plugins: 'pluginsTitle',
   settings: 'settingsTitle', about: 'about',
@@ -329,8 +350,8 @@ const NAV_TITLE_KEY = {
 const NAV_ICONS = {
   chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path></svg>',
   wallet: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 7H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h13"></path><path d="M3 5v14a2 2 0 0 0 2 2h16V7"></path><path d="M16 13h3"></path></svg>',
-  refresh: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path></svg>',
-  puzzle: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M21 16v5h-5"></path><path d="M3 16v5h5"></path><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>',
+  download: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path></svg>',
+  puzzle: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M8.5 3H5a2 2 0 0 0-2 2v3.5a2.5 2.5 0 1 1 0 5V19a2 2 0 0 0 2 2h3.5a2.5 2.5 0 1 1 5 0H19a2 2 0 0 0 2-2v-5.5a2.5 2.5 0 1 1 0-5V5a2 2 0 0 0-2-2h-5.5a2.5 2.5 0 1 1-5 0Z"></path></svg>',
   gear: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
   info: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path></svg>',
 };
@@ -344,19 +365,31 @@ function renderNav(activeKind) {
   const title = document.createElement('div');
   title.className = 'nav-title';
   title.setAttribute('data-tauri-drag-region', 'deep');
-  const titleKey = NAV_TITLE_KEY[activeKind];
-  title.textContent = titleKey ? dshdT(titleKey) : (currentOpen && currentOpen.title) || '';
+  title.textContent = 'DSHBox';
   nav.append(title);
   for (const item of NAV_ITEMS) {
+    if (item.separator) {
+      const separator = document.createElement('div');
+      separator.className = 'nav-sep';
+      separator.setAttribute('role', 'separator');
+      nav.append(separator);
+      continue;
+    }
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'nav-item' + (item.kind === activeKind ? ' active' : '');
     btn.dataset.kind = item.kind;
-    btn.setAttribute('aria-current', item.kind === activeKind ? 'page' : 'false');
+    if (item.kind === activeKind) btn.setAttribute('aria-current', 'page');
+    const capability = navCapability(item);
+    btn.disabled = !capability.enabled;
+    if (!capability.enabled) btn.title = capability.reason;
     btn.innerHTML = '<span class="nic">' + NAV_ICONS[item.icon] + '</span><span class="nav-label">' + esc(dshdT(item.label)) + '</span>';
     btn.addEventListener('click', () => navigateTo(item.kind));
     nav.append(btn);
   }
+  const titleKey = NAV_TITLE_KEY[activeKind];
+  const pageTitle = $('dialog-title');
+  if (pageTitle) pageTitle.textContent = titleKey ? dshdT(titleKey) : '';
   // 导航底部版本号（填充空间，弱化显示）
   const ver = document.createElement('div');
   ver.className = 'nav-ver';
@@ -391,8 +424,17 @@ function renderCurrent(opts) {
   else if (k === 'plugins') renderPlugins();
   else if (k === 'settings') renderSettings();
 }
+function playViewTransition() {
+  const content = $('body');
+  content.classList.remove('view-enter');
+  void content.offsetWidth;
+  content.classList.add('view-enter');
+}
 function navigateTo(kind) {
   if (!currentOpen || openKind === kind) return;
+  const item = NAV_ITEMS.find((candidate) => candidate.kind === kind);
+  if (!navCapability(item).enabled) return;
+  if (kind !== 'balance') setBalanceRefreshBusy(false);
   openKind = kind;
   currentOpen = { kind, title: '', initial: currentOpen.initial };
   renderNav(kind);
@@ -401,7 +443,9 @@ function navigateTo(kind) {
   applyTruncationTips(document);
   $('btn-refresh').classList.toggle('hidden', kind !== 'balance');
   renderCurrent({ triggerCheck: true, triggerBalance: true });
-  // 导航切换不重播入场动画（否则每次切换整窗淡入 = "切换闪一下"）
+  $('body').scrollTop = 0;
+  // 只提示右侧内容已切换；整窗保持稳定，快速连续点击会直接重启动画。
+  playViewTransition();
 }
 
 let closeTimer = null;
@@ -422,13 +466,19 @@ let balanceRefreshStart = 0;
 let pwshPromptShown = false;
 // 更新执行中：期间“更新/安装”按钮保持禁用（结果行重建会重置禁用态）
 let updateRunning = false;
+function setBalanceRefreshBusy(busy) {
+  const button = $('btn-refresh');
+  button.classList.toggle('refreshing', busy);
+  button.disabled = busy;
+  button.toggleAttribute('aria-busy', busy);
+}
 $('btn-refresh').addEventListener('click', () => {
   const button = $('btn-refresh');
   if (button.classList.contains('refreshing')) return;
-  button.classList.add('refreshing');
+  setBalanceRefreshBusy(true);
   balanceRefreshStart = Date.now();
   invoke('app_dialog_refresh_balance').catch(() => {
-    button.classList.remove('refreshing');
+    setBalanceRefreshBusy(false);
   });
 });
 function applyOpen(p) {
@@ -453,6 +503,7 @@ function applyOpen(p) {
   lastProgress = '';
   pendingRefreshData = null;
   pwshPromptShown = false;
+  setBalanceRefreshBusy(false);
   // 刷新按钮仅余额弹窗显示
   $('btn-refresh').classList.toggle('hidden', p.kind !== 'balance');
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
@@ -462,8 +513,8 @@ function applyOpen(p) {
   renderNav(p.kind);
   // Rust 打开时已按 kind 预置状态（open_check 触发检查等），此处只渲染
   renderCurrent();
-  // 入场动画（仅打开时播一次，导航切换不重播）：透明窗口位置已修复
-  // （创建即定位），纯 opacity 淡入不会再闪烁
+  // 整窗入场仅打开时播一次；导航切换只播放右侧内容区的轻量提示。
+  // 透明窗口创建即定位，纯 opacity 淡入不会再闪烁。
   document.body.classList.remove('dshd-pop-in');
   void document.body.offsetWidth;
   document.body.classList.add('dshd-pop-in');
@@ -492,6 +543,8 @@ window.__dshdReset = () => {
   pendingRefreshData = null;
   pwshPromptShown = false;
   updateRunning = false;
+  renderNav(openKind);
+  setBalanceRefreshBusy(false);
   pluginApplyStamp = '';
   statsDetailSeq += 1;
   // 标题由 renderNav 写导航顶部；此处仅清空残留
@@ -501,6 +554,14 @@ window.__dshdReset = () => {
   if (nav) nav.innerHTML = '';
 };
 listen('app-dialog-open', (e) => applyOpen(e.payload));
+listen('dsh-status', (e) => {
+  if (!currentOpen || !e.payload) return;
+  currentOpen.initial = currentOpen.initial || {};
+  currentOpen.initial.service_mode = e.payload.service_mode || 'none';
+  currentOpen.initial.service_ready = e.payload.phase === 'ready'
+    && (e.payload.service_mode === 'managed' || e.payload.service_mode === 'external');
+  renderNav(openKind);
+});
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'visible') {
     // 不做动效重放：该 WebView 对“隐藏→显示”的可见性事件不可靠，
@@ -550,7 +611,7 @@ setInterval(async () => {
         }
       }
       if (refreshing && Date.now() - balanceRefreshStart >= 900) {
-        button.classList.remove('refreshing');
+        setBalanceRefreshBusy(false);
         if (pendingRefreshData) {
           if (!renderedFresh) {
             balanceStamp = JSON.stringify(pendingRefreshData);
@@ -566,7 +627,10 @@ setInterval(async () => {
       if (key !== checkStamp) {
         checkStamp = key;
         // 后端更新执行中：按钮全程保持禁用（结果行重建不再复活）
-        if (s && s.updating) updateRunning = true;
+        if (s && s.updating && !updateRunning) {
+          updateRunning = true;
+          renderNav(openKind);
+        }
         // UAC 确认等待期间不重建结果行（保持按钮禁用态）；
         // 结果未变化时不重复重建——进度每次更新只刷新文案行，
         // 被点按钮的“处理中…”文案得以保留

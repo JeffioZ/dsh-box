@@ -4,7 +4,7 @@
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::app_state::{self, AppState};
+use crate::app_state::{self, AppState, InstallAction};
 use crate::{dsh, logging, processes, updater};
 
 /// 校验命令调用来源：只允许 Tauri 内置页面，不依赖可绕过的来源黑名单。
@@ -22,6 +22,46 @@ pub(crate) fn ensure_local_origin(webview: &tauri::Webview) -> Result<(), String
     .into())
 }
 
+pub(crate) fn ensure_managed_service(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.is_updating() {
+        return Err(crate::locale::text(
+            "更新正在进行，请稍后再试。",
+            "An update is in progress. Please try again later.",
+        )
+        .into());
+    }
+    match state.service_ownership() {
+        crate::app_state::ServiceOwnership::Managed
+            if state.phase() == crate::app_state::BootPhase::Ready =>
+        {
+            Ok(())
+        }
+        ownership if ownership.is_external() => Err(crate::locale::text(
+            "当前连接由外部 dsh 服务管理，请在原服务环境中修改这项配置。",
+            "The current connection is managed by an external dsh service. Change this setting in that service's environment.",
+        )
+        .into()),
+        _ => Err(crate::locale::text(
+            "本地 dsh 服务尚未就绪，请稍后再试。",
+            "The local dsh service is not ready yet. Please try again shortly.",
+        )
+        .into()),
+    }
+}
+
+/// 本地配置文件可在 dsh 尚未安装/启动时预先写入；仅外部服务必须隔离。
+pub(crate) fn ensure_local_service_scope(app: &AppHandle) -> Result<(), String> {
+    if app.state::<AppState>().service_ownership().is_external() {
+        return Err(crate::locale::text(
+            "当前连接由外部 dsh 服务管理，请在原服务环境中修改这项配置。",
+            "The current connection is managed by an external dsh service. Change this setting in that service's environment.",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_status(
     app: AppHandle,
@@ -35,27 +75,39 @@ pub fn get_status(
 pub fn retry_boot(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     let state = app.state::<AppState>();
-    state.clear_install_cancel();
     state.signal_retry();
     Ok(())
 }
 
 #[tauri::command]
-pub fn cancel_install(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+pub fn choose_service(
+    app: AppHandle,
+    webview: tauri::Webview,
+    generation: u64,
+    reuse: bool,
+) -> Result<bool, String> {
     ensure_local_origin(&webview)?;
-    let state = app.state::<AppState>();
-    if !matches!(
-        state.phase(),
-        app_state::BootPhase::InstallingNode | app_state::BootPhase::InstallingDsh
-    ) {
-        return Err(crate::locale::text(
-            "当前没有可取消的安装。",
-            "There is no installation to cancel.",
-        )
-        .into());
-    }
-    state.request_install_cancel();
-    Ok(())
+    Ok(app
+        .state::<AppState>()
+        .request_service_choice(generation, reuse))
+}
+
+#[tauri::command]
+pub fn use_local_service(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    dsh::forget_external_service(&app)
+}
+
+#[tauri::command]
+pub fn cancel_install(
+    app: AppHandle,
+    webview: tauri::Webview,
+    generation: u64,
+) -> Result<bool, String> {
+    ensure_local_origin(&webview)?;
+    Ok(app
+        .state::<AppState>()
+        .request_install_action(generation, InstallAction::Cancel))
 }
 
 #[tauri::command]
@@ -63,22 +115,11 @@ pub fn set_install_source(
     app: AppHandle,
     webview: tauri::Webview,
     source: String,
-) -> Result<(), String> {
+    generation: u64,
+) -> Result<bool, String> {
     ensure_local_origin(&webview)?;
-    let state = app.state::<AppState>();
-    if !matches!(
-        state.phase(),
-        app_state::BootPhase::InstallingNode | app_state::BootPhase::InstallingDsh
-    ) {
-        return Err(crate::locale::text(
-            "当前没有进行中的安装。",
-            "There is no installation in progress.",
-        )
-        .into());
-    }
-    state.set_download_source(&source)?;
-    state.request_install_cancel();
-    Ok(())
+    app.state::<AppState>()
+        .request_install_source(generation, &source)
 }
 
 #[tauri::command]
@@ -139,6 +180,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
     tauri::generate_handler![
         get_status,
         retry_boot,
+        choose_service,
+        use_local_service,
         cancel_install,
         set_install_source,
         startup_transition_done,

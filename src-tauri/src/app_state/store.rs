@@ -11,12 +11,31 @@ static JSON_WRITE_LOCK: Mutex<()> = Mutex::new(());
 fn read_object(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
-            .map_err(|e| format!("{} 解析失败，已保留原文件：{e}", path.display()))?
+            .map_err(|e| {
+                crate::locale::owned(
+                    format!("{} 解析失败，已保留原文件：{e}", path.display()),
+                    format!(
+                        "Failed to parse {}; the original file was preserved: {e}",
+                        path.display()
+                    ),
+                )
+            })?
             .as_object()
             .cloned()
-            .ok_or_else(|| format!("{} 顶层不是对象，已保留原文件", path.display())),
+            .ok_or_else(|| {
+                crate::locale::owned(
+                    format!("{} 顶层不是对象，已保留原文件", path.display()),
+                    format!(
+                        "The top level of {} is not an object; the original file was preserved",
+                        path.display()
+                    ),
+                )
+            }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(e) => Err(format!("读取 {} 失败：{e}", path.display())),
+        Err(e) => Err(crate::locale::owned(
+            format!("读取 {} 失败：{e}", path.display()),
+            format!("Failed to read {}: {e}", path.display()),
+        )),
     }
 }
 

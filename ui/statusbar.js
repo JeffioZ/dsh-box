@@ -22,6 +22,8 @@ let liveTps = null; // 实时速率（流式期间有值，空闲为 null）
 let detailsMap = {}; // key → 额外明细行（状态栏未显示的补充数据）
 let lastBalance = null;
 let currentSettings = null; // 设置状态（hide_balance 控制余额 chip 显隐）
+let serviceMode = 'none';
+let serviceReady = false;
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -33,10 +35,11 @@ function esc(s) {
 
 function renderStats() {
   const el = $('stats');
-  if (!statsGroups.length) {
+  const managedReady = serviceReady && serviceMode === 'managed';
+  if (!managedReady || !statsGroups.length) {
     el.innerHTML = '';
     el.dataset.truncated = '0';
-    el.title = '';
+    el.title = managedReady ? '' : dshdT('navRequiresReady');
     el.setAttribute('aria-label', dshdT('statsRegion'));
     el.disabled = true;
     return;
@@ -144,6 +147,15 @@ function renderBalance() {
   }
   chip.style.display = '';
   updateEdgeSeparator();
+  if (serviceMode === 'external' || serviceMode === 'external-disconnected') {
+    chip.disabled = true;
+    chip.innerHTML = WALLET_ICON + '<span id="balance-text">--</span>';
+    chip.dataset.credentialIssue = '';
+    chip.title = dshdT('balanceExternalHint');
+    chip.setAttribute('aria-label', dshdT('balanceExternalHint'));
+    return;
+  }
+  chip.disabled = false;
   const state = balanceChipState();
   const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
   chip.innerHTML =
@@ -171,7 +183,8 @@ function updateEdgeSeparator() {
   const sep = $('edge-sep');
   if (!sep) return;
   const balanceVisible = !(currentSettings && currentSettings.hide_balance);
-  sep.style.display = statsGroups.length > 0 && balanceVisible ? '' : 'none';
+  const statsVisible = serviceReady && serviceMode === 'managed' && statsGroups.length > 0;
+  sep.style.display = statsVisible && balanceVisible ? '' : 'none';
 }
 
 function onBalance(payload) {
@@ -250,8 +263,6 @@ function init() {
     const group = event.target.closest('.g');
     invoke('app_dialog_open_stats', { group: group ? group.dataset.key : null }).catch(() => {});
   });
-  // 屏蔽 WebView 默认右键菜单（与标题栏一致）
-  document.addEventListener('contextmenu', (event) => event.preventDefault());
   // 宽度变化重排分组并重判截断（fitGroups 内未截断时自动收起 tooltip）
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => fitGroups()).observe(statsEl);
@@ -260,6 +271,20 @@ function init() {
   listen('session-stats-updated', (e) => onStats(e.payload)).catch(() => {});
   listen('live-rate-updated', (e) => onLiveRate(e.payload)).catch(() => {});
   listen('balance-updated', (e) => onBalance(e.payload)).catch(() => {});
+  listen('dsh-status', (e) => {
+    const payload = e.payload || {};
+    const previousMode = serviceMode;
+    const previousReady = serviceReady;
+    serviceMode = payload.service_mode || 'none';
+    serviceReady = payload.phase === 'ready'
+      && (serviceMode === 'managed' || serviceMode === 'external');
+    if (serviceMode !== 'managed') statsGroups = [];
+    renderStats();
+    renderBalance();
+    if (serviceMode === 'managed' && serviceReady && (previousMode !== serviceMode || !previousReady)) {
+      invoke('api_balance').then(onBalance).catch(() => {});
+    }
+  }).catch(() => {});
   listen('settings-changed', (e) => {
     currentSettings = e.payload || null;
     renderBalance();
@@ -272,8 +297,17 @@ function init() {
   dshdApplyI18n();
   renderStats();
   renderBalance();
-  // 打开时主动拉一次余额（事件通道对隐藏窗口不可靠，与 dialog 同策略）
-  invoke('api_balance').then(onBalance).catch(() => {});
+  // 初始状态决定外部服务隔离；本地模式再主动拉一次余额。
+  invoke('get_status').then((payload) => {
+    serviceMode = payload.service_mode || 'none';
+    serviceReady = payload.phase === 'ready'
+      && (serviceMode === 'managed' || serviceMode === 'external');
+    renderStats();
+    renderBalance();
+    if (serviceMode !== 'external' && serviceMode !== 'external-disconnected') {
+      invoke('api_balance').then(onBalance).catch(() => {});
+    }
+  }).catch(() => {});
 }
 
 document.addEventListener('DOMContentLoaded', init);

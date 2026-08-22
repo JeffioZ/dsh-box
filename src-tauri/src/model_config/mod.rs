@@ -105,8 +105,9 @@ pub fn preview(config: &Config, yaml: &str) -> Result<ImportPreview, String> {
 /// 路由（与文件读取失败区分，前端据此展示不同的提示）。
 pub fn export_yaml(config: &Config) -> Result<Option<String>, String> {
     let settings_path = config.dsh_home().join("settings.yaml");
-    let text = std::fs::read_to_string(&settings_path)
-        .map_err(|e| format!("读取 settings.yaml 失败：{e}"))?;
+    let text = std::fs::read_to_string(&settings_path).map_err(|e| {
+        crate::locale::error("读取 settings.yaml 失败", "Failed to read settings.yaml", e)
+    })?;
     let section = extract_section_text(&text);
     if section.trim().is_empty() {
         return Ok(None);
@@ -253,7 +254,7 @@ pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String>
         if !declared.contains(name) {
             return Err(crate::locale::text(
                 "导入的配置中没有声明该凭据引用。",
-                "The imported config does not declare this credential reference.",
+                "The imported configuration does not declare this credential reference.",
             )
             .into());
         }

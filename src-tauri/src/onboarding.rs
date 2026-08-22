@@ -168,6 +168,11 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
 }
 
 fn finish_onboarding(config: &app_state::Config) -> Result<(), String> {
+    app_state::save_state_value(
+        &config.root,
+        "local_onboarding_deferred",
+        serde_json::Value::Bool(false),
+    )?;
     app_state::save_state_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
     app_state::mark_onboarding_done();
     Ok(())
@@ -186,7 +191,9 @@ fn save_credentials_api_key(config: &app_state::Config, key: &str) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_onboarding, save_credentials_api_key, DEEPSEEK_API_KEY_NAME};
+    use super::{
+        finish_onboarding, needs_onboarding, save_credentials_api_key, DEEPSEEK_API_KEY_NAME,
+    };
     use crate::app_state::Config;
     use std::path::PathBuf;
 
@@ -208,6 +215,33 @@ mod tests {
         crate::app_state::save_state_value(&dir, "onboarded", serde_json::Value::Bool(true))
             .unwrap();
         assert!(!needs_onboarding(&cfg));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completing_local_onboarding_clears_external_deferral() {
+        let dir = std::env::temp_dir().join(format!("dshd-onb-deferred-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = config_with_root(dir.clone());
+        crate::app_state::save_state_value(
+            &dir,
+            "local_onboarding_deferred",
+            serde_json::Value::Bool(true),
+        )
+        .unwrap();
+
+        finish_onboarding(&cfg).unwrap();
+
+        assert_eq!(
+            crate::app_state::load_state_value(&dir, "local_onboarding_deferred")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            crate::app_state::load_state_value(&dir, "onboarded").and_then(|value| value.as_bool()),
+            Some(true)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -4,19 +4,27 @@
 
 const $ = (id) => document.getElementById(id);
 
-/// onboarding 面板是否可见（未保存/未跳过）：期间 boot 后台推进但不应
-/// 让状态区/更新区/整体淡出干扰配置面板。
+/// onboarding 面板是否可见（未保存/未跳过）：期间 boot 后台推进，
+/// 只把必要进度投影到面板内，不让独立状态区/更新区/整体淡出打断配置。
 const onboardingActive = () => {
   const box = $('ob-box');
   return !!(box && !box.classList.contains('hidden'));
 };
+let onboardingPausedByError = false;
+let onboardingPausedByServiceChoice = false;
+const onboardingPendingView = () => onboardingActive()
+  || onboardingPausedByError
+  || onboardingPausedByServiceChoice;
 
 const PHASE_KEYS = {
   'starting': 'starting',
+  'switching-service': 'switchingLocalService',
+  'service-choice': 'serviceChoiceTitle',
   'installing-node': 'installingNode',
   'installing-dsh': 'installingDsh',
   'starting-server': 'startingServer',
   'ready': 'ready',
+  'cancelled': 'installationCancelled',
   'error': 'startupFailed',
 };
 
@@ -29,7 +37,11 @@ let updateCheckRequested = false;
 let installCancelRequested = false;
 let installSource = 'auto';
 let sourceSwitchPending = false;
+let installGeneration = 0;
+let installCanCancel = false;
 let readyTransitionSequence = 0;
+let onboardingSourceExpanded = false;
+let serviceChoiceVisible = false;
 
 function notifyReadyTransition() {
   const sequence = ++readyTransitionSequence;
@@ -58,61 +70,243 @@ function phaseText(phase) {
   return PHASE_KEYS[phase] ? dshdT(PHASE_KEYS[phase]) : phase;
 }
 
-function setStatus(phase, message, detail) {
-  const text = $('status-text');
-  const spinner = $('spinner');
-  const fill = $('bar-fill');
-  // 终态（就绪/失败）用固定文案；其余阶段优先显示后端动态消息（如安装计时、端口回退）
-  let display;
-  if (phase === 'ready' || phase === 'error') {
-    display = phaseText(phase);
+function phaseDisplay(phase, message) {
+  if (phase === 'ready' || phase === 'error' || phase === 'cancelled') return phaseText(phase);
+  return (message && message.length) ? message : phaseText(phase);
+}
+
+function statusDetail(payload) {
+  const STEP_OF = { 'installing-node': 1, 'installing-dsh': 2, 'starting-server': 3 };
+  const step = STEP_OF[payload.phase];
+  const stepLine = step ? dshdT('stepOf', { n: step, total: 3 }) : '';
+  return stepLine
+    ? (stepLine + (payload.detail ? ' · ' + payload.detail : ''))
+    : (payload.detail || '');
+}
+
+function sourceText(source) {
+  const key = {
+    auto: 'installSourceAuto',
+    official: 'installSourceOfficial',
+    mirror: 'installSourceMirror',
+  }[source];
+  return key ? dshdT(key) : source;
+}
+
+function renderProgress(payload, progressBar, fill) {
+  if (!progressBar || !fill) return;
+  fill.classList.toggle('done', payload.phase === 'ready');
+  fill.classList.toggle('err', payload.phase === 'error');
+  if (payload.phase === 'ready' || payload.phase === 'error' || payload.phase === 'cancelled') {
+    fill.classList.remove('determinate');
+    fill.style.width = '';
+    if (payload.phase === 'ready') progressBar.setAttribute('aria-valuenow', '100');
+    else progressBar.removeAttribute('aria-valuenow');
+  } else if (typeof payload.progress === 'number') {
+    fill.classList.add('determinate');
+    fill.style.width = Math.max(2, Math.min(100, payload.progress)) + '%';
+    progressBar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, payload.progress))));
   } else {
-    display = (message && message.length) ? message : phaseText(phase);
+    fill.classList.remove('determinate');
+    fill.style.width = '';
+    progressBar.removeAttribute('aria-valuenow');
   }
-  text.textContent = display;
-  $('status-detail').textContent = detail || '';
-  const cancellable = phase === 'installing-node' || phase === 'installing-dsh';
+}
+
+/** 首次设置与普通启动页共用同一套状态文案、明细和进度映射。 */
+function renderRuntimePresentation(payload, view) {
+  const state = phaseDisplay(payload.phase, payload.message);
+  const detail = statusDetail(payload);
+  if (view.state) {
+    view.state.textContent = state;
+    view.state.title = state;
+  }
+  if (view.detail) {
+    view.detail.textContent = detail;
+    view.detail.title = detail;
+    if (view.hideEmptyDetail) view.detail.classList.toggle('hidden', !detail);
+  }
+  renderProgress(payload, view.progressBar, view.fill);
+  return { state, detail };
+}
+
+function setOnboardingSourceExpanded(expanded) {
+  onboardingSourceExpanded = expanded;
+  const actions = $('ob-runtime-actions');
+  const toggle = $('ob-runtime-toggle');
+  if (!actions || !toggle) return;
+  actions.classList.toggle('hidden', !expanded);
+  $('ob-runtime-source').classList.toggle('hidden', expanded);
+  toggle.setAttribute('aria-expanded', String(expanded));
+  const key = expanded ? 'collapseDownloadSource' : 'changeDownloadSource';
+  toggle.setAttribute('aria-label', dshdT(key));
+  const label = toggle.querySelector('span');
+  if (label) label.textContent = dshdT(expanded ? 'collapse' : 'change');
+}
+
+function renderOnboardingRuntime(payload) {
+  const box = $('ob-runtime');
+  if (!box || !onboardingActive()) return;
+  box.classList.remove('hidden');
+  renderRuntimePresentation(payload, {
+    state: $('ob-runtime-state'),
+    detail: $('ob-runtime-detail'),
+    progressBar: $('ob-runtime-progress'),
+    fill: $('ob-runtime-progress-fill'),
+    hideEmptyDetail: true,
+  });
+  $('ob-runtime-source').textContent = sourceText(installSource);
+  const canChange = installCanCancel || payload.phase === 'cancelled';
+  const toggle = $('ob-runtime-toggle');
+  toggle.classList.toggle('hidden', !canChange);
+  toggle.disabled = sourceSwitchPending || installCancelRequested;
+  if (payload.phase === 'cancelled') setOnboardingSourceExpanded(true);
+  else if (!canChange) setOnboardingSourceExpanded(false);
+  else setOnboardingSourceExpanded(onboardingSourceExpanded);
+}
+
+function setStatus(phaseOrPayload, message, detail) {
+  const payload = typeof phaseOrPayload === 'object'
+    ? phaseOrPayload
+    : { phase: phaseOrPayload, message: message || '', detail: detail || '' };
+  const phase = payload.phase;
+  const spinner = $('spinner');
+  renderRuntimePresentation(payload, {
+    state: $('status-text'),
+    detail: $('status-detail'),
+    progressBar: $('progress-bar'),
+    fill: $('bar-fill'),
+  });
+  const cancellable = installCanCancel
+    && (phase === 'installing-node' || phase === 'installing-dsh');
+  const cancelled = phase === 'cancelled';
   const installActions = $('install-actions');
-  const cancelButton = $('btn-cancel-install');
-  installActions.classList.toggle('hidden', !cancellable);
+  const cancelButtons = document.querySelectorAll('[data-install-cancel]');
+  const reinstallButtons = document.querySelectorAll('[data-install-reinstall]');
+  installActions.classList.toggle('hidden', !cancellable && !cancelled);
+  cancelButtons.forEach((button) => button.classList.toggle('hidden', !cancellable));
+  reinstallButtons.forEach((button) => button.classList.toggle('hidden', !cancelled));
   if (!cancellable) installCancelRequested = false;
   if (cancellable) {
-    cancelButton.disabled = installCancelRequested;
-    cancelButton.textContent = installCancelRequested ? dshdT('cancellingInstall') : dshdT('cancelInstall');
-  }
+    cancelButtons.forEach((button) => {
+      button.disabled = installCancelRequested;
+      button.toggleAttribute('aria-busy', installCancelRequested);
+      button.textContent = installCancelRequested ? dshdT('cancellingInstall') : dshdT('cancelInstall');
+    });
+  } else cancelButtons.forEach((button) => button.removeAttribute('aria-busy'));
   if (phase === 'ready') {
     spinner.classList.add('hidden');
-    fill.classList.add('done');
     // onboarding 未完成时跳过整体淡出：ready 可能在面板显示期间到达
     // （服务复用/并发路径下 get_status 直接返回 Ready），淡出会让配置
     // 面板视觉消失而 boot 仍在等待用户操作；保存后面板隐藏即恢复正常
-    if (!onboardingActive()) {
+    if (!onboardingPendingView()) {
       document.body.classList.add('fade-out');
       notifyReadyTransition();
     }
   }
-  else if (phase === 'error') { spinner.classList.add('hidden'); fill.classList.add('err'); }
+  else if (phase === 'error') { spinner.classList.add('hidden'); }
+  else if (phase === 'cancelled') {
+    spinner.classList.add('hidden');
+  }
   else {
     document.body.classList.remove('fade-out');
     spinner.classList.remove('hidden');
-    fill.classList.remove('done', 'err');
   }
 }
 
 function showError(message) {
   setStatus('error');
   $('error-msg').textContent = message || dshdT('unknownError');
+  if (onboardingActive()) {
+    onboardingPausedByError = true;
+    $('ob-box').classList.add('hidden');
+    document.body.classList.remove('onboarding-mode');
+  }
+  $('status').classList.add('hidden');
   const box = $('error-box');
   box.classList.remove('hidden');
   // 每次显示重新触发入场动画；聚焦错误框供屏幕阅读器/键盘用户定位错误摘要
   box.classList.remove('reveal');
   void box.offsetWidth;
   box.classList.add('reveal');
-  box.focus();
+  $('startup-error-title').focus();
 }
 
 function hideError() {
   $('error-box').classList.add('hidden');
+  if (onboardingPausedByError) {
+    onboardingPausedByError = false;
+    $('ob-box').classList.remove('hidden');
+    document.body.classList.add('onboarding-mode');
+    $('status').classList.add('hidden');
+    if (lastStatusPayload) renderOnboardingRuntime(lastStatusPayload);
+    return;
+  }
+  if (!onboardingActive()) $('status').classList.remove('hidden');
+}
+
+function setServiceChoiceBusy(busy) {
+  ['btn-connect-external', 'btn-start-local'].forEach((id) => {
+    const button = $(id);
+    if (!button) return;
+    button.disabled = busy;
+    button.toggleAttribute('aria-busy', busy);
+  });
+}
+
+function renderServiceChoice(payload) {
+  const box = $('service-choice-box');
+  if (!box) return false;
+  const candidate = payload.external_service;
+  const visible = payload.phase === 'service-choice' && candidate;
+  box.classList.toggle('hidden', !visible);
+  if (!visible) {
+    if (onboardingPausedByServiceChoice) {
+      onboardingPausedByServiceChoice = false;
+      if (payload.service_mode !== 'external' && payload.service_mode !== 'external-disconnected') {
+        $('ob-box').classList.remove('hidden');
+        document.body.classList.add('onboarding-mode');
+        $('status').classList.add('hidden');
+        renderOnboardingRuntime(payload);
+      }
+    }
+    serviceChoiceVisible = false;
+    setServiceChoiceBusy(false);
+    return false;
+  }
+  if (onboardingActive()) {
+    onboardingPausedByServiceChoice = true;
+    $('ob-box').classList.add('hidden');
+    document.body.classList.remove('onboarding-mode');
+  }
+  $('service-choice-port').textContent = String(candidate.port || '—');
+  $('service-choice-cwd').textContent = candidate.cwd || candidate.home || '—';
+  $('service-choice-cwd').title = candidate.cwd || candidate.home || '';
+  $('status').classList.add('hidden');
+  $('error-box').classList.add('hidden');
+  if (!serviceChoiceVisible) {
+    $('service-choice-feedback').classList.add('hidden');
+    $('service-choice-feedback').textContent = '';
+    $('service-choice-title').focus();
+  }
+  serviceChoiceVisible = true;
+  return true;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const helper = document.createElement('textarea');
+  helper.value = text;
+  helper.style.position = 'fixed';
+  helper.style.opacity = '0';
+  document.body.append(helper);
+  helper.select();
+  const copied = document.execCommand('copy');
+  helper.remove();
+  if (!copied) throw new Error(dshdT('copyFailed'));
 }
 
 function renderVersions(payload) {
@@ -123,6 +317,9 @@ function renderVersions(payload) {
   if (payload.node_version) parts.push('Node ' + payload.node_version);
   if (payload.npm_version) parts.push('npm ' + payload.npm_version);
   if (payload.port) parts.push(dshdT('port', { port: payload.port }));
+  if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
+    parts.push(dshdT('externalService'));
+  }
   // 字段缺失时保留已显示内容（防御：事件载荷异常时不清空 footer）
   if (parts.length === 0) return;
   el.textContent = parts.join(' · ');
@@ -130,51 +327,31 @@ function renderVersions(payload) {
 
 function renderStatus(payload) {
   lastStatusPayload = payload;
+  installGeneration = Number(payload.install_generation || 0);
+  installCanCancel = payload.can_cancel === true;
   if (payload.download_source) installSource = payload.download_source;
+  if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
+    $('update-box').classList.add('hidden');
+  }
   document.querySelectorAll('.source-choice').forEach((button) => {
     const selected = button.dataset.source === installSource;
     button.setAttribute('aria-pressed', String(selected));
-    button.disabled = sourceSwitchPending || installCancelRequested || selected;
+    // 选中态由 aria-pressed 表达，不用 disabled 淡化；重复点击由处理器幂等忽略。
+    button.disabled = sourceSwitchPending || installCancelRequested;
   });
-  if (payload.phase === 'error' && sourceSwitchPending) {
-    sourceSwitchPending = false;
-    installCancelRequested = false;
-    hideError();
-    setStatus('starting', dshdT('installSourceSwitching'));
-    window.__TAURI__.core.invoke('retry_boot').catch((e) => showError(String(e)));
-    return;
+  if (sourceSwitchPending && !installCanCancel) {
+    resetInstallPendingControls();
   }
   // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
   // 纯固定文案的 phase 改用当前语言重译；动态消息（下载/安装进度、
   // 端口回退等）保持后端快照，避免错译。
   const fixedMsg = payload.phase === 'starting-server' ? phaseText('starting-server') : payload.message;
-  setStatus(payload.phase, fixedMsg, payload.detail);
+  const presentation = { ...payload, message: fixedMsg };
+  setStatus(presentation);
   renderVersions(payload);
-  // 多步骤引导：安装 Node → 安装 dsh → 启动服务，显示"第 x 步 / 共 3 步"
-  const STEP_OF = { 'installing-node': 1, 'installing-dsh': 2, 'starting-server': 3 };
-  const step = STEP_OF[payload.phase];
-  const stepLine = step ? dshdT('stepOf', { n: step, total: 3 }) : '';
-  $('status-detail').textContent = stepLine
-    ? (stepLine + (payload.detail ? ' · ' + payload.detail : ''))
-    : (payload.detail || '');
-  const progressBar = $('progress-bar');
-  const fill = $('bar-fill');
-  // 终态清除 inline width，避免覆盖 .done/.err 的 100%
-  if (payload.phase === 'ready' || payload.phase === 'error') {
-    fill.classList.remove('determinate');
-    fill.style.width = '';
-    if (payload.phase === 'ready') progressBar.setAttribute('aria-valuenow', '100');
-    else progressBar.removeAttribute('aria-valuenow');
-  } else if (typeof payload.progress === 'number') {
-    // 确定进度（如 Node 下载百分比）
-    fill.classList.add('determinate');
-    fill.style.width = Math.max(2, Math.min(100, payload.progress)) + '%';
-    progressBar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, payload.progress))));
-  } else {
-    fill.classList.remove('determinate');
-    fill.style.width = '';
-    progressBar.removeAttribute('aria-valuenow');
-  }
+  renderOnboardingRuntime(presentation);
+  $('btn-use-local').classList.toggle('hidden', payload.service_mode !== 'external-disconnected');
+  if (renderServiceChoice(payload)) return;
   if (payload.phase === 'error') showError(payload.message);
   else hideError();
 }
@@ -197,34 +374,108 @@ function setupSelect(selId, onChange) {
     const opt = list.querySelector('[data-value="' + v + '"]');
     return opt ? opt.textContent : v;
   };
+  const options = () => [...list.querySelectorAll('li')];
+  const closeList = (restoreFocus) => {
+    list.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger.focus();
+  };
+  const focusOption = (index) => {
+    const all = options();
+    if (!all.length) return;
+    const target = all[(index + all.length) % all.length];
+    all.forEach((option) => { option.tabIndex = option === target ? 0 : -1; });
+    target.focus();
+  };
+  const openList = (focusLast) => {
+    if (trigger.disabled) return;
+    list.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    const all = options();
+    const selected = all.findIndex((option) => option.dataset.value === value);
+    focusOption(focusLast ? all.length - 1 : Math.max(0, selected));
+  };
   const setValue = (v, fire) => {
     value = v;
     valueEl.textContent = labelOf(v);
-    list.querySelectorAll('li').forEach((li) => {
+    options().forEach((li) => {
       li.setAttribute('aria-selected', li.dataset.value === v ? 'true' : 'false');
+      li.tabIndex = li.dataset.value === v ? 0 : -1;
     });
     if (fire && onChange) onChange(v);
   };
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
-    const open = list.hidden;
-    list.hidden = !open;
-    trigger.setAttribute('aria-expanded', String(open));
+    if (list.hidden) {
+      list.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+    } else closeList(false);
   });
-  list.querySelectorAll('li').forEach((li) => {
-    li.addEventListener('click', () => {
-      setValue(li.dataset.value, true);
-      list.hidden = true;
-      trigger.setAttribute('aria-expanded', 'false');
-    });
-  });
-  document.addEventListener('click', (e) => {
-    if (!root.contains(e.target)) {
-      list.hidden = true;
-      trigger.setAttribute('aria-expanded', 'false');
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      openList(event.key === 'ArrowUp');
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (list.hidden) openList(false);
+      else closeList(false);
+    } else if (event.key === 'Escape' && !list.hidden) {
+      event.preventDefault();
+      closeList(false);
     }
   });
-  return { get: () => value, set: (v) => setValue(v, false) };
+  options().forEach((li) => {
+    li.addEventListener('click', () => {
+      if (li.getAttribute('aria-disabled') === 'true') return;
+      setValue(li.dataset.value, true);
+      closeList(true);
+    });
+  });
+  list.addEventListener('keydown', (event) => {
+    if (trigger.disabled) return;
+    const all = options();
+    const current = all.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusOption(current + (event.key === 'ArrowDown' ? 1 : -1));
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      focusOption(event.key === 'Home' ? 0 : all.length - 1);
+    } else if ((event.key === 'Enter' || event.key === ' ') && current >= 0) {
+      event.preventDefault();
+      setValue(all[current].dataset.value, true);
+      closeList(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeList(true);
+    } else if (event.key === 'Tab') closeList(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (!root.contains(e.target)) closeList(false);
+  });
+  const setDisabled = (disabled) => {
+    trigger.disabled = disabled;
+    options().forEach((option) => option.setAttribute('aria-disabled', String(disabled)));
+    if (disabled) {
+      closeList(false);
+      options().forEach((option) => { option.tabIndex = -1; });
+    } else setValue(value, false);
+  };
+  return { get: () => value, set: (v) => setValue(v, false), setDisabled };
+}
+
+function setOnboardingBusy(busy) {
+  const box = $('ob-box');
+  box.querySelectorAll('input, button').forEach((control) => { control.disabled = busy; });
+  if (obLangSel) obLangSel.setDisabled(busy);
+  if (obThemeSel) obThemeSel.setDisabled(busy);
+  box.toggleAttribute('aria-busy', busy);
+  if (!busy && onboardingActive() && lastStatusPayload) {
+    const installPending = sourceSwitchPending || installCancelRequested;
+    setInstallSourceBusy(installPending);
+    setInstallCancelPending(installPending, sourceSwitchPending);
+    renderOnboardingRuntime(lastStatusPayload);
+  }
 }
 
 async function initOnboarding() {
@@ -243,14 +494,10 @@ async function initOnboarding() {
     if (obThemeSel) obThemeSel.set(st.theme || 'system');
     $('ob-autostart').checked = !!st.autostart;
     $('ob-builtin-plugins').checked = st.install_builtin_plugins !== false;
+    document.body.classList.add('onboarding-mode');
     $('ob-box').classList.remove('hidden');
-    // 首次显示用 opacity 渐入（重排不可避免，但避免"整块跳出"的突兀感）；
-    // status 隐藏前先让面板进场，避免内容闪跳
-    $('ob-box').style.opacity = '0';
-    requestAnimationFrame(() => {
-      $('ob-box').style.transition = 'opacity .18s ease-out';
-      $('ob-box').style.opacity = '1';
-    });
+    // CSS 动画受 prefers-reduced-motion 统一控制，避免内联 transition 绕过系统偏好。
+    $('ob-box').classList.add('reveal');
     // onboarding 模式下聚焦配置面板：隐藏启动状态区
     $('status').classList.add('hidden');
     // 回报面板已显示：boot 等待切换为无限等待（无 60 秒兜底）
@@ -260,9 +507,6 @@ async function initOnboarding() {
 
 async function submitOnboarding(skip) {
   if (onboardingSaving) return;
-  const box = $('ob-box');
-  const start = $('ob-start');
-  const skipButton = $('ob-skip');
   const errBox = $('ob-error');
   // 格式校验（不占用 saving 状态）：非空 key 必须以 sk- 开头，否则提示并
   // 聚焦输入框；留空仍允许（之后可在桌面端设置中配置）
@@ -271,14 +515,13 @@ async function submitOnboarding(skip) {
     if (key && !/^sk-/.test(key)) {
       errBox.textContent = dshdT('apiKeyFormatHint');
       errBox.classList.remove('hidden');
+      $('ob-apikey').setAttribute('aria-invalid', 'true');
       $('ob-apikey').focus();
       return;
     }
   }
   onboardingSaving = true;
-  start.disabled = true;
-  skipButton.disabled = true;
-  box.setAttribute('aria-busy', 'true');
+  setOnboardingBusy(true);
   const payload = {
     skip,
     language: obLangSel ? obLangSel.get() : 'zh-CN',
@@ -292,7 +535,10 @@ async function submitOnboarding(skip) {
   }
   try {
     await window.__TAURI__.core.invoke('save_onboarding', { payload });
+    onboardingPausedByError = false;
     $('ob-box').classList.add('hidden');
+    $('ob-runtime').classList.add('hidden');
+    document.body.classList.remove('onboarding-mode');
     errBox.classList.add('hidden');
     // 用最新状态 + 当前语言刷新状态区。注意：快照的 message/detail 是
     // 语言切换前生成的 Rust 旧语言文本（首次安装场景保存时 boot 仍在
@@ -303,16 +549,14 @@ async function submitOnboarding(skip) {
       const st = await window.__TAURI__.core.invoke('get_status');
       renderStatus({ ...st, message: '', detail: '' });
     } catch (e) { /* 忽略：后续事件到达会刷新 */ }
-    // boot 将立即继续：恢复启动状态区显示（保存前为聚焦面板而隐藏）
-    $('status').classList.remove('hidden');
+    // boot 将立即继续；错误页已接管时不再把重复状态区强行显示出来。
+    if ($('error-box').classList.contains('hidden')) $('status').classList.remove('hidden');
   } catch (e) {
     errBox.textContent = dshdT('saveFailed') + ': ' + e;
     errBox.classList.remove('hidden');
   } finally {
     onboardingSaving = false;
-    start.disabled = false;
-    skipButton.disabled = false;
-    box.removeAttribute('aria-busy');
+    setOnboardingBusy(false);
   }
 }
 
@@ -321,7 +565,7 @@ function renderUpdate(result) {
   // onboarding 未完成时不显示更新区（静默检查事件不应干扰配置面板）：
   // 快照已存，保存后由后续事件或语言切换重渲染正常展示；
   // 若面板显示前已有结果（服务复用场景），先隐藏避免与面板同卡堆叠
-  if (onboardingActive()) {
+  if (onboardingPendingView()) {
     $('update-box').classList.add('hidden');
     return;
   }
@@ -335,7 +579,9 @@ function renderUpdate(result) {
   }
   box.classList.remove('hidden');
   $('btn-update-check').disabled = false;
+  $('btn-update-check').removeAttribute('aria-busy');
   applyBtn.disabled = false;
+  applyBtn.removeAttribute('aria-busy');
   if (!result || result.error) {
     line.textContent = result && result.error
       ? dshdT('checkFailed') + ': ' + result.error
@@ -353,43 +599,110 @@ function renderUpdate(result) {
   }
 }
 
+function setInstallSourceBusy(busy) {
+  document.querySelectorAll('.install-source').forEach((group) => group.toggleAttribute('aria-busy', busy));
+  document.querySelectorAll('.source-choice').forEach((button) => { button.disabled = busy; });
+  const toggle = $('ob-runtime-toggle');
+  if (toggle) toggle.disabled = busy;
+}
+
+function setInstallCancelPending(pending, switchingSource) {
+  document.querySelectorAll('[data-install-cancel]').forEach((button) => {
+    button.disabled = pending;
+    button.toggleAttribute('aria-busy', pending);
+    button.textContent = pending
+      ? dshdT(switchingSource ? 'installSourceSwitching' : 'cancellingInstall')
+      : dshdT('cancelInstall');
+  });
+}
+
+function resetInstallPendingControls() {
+  sourceSwitchPending = false;
+  installCancelRequested = false;
+  setInstallSourceBusy(false);
+  setInstallCancelPending(false, false);
+  if (lastStatusPayload) renderOnboardingRuntime(lastStatusPayload);
+}
+
 function bind() {
+  dshdBindPasswordToggle($('ob-apikey'), $('ob-apikey-toggle'));
+  $('ob-apikey').addEventListener('input', () => {
+    $('ob-apikey').removeAttribute('aria-invalid');
+    const error = $('ob-error');
+    if (error.textContent === dshdT('apiKeyFormatHint')) error.classList.add('hidden');
+  });
   document.querySelectorAll('.source-choice').forEach((button) => {
     button.addEventListener('click', async () => {
       const source = button.dataset.source;
       if (!source || source === installSource || sourceSwitchPending) return;
       sourceSwitchPending = true;
       installCancelRequested = true;
-      document.querySelectorAll('.source-choice').forEach((item) => { item.disabled = true; });
-      $('btn-cancel-install').disabled = true;
-      $('btn-cancel-install').textContent = dshdT('installSourceSwitching');
+      setInstallSourceBusy(true);
+      setInstallCancelPending(true, true);
       try {
-        await window.__TAURI__.core.invoke('set_install_source', { source });
+        const restarted = await window.__TAURI__.core.invoke('set_install_source', {
+          source,
+          generation: installGeneration,
+        });
         installSource = source;
+        document.querySelectorAll('.source-choice').forEach((item) => {
+          item.setAttribute('aria-pressed', String(item.dataset.source === installSource));
+        });
+        if (!restarted) {
+          resetInstallPendingControls();
+        }
       } catch (e) {
-        sourceSwitchPending = false;
-        installCancelRequested = false;
+        resetInstallPendingControls();
         showError(String(e));
       }
     });
   });
-  $('btn-cancel-install').addEventListener('click', async () => {
-    const button = $('btn-cancel-install');
-    button.disabled = true;
-    button.textContent = dshdT('cancellingInstall');
-    installCancelRequested = true;
-    try {
-      await window.__TAURI__.core.invoke('cancel_install');
-    } catch (e) {
-      button.disabled = false;
-      button.textContent = dshdT('cancelInstall');
-      installCancelRequested = false;
-      showError(String(e));
-    }
+  document.querySelectorAll('[data-install-cancel]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      installCancelRequested = true;
+      setInstallSourceBusy(true);
+      setInstallCancelPending(true, false);
+      try {
+        const accepted = await window.__TAURI__.core.invoke('cancel_install', {
+          generation: installGeneration,
+        });
+        if (!accepted) {
+          resetInstallPendingControls();
+          const payload = await window.__TAURI__.core.invoke('get_status');
+          renderStatus(payload);
+        }
+      } catch (e) {
+        resetInstallPendingControls();
+        showError(String(e));
+      }
+    });
+  });
+  document.querySelectorAll('[data-install-reinstall]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      document.querySelectorAll('[data-install-reinstall]').forEach((item) => {
+        item.disabled = true;
+        item.setAttribute('aria-busy', 'true');
+      });
+      setStatus('starting', dshdT('starting'));
+      try {
+        await window.__TAURI__.core.invoke('retry_boot');
+      } catch (e) {
+        showError(dshdT('retry') + ': ' + e);
+      } finally {
+        document.querySelectorAll('[data-install-reinstall]').forEach((item) => {
+          item.disabled = false;
+          item.removeAttribute('aria-busy');
+        });
+      }
+    });
+  });
+  $('ob-runtime-toggle').addEventListener('click', () => {
+    setOnboardingSourceExpanded(!onboardingSourceExpanded);
   });
   $('btn-retry').addEventListener('click', async () => {
     const button = $('btn-retry');
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     hideError();
     setStatus('starting');
     try {
@@ -398,6 +711,44 @@ function bind() {
       showError(dshdT('retry') + ': ' + e);
     } finally {
       button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  });
+  const chooseService = async (reuse) => {
+    setServiceChoiceBusy(true);
+    $('service-choice-feedback').classList.add('hidden');
+    try {
+      const accepted = await window.__TAURI__.core.invoke('choose_service', {
+        generation: installGeneration,
+        reuse,
+      });
+      if (!accepted) {
+        setServiceChoiceBusy(false);
+        const payload = await window.__TAURI__.core.invoke('get_status');
+        renderStatus(payload);
+      }
+    } catch (e) {
+      setServiceChoiceBusy(false);
+      const feedback = $('service-choice-feedback');
+      feedback.textContent = dshdT('serviceChoiceFailed', { message: String(e) });
+      feedback.classList.remove('hidden');
+    }
+  };
+  $('btn-connect-external').addEventListener('click', () => chooseService(true));
+  $('btn-start-local').addEventListener('click', () => chooseService(false));
+  $('btn-use-local').addEventListener('click', async () => {
+    const button = $('btn-use-local');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      hideError();
+      setStatus('starting', dshdT('starting'));
+      await window.__TAURI__.core.invoke('use_local_service');
+    } catch (e) {
+      showError(dshdT('serviceChoiceFailed', { message: String(e) }));
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
     }
   });
   $('btn-logs').addEventListener('click', async () => {
@@ -407,10 +758,21 @@ function bind() {
       showError(dshdT('openLogs') + ': ' + e);
     }
   });
+  $('btn-copy-error').addEventListener('click', async () => {
+    const button = $('btn-copy-error');
+    try {
+      await copyText($('error-msg').textContent || '');
+      button.textContent = dshdT('copied');
+      setTimeout(() => { button.textContent = dshdT('copyError'); }, 1500);
+    } catch (e) {
+      button.textContent = dshdT('copyFailed');
+    }
+  });
   $('btn-quit').addEventListener('click', () => window.__TAURI__.core.invoke('quit'));
   $('btn-update-check').addEventListener('click', async () => {
     const button = $('btn-update-check');
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     updateCheckRequested = true;
     // 立即显示“检查更新中…”，结果到达后 renderUpdate 填充
     $('update-box').classList.remove('hidden');
@@ -420,17 +782,20 @@ function bind() {
     } catch (e) {
       $('update-text').textContent = dshdT('checkFailed') + ': ' + e;
       button.disabled = false;
+      button.removeAttribute('aria-busy');
     }
   });
   $('btn-update-apply').addEventListener('click', async () => {
     const button = $('btn-update-apply');
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     $('update-text').textContent = dshdT('updateDshWait');
     try {
       await window.__TAURI__.core.invoke('apply_updates', { which: 'dsh' });
     } catch (e) {
       $('update-text').textContent = dshdT('updateFailed', { message: e });
       button.disabled = false;
+      button.removeAttribute('aria-busy');
     }
   });
   $('ob-start').addEventListener('click', () => submitOnboarding(false));
@@ -446,13 +811,14 @@ async function init() {
   // boot 仍在等用户操作（白屏卡死）。initOnboarding 内部已 catch。
   await initOnboarding();
   window.addEventListener('dshd-language-changed', () => {
+    // 下拉 trigger 的值不是 data-i18n 节点，语言切换后按当前 option 文案刷新。
+    if (obLangSel) obLangSel.set(obLangSel.get());
+    if (obThemeSel) obThemeSel.set(obThemeSel.get());
     // 快照的 message/detail 是 Rust 按旧语言生成的文本，重渲染时必须剥离，
     // 由 phaseText/stepLine 按当前语言重译固定文案（进度数字语言无关保留）
     if (lastStatusPayload) renderStatus({ ...lastStatusPayload, message: '', detail: '' });
     if (lastUpdateResult) renderUpdate(lastUpdateResult);
   });
-  // 启动页为内置界面，禁用 WebView2 默认右键菜单
-  document.addEventListener('contextmenu', (e) => e.preventDefault());
   const { listen } = window.__TAURI__.event;
   await listen('dsh-status', (e) => renderStatus(e.payload));
   await listen('update-result', (e) => renderUpdate(e.payload));
@@ -460,7 +826,7 @@ async function init() {
     if (e.payload && e.payload.message) {
       // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
       // 且 Rust 文本是旧语言快照，语言切换后不重译）
-      if (onboardingActive()) return;
+      if (onboardingPendingView()) return;
       $('update-text').textContent = e.payload.message;
     }
   });

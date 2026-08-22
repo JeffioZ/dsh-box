@@ -55,19 +55,26 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
         safe_args,
         nonce_hex
     ));
-    let out_file =
-        std::fs::File::create(&out_path).map_err(|e| format!("创建输出文件失败：{e}"))?;
-    cmd.stdout(
-        out_file
-            .try_clone()
-            .map_err(|e| format!("复制输出句柄失败：{e}"))?,
-    )
+    let out_file = std::fs::File::create(&out_path).map_err(|e| {
+        crate::locale::error("创建输出文件失败", "Failed to create the output file", e)
+    })?;
+    cmd.stdout(out_file.try_clone().map_err(|e| {
+        crate::locale::error(
+            "复制输出句柄失败",
+            "Failed to duplicate the output handle",
+            e,
+        )
+    })?)
     .stderr(out_file);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&out_path);
-            return Err(format!("启动 dsh 插件命令失败：{e}"));
+            return Err(crate::locale::error(
+                "启动 dsh 插件命令失败",
+                "Failed to start the dsh plugin command",
+                e,
+            ));
         }
     };
     // 插件命令也纳入进程树守卫：应用退出或超时时一并回收 npm 后代进程。
@@ -92,7 +99,11 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&out_path);
-                return Err(format!("等待插件命令失败：{e}"));
+                return Err(crate::locale::error(
+                    "等待插件命令失败",
+                    "Failed while waiting for the plugin command",
+                    e,
+                ));
             }
         }
     };
@@ -109,7 +120,10 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
         // Windows 上被外部进程终止（如安全软件拦截）时取不到退出码；
         // 附注便于识别与诊断（is_environment_block_error 据此分类）
         if status.code().is_none() {
-            err.push_str("\n（进程被外部终止，无退出码——可能被安全软件拦截）");
+            err.push_str(crate::locale::text(
+                "\n（进程被外部终止，无退出码——可能被安全软件拦截）",
+                "\n(The process was terminated externally without an exit code, possibly by security software.)",
+            ));
         }
         return Err(err);
     }
@@ -134,7 +148,10 @@ pub(super) fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<Stri
                 "plugins: 检测到 pnpm virtual store 错位，备份并重建 node_modules 后重试",
             );
             if let Err(re) = recover_virtual_store(&config) {
-                return Err(format!("{e}\n（自愈失败：{re}）"));
+                return Err(crate::locale::owned(
+                    format!("{e}\n（自愈失败：{re}）"),
+                    format!("{e}\n(Automatic recovery failed: {re})"),
+                ));
             }
             match run_dsh_plugin(app, args) {
                 Ok(out) => {
@@ -143,11 +160,13 @@ pub(super) fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<Stri
                     Ok(out)
                 }
                 Err(e2) => match rollback_virtual_store(&config) {
-                    Ok(()) => Err(format!(
-                        "{e2}\n（重建 virtual store 仍失败，已恢复原 node_modules）"
+                    Ok(()) => Err(crate::locale::owned(
+                        format!("{e2}\n（重建 virtual store 仍失败，已恢复原 node_modules）"),
+                        format!("{e2}\n(Rebuilding the virtual store failed again; the original node_modules was restored.)"),
                     )),
-                    Err(rollback_error) => Err(format!(
-                        "{e2}\n（重建 virtual store 仍失败；恢复原 node_modules 也失败：{rollback_error}）"
+                    Err(rollback_error) => Err(crate::locale::owned(
+                        format!("{e2}\n（重建 virtual store 仍失败；恢复原 node_modules 也失败：{rollback_error}）"),
+                        format!("{e2}\n(Rebuilding the virtual store failed again, and restoring the original node_modules also failed: {rollback_error})"),
                     )),
                 },
             }
@@ -182,7 +201,13 @@ fn restore_interrupted_virtual_store(config: &crate::app_state::Config) -> Resul
     if marker.exists() {
         if std::fs::read_to_string(&marker).is_ok_and(|state| state.trim() == "committed") {
             cleanup_committed_virtual_store(&nm, &lock, &bak, &lock_bak)?;
-            std::fs::remove_file(&marker).map_err(|e| format!("清理自愈标记失败：{e}"))?;
+            std::fs::remove_file(&marker).map_err(|e| {
+                crate::locale::error(
+                    "清理自愈标记失败",
+                    "Failed to remove the recovery marker",
+                    e,
+                )
+            })?;
             return Ok(());
         }
         if bak.exists() {
@@ -190,16 +215,35 @@ fn restore_interrupted_virtual_store(config: &crate::app_state::Config) -> Resul
         }
         if lock_bak.exists() {
             if lock.exists() {
-                std::fs::remove_file(&lock)
-                    .map_err(|e| format!("清理中断的 lock 文件失败：{e}"))?;
+                std::fs::remove_file(&lock).map_err(|e| {
+                    crate::locale::error(
+                        "清理中断的 lock 文件失败",
+                        "Failed to remove the interrupted lock file",
+                        e,
+                    )
+                })?;
             }
-            std::fs::rename(&lock_bak, &lock)
-                .map_err(|e| format!("恢复中断的 pnpm-lock.yaml 失败：{e}"))?;
+            std::fs::rename(&lock_bak, &lock).map_err(|e| {
+                crate::locale::error(
+                    "恢复中断的 pnpm-lock.yaml 失败",
+                    "Failed to restore the interrupted pnpm-lock.yaml",
+                    e,
+                )
+            })?;
         }
         if !nm.exists() {
-            return Err("virtual store 自愈中断，且原 node_modules 备份不存在".into());
+            return Err(crate::locale::text(
+                "virtual store 自愈中断，且原 node_modules 备份不存在",
+                "Virtual-store recovery was interrupted, and the original node_modules backup is missing",
+            ).into());
         }
-        std::fs::remove_file(&marker).map_err(|e| format!("清理自愈标记失败：{e}"))?;
+        std::fs::remove_file(&marker).map_err(|e| {
+            crate::locale::error(
+                "清理自愈标记失败",
+                "Failed to remove the recovery marker",
+                e,
+            )
+        })?;
         return Ok(());
     }
     cleanup_committed_virtual_store(&nm, &lock, &bak, &lock_bak)
@@ -213,19 +257,40 @@ fn cleanup_committed_virtual_store(
 ) -> Result<(), String> {
     if bak.exists() {
         if nm.exists() {
-            std::fs::remove_dir_all(bak).map_err(|e| format!("清理已提交的旧备份失败：{e}"))?;
+            std::fs::remove_dir_all(bak).map_err(|e| {
+                crate::locale::error(
+                    "清理已提交的旧备份失败",
+                    "Failed to remove the committed backup",
+                    e,
+                )
+            })?;
         } else {
-            std::fs::rename(bak, nm)
-                .map_err(|e| format!("恢复孤立的 node_modules 备份失败：{e}"))?;
+            std::fs::rename(bak, nm).map_err(|e| {
+                crate::locale::error(
+                    "恢复孤立的 node_modules 备份失败",
+                    "Failed to restore the orphaned node_modules backup",
+                    e,
+                )
+            })?;
         }
     }
     if lock_bak.exists() {
         if lock.exists() {
-            std::fs::remove_file(lock_bak)
-                .map_err(|e| format!("清理已提交的 lock 备份失败：{e}"))?;
+            std::fs::remove_file(lock_bak).map_err(|e| {
+                crate::locale::error(
+                    "清理已提交的 lock 备份失败",
+                    "Failed to remove the committed lock backup",
+                    e,
+                )
+            })?;
         } else {
-            std::fs::rename(lock_bak, lock)
-                .map_err(|e| format!("恢复孤立的 pnpm-lock.yaml 备份失败：{e}"))?;
+            std::fs::rename(lock_bak, lock).map_err(|e| {
+                crate::locale::error(
+                    "恢复孤立的 pnpm-lock.yaml 备份失败",
+                    "Failed to restore the orphaned pnpm-lock.yaml backup",
+                    e,
+                )
+            })?;
         }
     }
     Ok(())
@@ -238,18 +303,39 @@ fn recover_virtual_store(config: &crate::app_state::Config) -> Result<(), String
     use std::io::Write;
     restore_interrupted_virtual_store(config)?;
     let (nm, lock, bak, lock_bak, marker) = virtual_store_paths(config);
-    let mut marker_file = std::fs::File::create(&marker)
-        .map_err(|e| format!("创建 virtual store 自愈标记失败：{e}"))?;
+    let mut marker_file = std::fs::File::create(&marker).map_err(|e| {
+        crate::locale::error(
+            "创建 virtual store 自愈标记失败",
+            "Failed to create the virtual-store recovery marker",
+            e,
+        )
+    })?;
     marker_file
         .write_all(b"in-progress\n")
         .and_then(|_| marker_file.sync_all())
-        .map_err(|e| format!("写入 virtual store 自愈标记失败：{e}"))?;
-    std::fs::rename(&nm, &bak).map_err(|e| format!("备份 node_modules 失败：{e}"))?;
+        .map_err(|e| {
+            crate::locale::error(
+                "写入 virtual store 自愈标记失败",
+                "Failed to write the virtual-store recovery marker",
+                e,
+            )
+        })?;
+    std::fs::rename(&nm, &bak).map_err(|e| {
+        crate::locale::error(
+            "备份 node_modules 失败",
+            "Failed to back up node_modules",
+            e,
+        )
+    })?;
     if lock.exists() {
         if let Err(error) = std::fs::rename(&lock, &lock_bak) {
             let _ = std::fs::rename(&bak, &nm);
             let _ = std::fs::remove_file(&marker);
-            return Err(format!("备份 pnpm-lock.yaml 失败：{error}"));
+            return Err(crate::locale::error(
+                "备份 pnpm-lock.yaml 失败",
+                "Failed to back up pnpm-lock.yaml",
+                error,
+            ));
         }
     }
     Ok(())
@@ -292,18 +378,47 @@ fn finish_virtual_store_recovery(config: &crate::app_state::Config) {
 fn rollback_virtual_store(config: &crate::app_state::Config) -> Result<(), String> {
     let (nm, lock, bak, lock_bak, marker) = virtual_store_paths(config);
     if nm.exists() {
-        std::fs::remove_dir_all(&nm).map_err(|e| format!("清理失败的新 node_modules 失败：{e}"))?;
+        std::fs::remove_dir_all(&nm).map_err(|e| {
+            crate::locale::error(
+                "清理失败的新 node_modules 失败",
+                "Failed to remove the unsuccessful new node_modules",
+                e,
+            )
+        })?;
     }
-    std::fs::rename(&bak, &nm).map_err(|e| format!("恢复原 node_modules 失败：{e}"))?;
+    std::fs::rename(&bak, &nm).map_err(|e| {
+        crate::locale::error(
+            "恢复原 node_modules 失败",
+            "Failed to restore the original node_modules",
+            e,
+        )
+    })?;
     if lock_bak.exists() {
         if lock.exists() {
-            std::fs::remove_file(&lock).map_err(|e| format!("清理失败的新 lock 文件失败：{e}"))?;
+            std::fs::remove_file(&lock).map_err(|e| {
+                crate::locale::error(
+                    "清理失败的新 lock 文件失败",
+                    "Failed to remove the unsuccessful new lock file",
+                    e,
+                )
+            })?;
         }
-        std::fs::rename(&lock_bak, &lock)
-            .map_err(|e| format!("恢复原 pnpm-lock.yaml 失败：{e}"))?;
+        std::fs::rename(&lock_bak, &lock).map_err(|e| {
+            crate::locale::error(
+                "恢复原 pnpm-lock.yaml 失败",
+                "Failed to restore the original pnpm-lock.yaml",
+                e,
+            )
+        })?;
     }
     if marker.exists() {
-        std::fs::remove_file(&marker).map_err(|e| format!("清理自愈标记失败：{e}"))?;
+        std::fs::remove_file(&marker).map_err(|e| {
+            crate::locale::error(
+                "清理自愈标记失败",
+                "Failed to remove the recovery marker",
+                e,
+            )
+        })?;
     }
     Ok(())
 }

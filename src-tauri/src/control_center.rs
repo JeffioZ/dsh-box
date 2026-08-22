@@ -17,16 +17,39 @@ static CHECK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 /// 弹窗窗口 label。
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
-/// 弹窗统一为"左侧导航 + 右侧内容"布局：固定尺寸容纳导航栏与内容区。
-/// 680 宽（导航 152 + 内容 528）、480 高——列表页（插件/会话文件）内容在
-/// 内容区滚动浏览，轻量页（余额/设置/关于）不再因统一高度而大片留空。
-/// 高度不做按 kind 切换（切换时窗口跳变观感差），统一折中。
+/// 弹窗统一为"左侧导航 + 右侧内容"布局。正常视口采用 dsh 的 800px 卡片，
+/// 小屏/高 DPI 时按主窗口逻辑视口收窄、收短，右侧内容独立滚动；尺寸不按
+/// kind 切换，避免导航时窗口在指针下跳变。
 /// 自绘阴影余量（dsh shadow-lv3：上扩 20px、下 12px+32px、左右 32px 扩散）：
 /// 透明窗口 = 卡片 + 阴影空间，阴影由 control-center.html 卡片层自绘；
 /// 余量不足会被窗口边缘硬切（视觉不自然）。
-const SHADOW_TOP: f64 = 24.0;
-const SHADOW_BOTTOM: f64 = 48.0;
-const SHADOW_SIDES: f64 = 36.0;
+const SHADOW_TOP: f64 = crate::window::OVERLAY_SHADOW_TOP;
+const SHADOW_BOTTOM: f64 = crate::window::OVERLAY_SHADOW_BOTTOM;
+const SHADOW_SIDES: f64 = crate::window::OVERLAY_SHADOW_SIDES;
+const CARD_MIN_WIDTH: f64 = 560.0;
+const CARD_MAX_WIDTH: f64 = 800.0;
+const CARD_MIN_HEIGHT: f64 = 360.0;
+const CARD_MAX_HEIGHT: f64 = 800.0;
+
+fn fit_card_width(viewport_width: f64) -> f64 {
+    (viewport_width - SHADOW_SIDES * 2.0).clamp(CARD_MIN_WIDTH, CARD_MAX_WIDTH)
+}
+
+fn fit_card_height(content_height: f64) -> f64 {
+    (content_height - 48.0).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT)
+}
+
+/// 弹窗卡片逻辑宽度：正常为 800px；窄窗口时把自绘阴影也完整收进主窗口。
+fn dialog_card_width(app: &AppHandle) -> f64 {
+    crate::main_window(app)
+        .and_then(|w| {
+            let size = w.inner_size().ok()?;
+            let scale = w.scale_factor().ok()?;
+            Some(size.width as f64 / scale)
+        })
+        .map(fit_card_width)
+        .unwrap_or(CARD_MAX_WIDTH)
+}
 
 /// 弹窗卡片逻辑高度：dsh 设置弹窗规格 min(800px, dsh 本体视口高-48)。
 /// dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏与状态栏），
@@ -45,14 +68,14 @@ fn dialog_card_height(app: &AppHandle) -> f64 {
             };
             Some(total - crate::titlebar::TITLEBAR_HEIGHT - status_h)
         })
-        .map(|h| (h - 48.0).clamp(480.0, 800.0))
+        .map(fit_card_height)
         .unwrap_or(640.0)
 }
 
-/// 弹窗窗口尺寸 = 卡片 800×h + 阴影余量。
+/// 弹窗窗口尺寸 = 自适应卡片 + 阴影余量。
 fn dialog_size(app: &AppHandle) -> (f64, f64) {
     (
-        800.0 + SHADOW_SIDES * 2.0,
+        dialog_card_width(app) + SHADOW_SIDES * 2.0,
         dialog_card_height(app) + SHADOW_TOP + SHADOW_BOTTOM,
     )
 }
@@ -75,8 +98,8 @@ pub fn precreate(app: &AppHandle) {
     // 导航白名单与主窗口一致：弹窗内容只允许加载内置页面（IPC 另有来源
     // 校验兜底，此处堵住内容本身被导航到任意远程地址的口子）
     let navigation_app = app.clone();
-    // 弹窗窗口 = 卡片 800×min(800, 视口高-48) + 自绘阴影余量
-    // （dsh-client-ui-settings-general：width 800 / height min(800px, 100vh-48px)）
+    // 弹窗窗口 = 自适应卡片 + 自绘阴影余量；大视口仍严格对齐 dsh 的
+    // width 800 / height min(800px, 100vh-48px)。
     let (dialog_w, dialog_h) = dialog_size(app);
     // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
     // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
@@ -256,6 +279,20 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
     let dsh_version = crate::runtime::installed_dsh_version(&config)
         .unwrap_or_else(|| crate::locale::text("未知", "Unknown").into());
     obj.insert("dsh_version".into(), serde_json::json!(dsh_version));
+    let state = app.state::<AppState>();
+    let ownership = state.service_ownership();
+    obj.insert("service_mode".into(), serde_json::json!(ownership.as_str()));
+    obj.insert(
+        "service_ready".into(),
+        serde_json::json!(
+            state.phase() == crate::app_state::BootPhase::Ready
+                && matches!(
+                    ownership,
+                    crate::app_state::ServiceOwnership::Managed
+                        | crate::app_state::ServiceOwnership::External
+                )
+        ),
+    );
     let payload = AppDialogOpen {
         title: title.to_string(),
         kind: kind.to_string(),
@@ -347,6 +384,9 @@ pub fn close(app: &AppHandle) {
 /// 打开余额弹窗：立即出窗显示“查询中…”，查询在后台执行、结果写入状态，
 /// 页面轮询拉取（事件通道对该窗口不可靠）。
 pub fn open_balance(app: &AppHandle) {
+    if !crate::tray_menu::action_enabled(app, "balance") {
+        return;
+    }
     show(
         app,
         crate::locale::text("API 余额", "API balance"),
@@ -497,15 +537,21 @@ pub fn open_about(app: &AppHandle) {
 
 /// 插件管理（统一弹窗内）：内容由前端拉取，无需初始载荷。
 pub fn open_plugins(app: &AppHandle) {
+    if !crate::tray_menu::action_enabled(app, "plugins") {
+        return;
+    }
     show(
         app,
-        crate::locale::text("插件管理", "Plugin manager"),
+        crate::locale::text("管理插件", "Plugins"),
         "plugins",
         serde_json::json!({}),
     );
 }
 
 pub fn open_stats(app: &AppHandle, group: Option<&str>) {
+    if !crate::tray_menu::managed_service_ready(app) {
+        return;
+    }
     show(
         app,
         crate::locale::text("会话统计", "Session stats"),
@@ -514,13 +560,36 @@ pub fn open_stats(app: &AppHandle, group: Option<&str>) {
     );
 }
 
-/// 设置（统一弹窗内）：四个开关（开机自启 / 隐藏工具调用 / 隐藏统计行 /
-/// 隐藏状态栏），状态与切换由前端经 settings_get / settings_set 完成。
+/// 设置（统一弹窗内）：桌面行为、界面显示、本地凭据、dsh/插件与模型配置。
+/// 状态与切换由前端经各领域命令完成。
 pub fn open_settings(app: &AppHandle) {
     show(
         app,
-        crate::locale::text("桌面端设置", "Desktop settings"),
+        crate::locale::text("设置", "Settings"),
         "settings",
         serde_json::json!({}),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_card_keeps_dsh_size_on_roomy_viewports() {
+        assert_eq!(fit_card_width(1280.0), 800.0);
+        assert_eq!(fit_card_height(900.0), 800.0);
+    }
+
+    #[test]
+    fn dialog_card_fits_compact_logical_viewports() {
+        assert_eq!(fit_card_width(720.0) + SHADOW_SIDES * 2.0, 720.0);
+        assert_eq!(fit_card_height(456.0), 408.0);
+    }
+
+    #[test]
+    fn dialog_card_has_usable_lower_bounds() {
+        assert_eq!(fit_card_width(400.0), CARD_MIN_WIDTH);
+        assert_eq!(fit_card_height(300.0), CARD_MIN_HEIGHT);
+    }
 }
