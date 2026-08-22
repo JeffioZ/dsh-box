@@ -7,6 +7,12 @@ param()
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
+$checkScript = Join-Path $root "scripts\check-project.mjs"
+Write-Host "正在检查项目一致性..." -ForegroundColor Cyan
+node $checkScript
+if ($LASTEXITCODE -ne 0) {
+    throw "项目一致性检查失败（退出码 $LASTEXITCODE）"
+}
 & (Join-Path $root "scripts\cargo.ps1") dev
 if ($LASTEXITCODE -ne 0) {
     throw "开发模式构建失败（退出码 $LASTEXITCODE）"

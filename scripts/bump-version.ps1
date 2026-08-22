@@ -37,6 +37,17 @@ foreach ($p in @($confJson, $pkgJson, $lockJson)) {
   if ($vm.Success -and $vm.Groups[1].Value -ne $oldVer) {
     throw "版本号不一致：$p 为 $($vm.Groups[1].Value)，Cargo.toml 为 $oldVer；请先人工统一后再 bump。"
   }
+  if ($p -eq $lockJson) {
+    # package-lock 顶层 version 与 packages[""] 的 version 是前两个版本字段；
+    # 两者都必须一致。只检查第一个会放过根包条目漂移，npm ci 仍可继续而把
+    # 错误版本带入锁文件元数据。
+    $lockVersions = [regex]::Matches($t, '(?m)^\s*"version"\s*:\s*"([^"]+)"')
+    if ($lockVersions.Count -lt 2 -or
+        $lockVersions[0].Groups[1].Value -ne $oldVer -or
+        $lockVersions[1].Groups[1].Value -ne $oldVer) {
+      throw "版本号不一致：package-lock.json 顶层与根包 version 必须都等于 $oldVer"
+    }
+  }
 }
 
 # 2) Cargo.toml：package.version（仅此一处，行首锚定避免误伤依赖）

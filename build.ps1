@@ -7,6 +7,13 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $cargoScript = Join-Path $root "scripts\cargo.ps1"
 $copyScript = Join-Path $root "scripts\copy-exe.mjs"
+$checkScript = Join-Path $root "scripts\check-project.mjs"
+
+Write-Host "正在检查项目一致性..." -ForegroundColor Cyan
+node $checkScript
+if ($LASTEXITCODE -ne 0) {
+    throw "项目一致性检查失败（退出码 $LASTEXITCODE）"
+}
 
 Write-Host "正在构建 DSHBox release..." -ForegroundColor Cyan
 & $cargoScript build

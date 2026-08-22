@@ -2,9 +2,17 @@ name: build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags: ['v*']
   pull_request:
+
+# 默认只读；只有 tag 发布 job 单独提升 contents: write。
+permissions:
+  contents: read
+
+env:
+  # 与 dsh 官方支持范围的最低稳定版本一致，避免 runner 自带 Node 漂移。
+  NODE_VERSION: 22.19.0
 
 # 同一分支/PR 的并发构建自动取消旧的，避免排队浪费
 concurrency:
@@ -18,6 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Project consistency checks
         run: npm run check
       - name: Check version consistency
@@ -29,6 +40,16 @@ jobs:
           if [ -z "$cargo_ver" ] || [ "$cargo_ver" != "$pkg_ver" ] || [ "$pkg_ver" != "$tauri_ver" ]; then
             echo "::error::三处版本号不一致，请同步后再提交"
             exit 1
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::发布 tag 必须使用严格的 vX.Y.Z 格式"
+              exit 1
+            fi
+            if [ "${GITHUB_REF_NAME#v}" != "$cargo_ver" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} 与项目版本 $cargo_ver 不一致"
+              exit 1
+            fi
           fi
 
   build:
@@ -105,12 +126,20 @@ jobs:
       - name: Clippy (warnings as errors)
         run: cargo clippy --locked --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: Cross-architecture compile check
+        if: matrix.cross != ''
+        run: cargo check --locked --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Cross-architecture Clippy
+        if: matrix.cross != ''
+        run: cargo clippy --locked --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - name: Release build
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/')
         run: cargo build --locked --release --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml
 
       - name: Release build (cross arch)
-        if: matrix.cross != '' && github.event_name != 'pull_request'
+        if: matrix.cross != '' && startsWith(github.ref, 'refs/tags/')
         run: cargo build --locked --release --target ${{ matrix.cross }} --manifest-path src-tauri/Cargo.toml
 
       # 打包为 zip：一步解压得到可执行本体，Linux 双击解压无 .tar.gz 的两层中间态；
@@ -118,7 +147,7 @@ jobs:
       # 产物用面向用户的 asset 名（如 windows-x64 / linux-arm64），
       # 而非 Rust target triple。
       - name: Package artifact (Linux)
-        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd "src-tauri/target/${{ matrix.target }}/release"
@@ -128,14 +157,21 @@ jobs:
       # macOS：用 tauri CLI 把已构建的二进制打包为 .app 并生成 dmg（tauri bundle 只打包
       # 不编译，复用上方 Release build 产物；--no-sign 显式跳过签名，产物未签名，
       # Gatekeeper 首次运行需手动放行）。dmg 默认名为 <productName>_<ver>_<arch>.dmg
-      # （productName 含空格），按精确名匹配并重命名为统一 asset 名；
+      # 按 productName 的精确输出名匹配并重命名为统一 asset 名；
       # 未生成则显式报错，避免静默上传空产物。
       - name: Install JS toolchain (macOS bundle)
-        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install JS dependencies (macOS bundle)
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         run: npm ci
 
       - name: Bundle macOS apps (dmg)
-        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           cd src-tauri
@@ -147,31 +183,31 @@ jobs:
             arch="${t%%-*}"
             # tauri 对 x86_64 target 的 dmg 后缀用 x64（macOS 惯例），非 target triple 原样
             [ "$arch" = "x86_64" ] && arch="x64"
-            dmg="target/$t/release/bundle/dmg/DeepSeek Harness Box_${ver}_${arch}.dmg"
+            dmg="target/$t/release/bundle/dmg/DSHBox_${ver}_${arch}.dmg"
             [ -f "$dmg" ] || { echo "::error::dmg 未生成: $dmg"; exit 1; }
             mv "$dmg" "$GITHUB_WORKSPACE/DSHBox-$a.dmg"
           done
 
       - name: Rename Windows asset
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: cp "src-tauri/target/${{ matrix.target }}/release/DSHBox.exe" "DSHBox-${{ matrix.asset }}.exe"
 
       - name: Upload artifact (native)
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v7
         with:
           name: DSHBox-${{ matrix.asset }}
           path: DSHBox-${{ matrix.asset }}.*
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload artifact (cross)
-        if: matrix.cross != '' && github.event_name != 'pull_request'
+        if: matrix.cross != '' && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v7
         with:
           name: DSHBox-${{ matrix.cross-asset }}
           path: DSHBox-${{ matrix.cross-asset }}.*
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # tag 触发（push v*）时：汇总五平台产物并自动发布 release。
   # 产物永远来自 CI、永远全平台、永远正确命名，杜绝手动传本地产物。

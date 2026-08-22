@@ -2,6 +2,9 @@
   "name": "dsh-box",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "description": "DeepSeek Harness (dsh) desktop shell with tray and managed runtime updates",
   "scripts": {
     "check": "node scripts/check-project.mjs",

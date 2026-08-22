@@ -15,7 +15,7 @@ function Test-DshdUiServer {
     try {
         $response = Invoke-WebRequest -Uri "http://127.0.0.1:4321/" -TimeoutSec 2 -UseBasicParsing
         return $response.StatusCode -eq 200 -and
-            $response.Content.Contains("<title>DeepSeek Harness Box</title>")
+            $response.Content.Contains("<title>DSHBox</title>")
     } catch {
         return $false
     }

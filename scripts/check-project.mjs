@@ -76,6 +76,12 @@ for (const file of tracked.filter((file) => file.endsWith('.html'))) {
       fail(`${file}: 内联 JavaScript 语法失败: ${error.message}`);
     }
   }
+  if (!/<meta\s+name=["']viewport["'][^>]*>/i.test(html)) {
+    fail(`${file}: 缺少逻辑视口 meta，高 DPI/窄视口布局会失去基准`);
+  }
+  for (const match of html.matchAll(/<button\b([^>]*)>/gi)) {
+    if (!/\btype=["']button["']/i.test(match[1])) fail(`${file}: button 必须显式声明 type="button"`);
+  }
   for (const match of html.matchAll(/\b(?:src|href)=["']([^"']+)["']/gi)) {
     const target = match[1];
     if (!target || /^(?:#|[a-z]+:|\/\/)/i.test(target)) continue;
@@ -98,6 +104,15 @@ if (!messageMatch) {
     for (const [key, pair] of Object.entries(messages)) {
       if (!Array.isArray(pair) || pair.length !== 2 || pair.some((value) => typeof value !== 'string' || !value)) {
         fail(`ui/i18n.js: ${key} 必须包含非空中英双语`);
+        continue;
+      }
+      const placeholders = (value) => [...new Set(
+        [...value.matchAll(/\{([A-Za-z_$][\w$]*)\}/g)].map((match) => match[1]),
+      )].sort();
+      const zhPlaceholders = placeholders(pair[0]);
+      const enPlaceholders = placeholders(pair[1]);
+      if (JSON.stringify(zhPlaceholders) !== JSON.stringify(enPlaceholders)) {
+        fail(`ui/i18n.js: ${key} 的中英文占位符不一致`);
       }
     }
     const usages = new Set();
@@ -127,8 +142,21 @@ for (const file of ['ui/index.html', 'ui/control-center.html']) {
   if (/<(?:style|script)(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/(?:style|script)>/i.test(html)) {
     fail(`${file}: 不应保留内联 CSS/JavaScript`);
   }
+  const editContextAt = html.indexOf('edit-context.js');
+  const commonAt = html.indexOf('common.js');
+  const menuAt = html.indexOf('menu.js');
+  if (editContextAt < 0 || commonAt < editContextAt || menuAt < commonAt) {
+    fail(`${file}: 文本编辑能力必须先于 common.js 加载，menu.js 必须随后提供自绘菜单渲染`);
+  }
 }
 const modelUi = read('ui/control-center-settings.js');
+const runtimeHeading = modelUi.indexOf('settings-runtime-heading');
+const apiKeyField = modelUi.indexOf('settings-api-key', runtimeHeading);
+const runtimeSectionEnd = modelUi.indexOf("'</section>' +", apiKeyField);
+if (runtimeHeading < 0 || apiKeyField < runtimeHeading || runtimeSectionEnd < apiKeyField
+    || modelUi.includes('settings-api-heading') || modelUi.includes('api-key-box')) {
+  fail('设置页的 DeepSeek API 必须归入“服务管理”，不能保留单独的浅层板块');
+}
 const renderStart = modelUi.indexOf('function miRenderResult(preview)');
 const applyAction = modelUi.indexOf("applyBtn.textContent = dshdT('modelImportApply')", renderStart);
 const renderEnd = modelUi.indexOf('box.hidden = false', renderStart);
@@ -168,6 +196,124 @@ try {
   fail(`ui/menu.js: 共享菜单契约无法执行: ${error.message}`);
 }
 
+const startupCss = read('ui/startup.css');
+const startupButton = startupCss.match(/\.btn\s*\{([^}]*)\}/)?.[1] || '';
+for (const contract of ['display: inline-flex', 'align-items: center', 'justify-content: center', 'text-align: center']) {
+  if (!startupButton.includes(contract)) fail(`ui/startup.css: 启动页按钮缺少居中契约 ${contract}`);
+}
+const sharedCss = read('ui/common.css');
+if (!sharedCss.includes('.dshd-password-field .dshd-input::-ms-reveal')) {
+  fail('ui/common.css: 自绘密码可见性按钮必须隐藏 WebView2 原生 reveal 控件');
+}
+const controlCss = read('ui/control-center.css');
+const titlebarHtml = read('ui/titlebar.html');
+for (const [name, rule] of [
+  ['共享按钮', sharedCss.match(/^\.dshd-btn\s*\{([^}]*)\}/m)?.[1] || ''],
+  ['模型配置按钮', controlCss.match(/^\.mi-btn\s*\{([^}]*)\}/m)?.[1] || ''],
+  ['标题栏按钮', titlebarHtml.match(/^\.tb-btn\s*\{([^}]*)\}/m)?.[1] || ''],
+]) {
+  for (const contract of ['display: inline-flex', 'align-items: center', 'justify-content: center']) {
+    if (!rule.includes(contract)) fail(`${name}缺少居中契约 ${contract}`);
+  }
+}
+if (/\.dshd-menu-surface\s*\{[^}]*border-bottom\s*:\s*0/s.test(sharedCss)
+    || /\.dshd-menu-surface\s*\{[^}]*padding\s*:\s*4px\s+4px\s+8px/s.test(sharedCss)) {
+  fail('ui/common.css: 菜单表面不得在退出项下保留额外空白或移除底边');
+}
+for (const contract of [
+  '--dshd-shadow-lv3:',
+  'box-shadow: var(--dshd-shadow-lv3)',
+  '.dshd-menu-motion.dshd-menu-animating',
+  '.dshd-row.danger:not(:disabled):hover .ic',
+]) {
+  if (!sharedCss.includes(contract)) fail(`ui/common.css: 浮层视觉契约缺少 ${contract}`);
+}
+const baseMenuMotion = sharedCss.match(/\.dshd-menu-motion\s*\{([^}]*)\}/)?.[1] || '';
+if (baseMenuMotion.includes('will-change')) {
+  fail('ui/common.css: 菜单静止时不得长期保留 will-change 合成层');
+}
+for (const [file, css] of [
+  ['ui/control-center.css', controlCss],
+  ['ui/startup.css', startupCss],
+]) {
+  if (!css.includes('box-shadow: var(--dshd-shadow-lv3)')) {
+    fail(`${file}: 独立浮层必须复用统一 shadow-lv3 token`);
+  }
+}
+const trayMenuHtml = read('ui/tray-menu.html');
+if (!/padding:\s*24px\s+36px\s+48px/.test(trayMenuHtml)
+    || !trayMenuHtml.includes('align-items: flex-start')
+    || !trayMenuHtml.includes('flex: none; width: 100%')
+    || /#card\s*\{[^}]*flex:\s*1\b/s.test(trayMenuHtml)
+    || !trayMenuHtml.includes('menu.setItems(items, true)')) {
+  fail('ui/tray-menu.html: 托盘菜单必须按内容撑高、预留完整阴影安全区并在每次展示前重建视觉状态');
+}
+if ((sharedCss.match(/--dshd-shadow-lv3:/g) || []).length !== 1) {
+  fail('ui/common.css: shadow-lv3 必须由单一共享 token 定义，主题不得重复覆盖同值');
+}
+const titlebarJs = read('ui/titlebar.js');
+if (!titlebarJs.includes('36 + content + 48') || !titlebarJs.includes("mainMenuMotion.open('-4px')")) {
+  fail('ui/titlebar.js: 主菜单阴影安全区或入场位移未与共享浮层对齐');
+}
+const titlebarRust = read('src-tauri/src/titlebar.rs');
+if (!titlebarRust.includes('main.set_auto_resize(false)')
+    || !titlebarRust.includes('sync_bounds_for_size')
+    || !titlebarRust.includes('Size::Physical')) {
+  fail('src-tauri/src/titlebar.rs: 主窗口缩放必须由单一物理像素布局路径负责');
+}
+const trayMenuRust = read('src-tauri/src/tray_menu.rs');
+if (!trayMenuRust.includes('eval_with_callback')
+    || !trayMenuRust.includes('wait_for_geometry_then_prepare')) {
+  fail('src-tauri/src/tray_menu.rs: 托盘菜单必须等待几何与首帧脚本完成后再显示');
+}
+if (read('ui/control-center.html').includes('&#xE8BB;')) {
+  fail('ui/control-center.html: 控制中心关闭按钮必须使用跨平台 SVG');
+}
+const startupJs = read('ui/startup.js');
+for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape']) {
+  if (!startupJs.includes(`event.key === '${key}'`)) fail(`ui/startup.js: 自绘下拉缺少 ${key} 键盘交互`);
+}
+const startupHtml = read('ui/index.html');
+for (const contract of [
+  'id="ob-runtime" class="ob-runtime hidden"',
+  'aria-controls="ob-runtime-actions"',
+  'id="ob-runtime-progress"',
+  'data-install-cancel',
+  'data-install-reinstall',
+]) {
+  if (!startupHtml.includes(contract)) fail(`ui/index.html: 首次配置运行环境区缺少契约 ${contract}`);
+}
+for (const contract of [
+  'renderOnboardingRuntime',
+  'setOnboardingSourceExpanded',
+  'onboardingPausedByError',
+  "document.querySelectorAll('[data-install-cancel]')",
+  "document.querySelectorAll('[data-install-reinstall]')",
+]) {
+  if (!startupJs.includes(contract)) fail(`ui/startup.js: 首次配置下载源流程缺少契约 ${contract}`);
+}
+if (!startupJs.includes("generation: installGeneration")
+    || !read('src-tauri/src/dsh.rs').includes('BootOutcome::RestartWithSource')
+    || !read('src-tauri/src/app_state/mod.rs').includes('pub install_generation: u64')) {
+  fail('首次安装取消/切源必须使用带引导轮次的显式业务状态');
+}
+for (const contract of [
+  'id="service-choice-box"',
+  'id="btn-connect-external"',
+  'id="btn-start-local"',
+  'id="btn-use-local"',
+]) {
+  if (!startupHtml.includes(contract)) fail(`ui/index.html: 外部服务选择流程缺少契约 ${contract}`);
+}
+const dshLifecycle = read('src-tauri/src/dsh.rs');
+if (!startupJs.includes("invoke('choose_service'")
+    || !read('src-tauri/src/commands/mod.rs').includes('choose_service,')
+    || !dshLifecycle.includes('"host.describe"')
+    || !dshLifecycle.includes('config.port = 0;')
+    || dshLifecycle.includes('PORT_SCAN_WINDOW')) {
+  fail('服务归属必须经过显式选择与官方 RPC 校验，端口回退必须交给系统分配');
+}
+
 const statusbar = read('ui/statusbar.js');
 if (statusbar.includes('.errorKind')) fail('ui/statusbar.js: BalancePayload 契约字段必须使用 error_kind');
 const authBranch = statusbar.indexOf("b.error_kind === 'no_key'");
@@ -186,13 +332,16 @@ if (!modelUi.includes("invoke('set_deepseek_api_key'")
   fail('DeepSeek API Key 设置入口的前后端命令契约不完整');
 }
 
+const editContextScript = read('ui/edit-context.js');
 const menuScript = read('src-tauri/resources/injections/context-menu.js');
 const navigation = read('src-tauri/src/webview/navigation.rs');
 if (!navigation.includes('include_str!("../../resources/injections/context-menu.js")')) {
   fail('src-tauri/src/webview/navigation.rs: 右键菜单资源未通过 include_str! 嵌入');
+} else if (!navigation.includes('include_str!("../../../ui/edit-context.js")')) {
+  fail('src-tauri/src/webview/navigation.rs: 文本编辑菜单核心未与 dsh 注入页共用');
 } else {
   try {
-    new vm.Script(`(function(){${menuScript}\n})();`, { filename: 'context-menu.js' });
+    new vm.Script(`(function(){${editContextScript}\n${menuScript}\n})();`, { filename: 'context-menu.js' });
   } catch (error) {
     fail(`MENU_INJECT JavaScript 语法失败: ${error.message}`);
   }
@@ -211,11 +360,36 @@ if (!navigation.includes('include_str!("../../resources/injections/context-menu.
 }
 
 const pkg = JSON.parse(read('package.json'));
+const npmLock = JSON.parse(read('package-lock.json'));
 const tauri = JSON.parse(read('src-tauri/tauri.conf.json'));
 const cargo = read('src-tauri/Cargo.toml').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 const lockVersion = read('src-tauri/Cargo.lock').match(/\[\[package\]\]\s*\nname = "dsh-box"\s*\nversion = "([^"]+)"/m)?.[1];
-if (!cargo || pkg.version !== cargo || tauri.version !== cargo || lockVersion !== cargo) {
-  fail(`版本不一致: Cargo=${cargo} package=${pkg.version} tauri=${tauri.version} lock=${lockVersion}`);
+const npmLockRootVersion = npmLock.packages?.['']?.version;
+if (!cargo || pkg.version !== cargo || npmLock.version !== cargo || npmLockRootVersion !== cargo
+    || tauri.version !== cargo || lockVersion !== cargo) {
+  fail(`版本不一致: Cargo=${cargo} package=${pkg.version} npm-lock=${npmLock.version}/${npmLockRootVersion} tauri=${tauri.version} cargo-lock=${lockVersion}`);
+}
+if (pkg.engines?.node !== '^22.19.0 || >=24.0.0') fail('package.json: Node.js 工具链范围未与 dsh 官方兼容范围对齐');
+
+const buildWorkflow = read('.github/workflows/build.yml');
+if (!/permissions:\s*\n\s+contents: read/.test(buildWorkflow)) {
+  fail('.github/workflows/build.yml: 默认 GITHUB_TOKEN 必须保持 contents: read');
+}
+if (buildWorkflow.includes('if-no-files-found: warn')) {
+  fail('.github/workflows/build.yml: 发布产物缺失必须失败，不能只告警');
+}
+if (buildWorkflow.includes('branches: [main, master]')) {
+  fail('.github/workflows/build.yml: 默认分支只允许 main');
+}
+if (buildWorkflow.includes("github.event_name != 'pull_request'")) {
+  fail('.github/workflows/build.yml: 普通 main push 不得构建或上传发布附件');
+}
+if (!buildWorkflow.includes('^v[0-9]+\\.[0-9]+\\.[0-9]+$')
+    || !buildWorkflow.includes('startsWith(github.ref, \'refs/tags/\')')) {
+  fail('.github/workflows/build.yml: 发布必须受严格版本 tag 与 tag-only 条件约束');
+}
+if (read('dev-run.ps1').includes('<title>DeepSeek Harness Box</title>')) {
+  fail('dev-run.ps1: 开发服务器健康检查仍引用旧产品标题');
 }
 
 const presets = JSON.parse(read('src-tauri/resources/builtin-plugins.json'));
