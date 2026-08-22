@@ -43,7 +43,7 @@ use webview::{
     app_dev_origin, handle_dshd_scheme, hide_stats_early, inject_dsh_page, is_allowed_navigation,
     is_dsh_url, is_local_app_url, PAGE_INIT_SCRIPT,
 };
-pub use webview::{apply_hide_stats, apply_hide_tools, navigate};
+pub use webview::{apply_hide_stats, apply_hide_tools, navigate, navigate_to_splash};
 
 use app_state::{AppState, BootPhase};
 use tauri::{AppHandle, Emitter, Manager};
@@ -113,6 +113,10 @@ pub fn emit_status_progress(
     detail: &str,
     progress: Option<f64>,
 ) {
+    // 共享状态是 IPC 查询、安装取消/切源和托盘可用性的权威来源；必须先提交
+    // 再构造事件。此前只广播事件会出现“页面显示正在安装、后端仍是 Starting”，
+    // 从而把本应可取消的安装判断为已结束。
+    app.state::<AppState>().set_phase(phase, message, detail);
     // 事件载荷带完整版本信息：此前这里固定 None，前端每次收到事件都会
     // 重算 footer（版本/端口行）并将其清空——启动过程中 footer 短暂出现
     // 后即“消失”。snapshot 的版本检测有缓存，高频事件无额外开销。

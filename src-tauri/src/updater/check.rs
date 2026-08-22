@@ -9,7 +9,7 @@ pub struct CheckResult {
     pub dsh: Option<VersionInfo>,
     pub node: Option<NodeInfo>,
     pub pwsh: Option<PwshInfo>,
-    /// npm 版本（Node 自带）。npm 11 会卡 dsh 安装，12 为所需目标。
+    /// npm 版本（Node 自带，可由用户单独维护）。
     pub npm: Option<VersionInfo>,
     /// 应用自身更新（GitHub Releases）。
     pub app: Option<VersionInfo>,
@@ -313,8 +313,8 @@ pub fn check(app: &AppHandle) -> CheckResult {
     // 应用自身更新（GitHub Releases；失败静默，不阻塞其他检查）
     let app_handle = std::thread::spawn(check_app_update);
 
-    // npm 版本（Node 自带）：npm 11 会卡 dsh 安装，12 为所需目标。
-    // 检测走 registry dist-tags latest，独立线程并行（与 dsh/node/pwsh/app 一致）。
+    // npm 版本（Node 自带）：检测走 registry dist-tags latest，独立线程并行
+    // （与 dsh/node/pwsh/app 一致）。dsh 本体安装已由自管 pnpm 负责。
     let npm_cfg = config.clone();
     let npm_handle = std::thread::spawn(move || {
         let installed = runtime::npm_version(&npm_cfg);

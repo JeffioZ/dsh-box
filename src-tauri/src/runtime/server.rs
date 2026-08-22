@@ -12,22 +12,46 @@ pub(crate) struct StartedServer {
 
 // ---------- 服务启动 ----------
 
-/// 子进程基础环境：PATH 前置 node 目录、设置 DSH_HOME、npm 缓存落在应用根目录。
+/// 子进程基础环境：PATH 前置自管 Node / pnpm、设置 DSH_HOME，并把包管理器
+/// 缓存收口到应用数据目录。dsh 的 plugin 子命令会调用 pnpm，因此这里不能
+/// 只在首次安装时直接执行 pnpm，还要让后续 dsh 子进程稳定找到同一版本。
 pub(crate) fn base_envs(node_exe: &Path, config: &Config) -> Vec<(&'static str, String)> {
     let mut envs: Vec<(&'static str, String)> = Vec::new();
     if let Some(dir) = node_exe.parent() {
         let path = std::env::var("PATH").unwrap_or_default();
         // PATH 分隔符按平台：Windows 分号，Unix 冒号
         #[cfg(windows)]
-        let merged = format!("{};{}", dir.to_string_lossy(), path);
+        let merged = format!(
+            "{};{};{}",
+            config.package_manager_bin_dir().to_string_lossy(),
+            dir.to_string_lossy(),
+            path
+        );
         #[cfg(not(windows))]
-        let merged = format!("{}:{}", dir.to_string_lossy(), path);
+        let merged = format!(
+            "{}:{}:{}",
+            config.package_manager_bin_dir().to_string_lossy(),
+            dir.to_string_lossy(),
+            path
+        );
         envs.push(("PATH", merged));
     }
     envs.push(("DSH_HOME", config.dsh_home.to_string_lossy().into_owned()));
     // npm 缓存落在应用根目录内（避免写入用户级缓存目录带来的权限问题）。
     let cache = config.root.join("npm-cache");
     envs.push(("npm_config_cache", cache.to_string_lossy().into_owned()));
+    let store = config.root.join("pnpm-store");
+    envs.push((
+        "PNPM_HOME",
+        config
+            .package_manager_bin_dir()
+            .to_string_lossy()
+            .into_owned(),
+    ));
+    envs.push((
+        "pnpm_config_store_dir",
+        store.to_string_lossy().into_owned(),
+    ));
     // 强制 native 模块用预编译二进制：node-pty 等包的 prebuild 检查失败后会
     // 回退 node-gyp 编译，新机器无 Python/VS 工具链时卡死（node_repl 等交互
     // 进程挂起）。设为 false 让它们找不到 prebuild 就立即失败而非尝试编译。
@@ -35,24 +59,18 @@ pub(crate) fn base_envs(node_exe: &Path, config: &Config) -> Vec<(&'static str, 
     envs
 }
 
-/// 从版本字符串判断是否支持 `--no-open`（rc.8 及以上）。
-/// 纯函数便于测试。
+/// 从完整 SemVer 判断是否支持 `--no-open`。该参数从 0.1.0-rc.8 起可用；
+/// 不能只比较 rc 序号，例如 0.1.1-rc.2 实际晚于 0.1.0-rc.8。
 pub(super) fn version_supports_no_open(version: &str) -> bool {
-    if let Some((_, rc_part)) = version.split_once("-rc") {
-        // 形如 "0.1.0-rc.8"：split 得 ".8"，去前导点后取 rc 号数值比较
-        rc_part
-            .trim_start_matches('.')
-            .parse::<u32>()
-            .map(|n| n >= 8)
-            .unwrap_or(false)
-    } else {
-        // 无 rc 后缀的稳定版（如 0.1.0）视为支持
-        !version.is_empty()
-    }
+    let Ok(installed) = semver::Version::parse(version.trim().trim_start_matches('v')) else {
+        return false;
+    };
+    let minimum = semver::Version::parse("0.1.0-rc.8").expect("valid --no-open threshold");
+    installed.cmp_precedence(&minimum).is_ge()
 }
 
-/// 已装 dsh 版本是否支持 `dsh web --no-open`（rc.8 及以上）。
-/// rc.7 及更早不认识该标志会把未知选项当错误导致启动失败，因此必须按
+/// 已装 dsh 版本是否支持 `dsh web --no-open`（0.1.0-rc.8 及以上）。
+/// 更早版本不认识该标志会把未知选项当错误导致启动失败，因此必须按
 /// 已装版本判定；无法解析的版本号保守不加（保持旧行为）。
 fn dsh_supports_no_open(config: &Config) -> bool {
     let pkg = config
@@ -82,7 +100,7 @@ pub(crate) fn start_server(
 ) -> Result<StartedServer, String> {
     let mut args = vec![config.dsh_entry().to_string_lossy().into_owned()];
     args.push("web".into());
-    // rc.8+ 支持 --no-open（桌面壳自己导航，不需要 dsh 自动弹浏览器）
+    // 支持时禁用浏览器弹出；桌面壳会在服务就绪后导航主 WebView。
     if dsh_supports_no_open(config) {
         args.push("--no-open".into());
     }

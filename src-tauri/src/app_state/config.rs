@@ -168,6 +168,18 @@ impl Config {
     pub fn dsh_dir(&self) -> PathBuf {
         self.root.join("dsh")
     }
+    /// DSHBox 自管的包管理器目录。与 dsh 安装目录分离，更新/回滚 dsh 时
+    /// pnpm 仍然可用，也不会依赖用户 PATH 中恰好安装了哪个版本。
+    pub fn package_manager_dir(&self) -> PathBuf {
+        self.root.join("package-manager")
+    }
+    pub fn package_manager_bin_dir(&self) -> PathBuf {
+        self.package_manager_dir().join("node_modules/.bin")
+    }
+    pub fn pnpm_cli(&self) -> PathBuf {
+        self.package_manager_dir()
+            .join("node_modules/pnpm/bin/pnpm.mjs")
+    }
     /// dsh CLI 入口：优先按已安装包的 package.json#bin.dsh 解析，兜底 lib/bin.js。
     pub fn dsh_entry(&self) -> PathBuf {
         let pkg_dir = self.dsh_dir().join("node_modules/@deepseek-ai/dsh");

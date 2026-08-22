@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_state::{AppState, BootPhase};
 use crate::processes;
-use crate::runtime::{self, base_envs};
+use crate::runtime;
 mod app;
 mod check;
 #[path = "dsh.rs"]
@@ -17,7 +17,7 @@ mod powershell;
 pub(crate) mod transaction;
 
 use crate::versions;
-use crate::{dsh, emit_status, navigate, SPLASH_ORIGIN};
+use crate::{dsh, emit_status, navigate_to_splash};
 pub use app::prefetch_app_update;
 use app::update_app_exe;
 #[cfg(test)]
@@ -125,6 +125,35 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
 
 // ---------- 重启服务 ----------
 
+const RESTART_VIEW_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// 从 dsh 页面重启时，先把主 WebView 交给永远可用的内置启动页。导航提交后
+/// 才停止本地服务，避免服务端口短暂离线时露出 WebView2/浏览器原生错误页。
+/// 内置页会从 get_status 读取 Starting 状态，继续显示同一套加载反馈。
+fn enter_restart_view(app: &AppHandle, from_dsh_page: bool) {
+    if !from_dsh_page {
+        return;
+    }
+    navigate_to_splash(app);
+    let deadline = std::time::Instant::now() + RESTART_VIEW_TIMEOUT;
+    loop {
+        let local_page_committed = crate::main_webview(app)
+            .and_then(|webview| webview.url().ok())
+            .is_some_and(|url| {
+                let dev = crate::app_dev_origin(app);
+                crate::is_local_app_url(&url, dev.as_ref())
+            });
+        if local_page_committed {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            crate::logging::log("updater: 重启过渡页 1s 内未完成导航，继续重启服务");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// 重启服务并进入界面（托盘“重启服务”/更新后复用）。
 /// 持有生命周期锁，与 boot_once 互斥，杜绝双服务并发。
 pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
@@ -173,6 +202,7 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     let restarting = crate::locale::text("正在重启服务…", "Restarting the service…");
     state.set_phase(BootPhase::Starting, restarting, "");
     emit_status(app, BootPhase::Starting, restarting, "");
+    enter_restart_view(app, resume_url.is_some());
     let result = (|| -> Result<(), String> {
         // 先停掉残留进程
         dsh::shutdown(app);
@@ -199,7 +229,7 @@ fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
             state.set_phase(BootPhase::Error, msg, "");
             emit_status(app, BootPhase::Error, msg, "");
             // 用户此刻可能在 dsh 界面：导航回启动页让错误与重试按钮可见
-            navigate(app, SPLASH_ORIGIN);
+            navigate_to_splash(app);
         }
     }
     result

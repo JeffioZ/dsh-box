@@ -38,7 +38,7 @@ pub(super) fn update_node(
     );
     update_txn::create_marker(&marker)?;
     dsh::shutdown(app);
-    navigate(app, SPLASH_ORIGIN);
+    navigate_to_splash(app);
     std::thread::sleep(Duration::from_millis(800));
     if old.exists() {
         if let Err(e) = std::fs::rename(&old, &backup) {

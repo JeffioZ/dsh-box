@@ -4,7 +4,7 @@ use super::*;
 
 // ---------- dsh 更新 ----------
 
-/// 更新 dsh：停服务 → 备份 → npm 更新 → 重启（失败回滚）。
+/// 更新 dsh：准备安装器 → 停服务 → 备份 → pnpm 精确安装 → 重启（失败回滚）。
 pub(super) fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), String> {
     // 所有前置条件先检查完，再停止当前可用服务。
     let node_exe = if config.node_exe().exists() {
@@ -13,21 +13,20 @@ pub(super) fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> 
         runtime::find_system_node()
             .ok_or_else(|| crate::locale::text("未找到 Node.js", "Node.js was not found"))?
     };
-    let npm_cli = node_exe
-        .parent()
-        .ok_or_else(|| {
-            crate::locale::text(
-                "Node.js 可执行文件路径无父目录",
-                "The Node.js executable path has no parent directory",
-            )
-        })?
-        .join("node_modules/npm/bin/npm-cli.js");
-    if !npm_cli.exists() {
-        return Err(crate::locale::text("未找到 npm", "npm was not found").into());
-    }
     // 在停止当前可用服务之前锁定本次检查通道的精确目标。不能把 npm tag
     // 留到安装时解析，否则 tag 在检查与安装之间移动会导致结果与实际版本不符。
     let target_version = runtime::npm_latest_dsh_version(runtime::DshChannel::from_config(config))?;
+    // pnpm 也必须在停服/备份前准备成功；否则一个安装器网络错误不应让当前
+    // 可用服务产生任何停机窗口。
+    let mut prepare_reporter = |message: &str, detail: &str| {
+        let text = if detail.is_empty() {
+            message.to_string()
+        } else {
+            format!("{message} {detail}")
+        };
+        emit_progress(app, &text);
+    };
+    let pnpm_cli = runtime::prepare_dsh_installer(app, config, &node_exe, &mut prepare_reporter)?;
 
     let current = config.dsh_dir();
     let backup = config.root.join(update_txn::DSH_BACKUP_DIR);
@@ -58,7 +57,7 @@ pub(super) fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> 
     );
     update_txn::create_marker(&marker)?;
     dsh::shutdown(app);
-    navigate(app, SPLASH_ORIGIN);
+    navigate_to_splash(app);
     std::thread::sleep(Duration::from_millis(800));
     if let Err(e) = std::fs::rename(&current, &backup) {
         update_txn::remove_marker(&marker);
@@ -73,54 +72,24 @@ pub(super) fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> 
         app,
         crate::locale::text("正在更新 dsh 包…", "Updating the dsh package…"),
     );
-    let args = vec![
-        npm_cli.to_string_lossy().into_owned(),
-        "install".into(),
-        "--prefix".into(),
-        config.dsh_dir().to_string_lossy().into_owned(),
-        format!("@deepseek-ai/dsh@{target_version}"),
-        "--dangerously-allow-all-scripts".into(),
-        "--no-audit".into(),
-        "--no-fund".into(),
-    ];
-    let envs = base_envs(&node_exe, config);
-    let install_result = (|| -> Result<(), String> {
-        let (code, _out, err) = processes::run_capture(&node_exe, &args, &envs, Some(&config.root))
-            .map_err(|e| {
-                crate::locale::owned(
-                    format!("运行 npm 失败：{e}"),
-                    format!("Failed to run npm: {e}"),
-                )
-            })?;
-        if code != 0 {
-            let detail = truncate(&err, 600);
-            return Err(crate::locale::owned(
-                format!("更新 dsh 失败（npm 退出码 {code}）：\n{detail}"),
-                format!("Failed to update dsh (npm exit code {code}):\n{detail}"),
-            ));
-        }
-        if !config.dsh_entry().exists() {
-            return Err(crate::locale::text(
-                "更新完成但未找到 dsh 入口文件",
-                "The update completed, but the dsh entry file was not found",
-            )
-            .into());
-        }
-        let installed = runtime::installed_dsh_version(config);
-        if installed.as_deref() != Some(target_version.as_str()) {
-            return Err(crate::locale::owned(
-                format!(
-                    "更新后的 dsh 版本校验失败：实际为 {}，预期为 {target_version}",
-                    installed.as_deref().unwrap_or("未知")
-                ),
-                format!(
-                    "The updated dsh version could not be verified: installed {}, expected {target_version}",
-                    installed.as_deref().unwrap_or("unknown")
-                ),
-            ));
-        }
-        Ok(())
-    })();
+    let install_result = {
+        let mut reporter = |message: &str, detail: &str| {
+            let text = if detail.is_empty() {
+                message.to_string()
+            } else {
+                format!("{message} {detail}")
+            };
+            emit_progress(app, &text);
+        };
+        runtime::install_dsh_version(
+            app,
+            config,
+            &node_exe,
+            &pnpm_cli,
+            &target_version,
+            &mut reporter,
+        )
+    };
     if let Err(e) = install_result {
         if let Err(re) = update_txn::rollback_directory(&current, &backup, &marker) {
             return Err(crate::locale::owned(

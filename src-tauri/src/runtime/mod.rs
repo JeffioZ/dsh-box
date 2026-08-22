@@ -1,18 +1,21 @@
-//! 运行时安装与维护入口：Node、dsh npm 包与服务启动。
+//! 运行时安装与维护入口：Node、自管 pnpm、dsh 包与服务启动。
 
 mod dsh_package;
 mod node;
+mod package_manager;
 mod server;
 
-pub(crate) use dsh_package::ensure_dsh;
 #[cfg(test)]
-use dsh_package::{dir_size_mb, read_log_tail};
+use dsh_package::read_log_tail;
+pub(crate) use dsh_package::{ensure_dsh, install_dsh_version, prepare_dsh_installer};
 #[cfg(test)]
 use node::parse_node_sha256;
 pub(crate) use node::{
-    current_node_version, ensure_node, find_system_node, install_portable_node, npm_version,
-    upgrade_portable_npm,
+    current_node_version, ensure_node, find_system_node, install_portable_node, npm_cli_for_node,
+    npm_version, upgrade_portable_npm,
 };
+#[cfg(test)]
+use package_manager::parse_pnpm_progress;
 #[cfg(test)]
 use server::version_supports_no_open;
 pub(crate) use server::{base_envs, start_server};
@@ -354,8 +357,8 @@ fn parse_dsh_version_chain(text: &str, channel: DshChannel, limit: usize) -> Vec
 
 #[cfg(test)]
 mod checksum_tests {
-    use super::dir_size_mb;
     use super::parse_node_sha256;
+    use super::parse_pnpm_progress;
     use super::read_log_tail;
     use super::version_supports_no_open;
     use super::{parse_dsh_version_chain, parse_latest_lts, DshChannel};
@@ -407,36 +410,28 @@ mod checksum_tests {
     }
 
     #[test]
-    fn no_open_support_by_rc_version() {
-        // rc.8 及以上支持 --no-open
+    fn no_open_support_uses_the_full_semver() {
+        // 引入该参数的边界。
         assert!(version_supports_no_open("0.1.0-rc.8"));
-        assert!(version_supports_no_open("0.2.0-rc.11"));
-        // rc.7 及更早不支持
         assert!(!version_supports_no_open("0.1.0-rc.7"));
-        // 稳定版（无 rc 后缀）支持
+        // 后续补丁版本重新从 rc.1 计数，仍然晚于 0.1.0-rc.8。
+        assert!(version_supports_no_open("0.1.1-rc.2"));
+        assert!(version_supports_no_open("0.2.0-rc.1"));
         assert!(version_supports_no_open("0.1.0"));
-        // 空版本保守不支持；非 rc 的任意非空串按稳定版处理（版本来自
-        // package.json，形如 x.y.z 或 x.y.z-rc.N，不会出现垃圾串）
+        // 无法解析时保守不添加参数。
         assert!(!version_supports_no_open(""));
+        assert!(!version_supports_no_open("unknown"));
     }
 
     #[test]
-    fn dir_size_rounds_up_to_mb_and_recurses() {
-        // 唯一目录名：避免上次失败运行残留文件干扰（进程 id 会复用）
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let tmp =
-            std::env::temp_dir().join(format!("dshbox-dirsize-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(tmp.join("sub")).unwrap();
-        // 5 KB 文件：不足 1MB，应向上取整为 1MB
-        std::fs::write(tmp.join("sub").join("a.bin"), vec![0u8; 5 * 1024]).unwrap();
-        assert_eq!(dir_size_mb(&tmp), 1);
-        // 1MB + 1 字节：应向上取整为 2MB
-        std::fs::write(tmp.join("sub").join("b.bin"), vec![0u8; 1024 * 1024 + 1]).unwrap();
-        assert_eq!(dir_size_mb(&tmp), 2);
-        std::fs::remove_dir_all(&tmp).ok();
+    fn pnpm_progress_parser_uses_the_latest_complete_line() {
+        let log = "Progress: resolved 59, reused 0, downloaded 0, added 0\n\
+                   warning text\n\
+                   Progress: resolved 445, reused 2, downloaded 443, added 419\n";
+        let progress = parse_pnpm_progress(log).unwrap();
+        assert_eq!(progress.resolved, 445);
+        assert_eq!(progress.downloaded, 443);
+        assert_eq!(progress.added, 419);
     }
 
     #[test]

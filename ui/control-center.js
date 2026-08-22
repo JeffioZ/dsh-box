@@ -147,8 +147,8 @@ function renderCheckResult(r) {
         : (r.pwsh.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
       '<span id="u-pwsh"></span></div>';
   }
-  // npm：独立行，可手动升级（npm 11 会卡 dsh 安装，12 为所需目标）；
-  // 与 Node 行分开，见用户反馈“检查更新弹窗里还是没有 npm”。
+  // npm 是 Node 自带但可独立维护的工具，版本与操作入口单列，避免把它
+  // 误解成 Node 版本的一部分。
   if (r.npm) {
     const v = r.npm.installed;
     const hint = r.npm.latest_error ? ' data-tip-extra="' + esc(r.npm.latest_error) + '"' : '';

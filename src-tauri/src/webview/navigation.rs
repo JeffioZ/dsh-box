@@ -25,6 +25,12 @@ pub(crate) fn app_dev_origin(app: &AppHandle) -> Option<url::Url> {
     app.config().build.dev_url.clone()
 }
 
+fn local_app_entry_url(dev_origin: Option<&url::Url>) -> String {
+    dev_origin
+        .map(url::Url::to_string)
+        .unwrap_or_else(|| SPLASH_ORIGIN.to_string())
+}
+
 /// 当前配置对应的 dsh 页面来源；端口必须与应用实际持有的服务一致。
 pub(crate) fn is_dsh_url(url: &url::Url, config: &app_state::Config) -> bool {
     url.scheme() == "http"
@@ -261,7 +267,8 @@ pub fn navigate(app: &AppHandle, url: &str) {
             return;
         }
         logging::log(&format!("navigate: {url}"));
-        if is_dsh_url(&u, &app.state::<AppState>().config()) {
+        let navigating_to_dsh = is_dsh_url(&u, &app.state::<AppState>().config());
+        if navigating_to_dsh {
             // 即使首次注入完全失败，也让心跳监视在超时后触发一次 reload 自愈，
             // 避免 last_heartbeat=None 导致永久不检查。
             app.state::<AppState>().set_heartbeat();
@@ -275,28 +282,54 @@ pub fn navigate(app: &AppHandle, url: &str) {
         if let Some(win) = main_window(app) {
             let _ = win.set_title(APP_TITLE);
         }
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-            // 注入失败自愈：eval 返回错误时（页面加载中、导航瞬间执行被拒）
-            // 补注——eval 成功即注入完成（guard 在 IIFE 首行置位，重复注入
-            // 幂等），最多 3 次尝试（1.5s/3.5s/5.5s）。
-            for attempt in 0..3 {
-                let Some(wv) = main_webview(&handle) else {
-                    return;
-                };
-                if inject_dsh_page(&handle, &wv).is_ok()
-                    && wv
-                        .url()
-                        .ok()
-                        .is_some_and(|url| is_dsh_url(&url, &handle.state::<AppState>().config()))
-                {
-                    return;
+        if navigating_to_dsh {
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                // 注入失败自愈：eval 返回错误时（页面加载中、导航瞬间执行被拒）
+                // 补注——eval 成功即注入完成（guard 在 IIFE 首行置位，重复注入
+                // 幂等），最多 3 次尝试（1.5s/3.5s/5.5s）。
+                for attempt in 0..3 {
+                    let Some(wv) = main_webview(&handle) else {
+                        return;
+                    };
+                    if inject_dsh_page(&handle, &wv).is_ok()
+                        && wv.url().ok().is_some_and(|url| {
+                            is_dsh_url(&url, &handle.state::<AppState>().config())
+                        })
+                    {
+                        return;
+                    }
+                    if attempt < 2 {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
                 }
-                if attempt < 2 {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                }
-            }
-        });
+            });
+        }
+    }
+}
+
+/// 返回内置启动页。开发构建的资源来自 devUrl，正式构建才使用 Tauri 协议。
+pub fn navigate_to_splash(app: &AppHandle) {
+    let dev_origin = app_dev_origin(app);
+    navigate(app, &local_app_entry_url(dev_origin.as_ref()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_app_entry_url;
+
+    #[test]
+    fn local_app_entry_uses_dev_origin_when_configured() {
+        let dev_origin = "http://localhost:4321".parse().unwrap();
+        assert_eq!(
+            local_app_entry_url(Some(&dev_origin)),
+            "http://localhost:4321/"
+        );
+    }
+
+    #[test]
+    fn local_app_entry_uses_tauri_origin_in_production() {
+        assert_eq!(local_app_entry_url(None), crate::SPLASH_ORIGIN);
     }
 }

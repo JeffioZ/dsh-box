@@ -14,6 +14,32 @@ pub(crate) fn node_version(program: &Path) -> Option<(u32, u32, u32)> {
     parse_node_version(&text)
 }
 
+/// 定位指定 Node 对应的 npm CLI。官方 Windows 包把 npm 放在 Node 同级
+/// node_modules；Unix 的发行版、Homebrew 与 nvm 通常放在相邻 lib/share 目录。
+pub(crate) fn npm_cli_for_node(node_exe: &Path) -> Option<PathBuf> {
+    let mut executables = vec![node_exe.to_path_buf()];
+    if let Ok(canonical) = std::fs::canonicalize(node_exe) {
+        if canonical != node_exe {
+            executables.push(canonical);
+        }
+    }
+    for executable in executables {
+        let Some(bin_dir) = executable.parent() else {
+            continue;
+        };
+        for candidate in [
+            bin_dir.join("node_modules/npm/bin/npm-cli.js"),
+            bin_dir.join("../lib/node_modules/npm/bin/npm-cli.js"),
+            bin_dir.join("../share/nodejs/npm/bin/npm-cli.js"),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// 取当前使用 Node 自带 npm 的裸版本号（如 12.0.2）。
 /// 便携优先、系统 Node 兜底（与 current_node_version 同一选择逻辑），
 /// 返回 None 表示拿不到（无 Node / npm-cli 缺失 / 运行失败）。
@@ -24,10 +50,7 @@ pub(crate) fn npm_version(config: &Config) -> Option<String> {
     } else {
         find_system_node()?
     };
-    let npm_cli = node_exe.parent()?.join("node_modules/npm/bin/npm-cli.js");
-    if !npm_cli.exists() {
-        return None;
-    }
+    let npm_cli = npm_cli_for_node(&node_exe)?;
     let package_json = npm_cli.parent()?.parent()?.join("package.json");
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(package_json).ok()?).ok()?;
@@ -763,5 +786,28 @@ fn extract_tar(archive: &Path, dest: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(crate::locale::text("解压 Node.js 失败", "Failed to extract Node.js").into())
+    }
+}
+
+#[cfg(test)]
+mod npm_cli_tests {
+    use super::npm_cli_for_node;
+
+    #[test]
+    fn finds_npm_in_unix_style_sibling_lib_directory() {
+        let root = std::env::temp_dir().join(format!("dsh-box-npm-cli-{}", std::process::id()));
+        let node = root.join("bin/node");
+        let npm_cli = root.join("lib/node_modules/npm/bin/npm-cli.js");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(npm_cli.parent().unwrap()).unwrap();
+        std::fs::write(&node, b"").unwrap();
+        std::fs::write(&npm_cli, b"").unwrap();
+
+        assert_eq!(
+            npm_cli_for_node(&node),
+            Some(root.join("bin/../lib/node_modules/npm/bin/npm-cli.js"))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
