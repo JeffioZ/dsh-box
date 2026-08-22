@@ -68,9 +68,11 @@ if ($Mode -eq "check") {
   & $cargo test --locked --manifest-path $manifest --lib
 } elseif ($Mode -eq "dev") {
   # 开发模式：注入 devUrl 使 tauri 不嵌入 UI 资源（运行时从 ui/ 目录直接读取），
-  # 不递增版本号。之后只改 ui/ 文件，重启开发版 exe 即生效。
+  # 不递增版本号。使用独立 target/dev，避免与正式版互相触发重编译或争抢 exe。
+  # 之后只改 ui/ 文件，重启开发版 exe 即生效。
   $env:TAURI_CONFIG = '{"build":{"devUrl":"http://localhost:4321"}}'
-  & $cargo build --locked --release --manifest-path $manifest
+  $devTarget = Join-Path $PSScriptRoot "..\src-tauri\target\dev"
+  & $cargo build --locked --release --manifest-path $manifest --target-dir $devTarget
 } else {
   # 构建本身不修改版本号；发布前如需升版，请显式运行 bump-version.ps1。
   & $cargo build --locked --release --manifest-path $manifest

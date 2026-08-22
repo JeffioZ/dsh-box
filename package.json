@@ -4,6 +4,7 @@
   "private": true,
   "description": "DeepSeek Harness (dsh) desktop shell with tray and managed runtime updates",
   "scripts": {
+    "check": "node scripts/check-project.mjs",
     "icons": "node scripts/gen-icons.mjs",
     "build": "cargo build --locked --release --manifest-path src-tauri/Cargo.toml",
     "dist": "cargo build --locked --release --manifest-path src-tauri/Cargo.toml && node scripts/copy-exe.mjs"

@@ -23,7 +23,7 @@ updates:
       - "dependencies"
     open-pull-requests-limit: 10
 
-  # npm 依赖自动升级（当前仅 devDependencies @resvg/resvg-js，用于图标生成）。
+  # npm 开发依赖自动升级（图标生成与 macOS 的 Tauri 打包 CLI）。
   - package-ecosystem: "npm"
     directory: "/"
     schedule:

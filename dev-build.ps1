@@ -13,5 +13,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 $distDev = Join-Path $root "dist-dev"
 New-Item -ItemType Directory -Path $distDev -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $root "src-tauri\target\release\DSHBox.exe") -Destination (Join-Path $distDev "DSHBox-dev.exe") -Force
+Copy-Item -LiteralPath (Join-Path $root "src-tauri\target\dev\release\DSHBox.exe") -Destination (Join-Path $distDev "DSHBox-dev.exe") -Force
 Write-Host "开发版已就绪：dist-dev\DSHBox-dev.exe（UI 资源运行时从 ui\ 目录读取）" -ForegroundColor Green

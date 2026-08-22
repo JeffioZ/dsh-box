@@ -13,6 +13,16 @@ src-tauri/gen/
 # 日志
 *.log
 
+# 本地环境、测试与临时文件
+.env
+.env.*
+!.env.example
+coverage/
+*.tmp
+*.bak
+*.orig
+*.rej
+
 # 系统/编辑器
 .DS_Store
 Thumbs.db
