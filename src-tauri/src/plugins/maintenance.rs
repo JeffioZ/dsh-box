@@ -149,6 +149,86 @@ pub(super) fn market_installed_version(
     })
 }
 
+/// 内置插件在 web profile 中的实际安装状态。不能只相信 `dsh plugin`
+/// 的退出码或历史状态：DSH_HOME 切换、profile 重建、半截 pnpm 写入都可能
+/// 让状态文件与真实依赖脱节。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MarketInstallState {
+    MissingDependency,
+    MissingPackage,
+    MissingBundleDeclaration,
+    MissingBundleEntry,
+    Ready,
+}
+
+impl MarketInstallState {
+    fn description(self) -> &'static str {
+        match self {
+            Self::MissingDependency => "profile 依赖未写入",
+            Self::MissingPackage => "插件包未落盘",
+            Self::MissingBundleDeclaration => "插件包未声明 dsh bundle",
+            Self::MissingBundleEntry => "插件未加入 profile bundle 列表",
+            Self::Ready => "安装完整",
+        }
+    }
+}
+
+pub(super) fn market_install_state(
+    config: &crate::app_state::Config,
+    pkg: &str,
+) -> MarketInstallState {
+    let profile_dir = config.dsh_home().join("profiles/web");
+    let Ok(text) = std::fs::read_to_string(profile_dir.join("package.json")) else {
+        return MarketInstallState::MissingDependency;
+    };
+    let Ok(profile): Result<serde_json::Value, _> = serde_json::from_str(&text) else {
+        return MarketInstallState::MissingDependency;
+    };
+    if profile
+        .get("dependencies")
+        .and_then(|value| value.get(pkg))
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        return MarketInstallState::MissingDependency;
+    }
+
+    let package_file = profile_dir
+        .join("node_modules")
+        .join(pkg)
+        .join("package.json");
+    let Ok(text) = std::fs::read_to_string(package_file) else {
+        return MarketInstallState::MissingPackage;
+    };
+    let Ok(package): Result<serde_json::Value, _> = serde_json::from_str(&text) else {
+        return MarketInstallState::MissingPackage;
+    };
+    if package
+        .get("dsh")
+        .and_then(|value| value.get("bundle"))
+        .and_then(|value| value.get("patch"))
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        return MarketInstallState::MissingBundleDeclaration;
+    }
+
+    let in_bundle_list = profile
+        .get("dsh")
+        .and_then(|value| value.get("profile"))
+        .and_then(|value| value.get("bundles"))
+        .and_then(|value| value.as_array())
+        .is_some_and(|bundles| bundles.iter().any(|value| value.as_str() == Some(pkg)));
+    if !in_bundle_list {
+        return MarketInstallState::MissingBundleEntry;
+    }
+    MarketInstallState::Ready
+}
+
+pub(super) fn should_bootstrap_market_pkg(state: MarketInstallState, user_removed: bool) -> bool {
+    state != MarketInstallState::Ready && !user_removed
+}
+
 /// npm registry 上指定包的最新版本及其发布时间（epoch 秒）。
 /// 发布时间用于判断 pnpm supply-chain 冷却期（minimumReleaseAge，实测
 /// 24h）：冷却期内 `pnpm add` 必然失败或降级安装旧版，提前跳过可避免
@@ -232,22 +312,6 @@ pub(super) fn market_mark_checked(config: &crate::app_state::Config) {
         &config.root,
         "market_last_check",
         serde_json::json!(market_unix_now()),
-    );
-}
-
-/// 某内置包是否曾成功引导安装（按包粒度）。曾装过的包被用户卸载后
-/// 不再自动重装（尊重卸载意图，与 README 承诺一致）。
-pub(super) fn market_pkg_bootstrapped(config: &crate::app_state::Config, pkg: &str) -> bool {
-    crate::app_state::load_state_value(&config.root, &format!("market_bootstrapped_{pkg}"))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
-}
-
-pub(super) fn market_mark_pkg_bootstrapped(config: &crate::app_state::Config, pkg: &str) {
-    let _ = crate::app_state::save_state_value(
-        &config.root,
-        &format!("market_bootstrapped_{pkg}"),
-        serde_json::json!(true),
     );
 }
 
@@ -367,8 +431,8 @@ pub fn start_market_bootstrap(app: AppHandle) {
         while builtin_plugins_consent(&config).is_none() {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        // 未安装的包逐个安装（按包记录引导完成：曾装过、被用户主动卸载的
-        // 包不再自动重装）；上次引导失败后的退避期内直接跳过：上游
+        // 未安装或不完整的包逐个安装；明确由 DSHBox 卸载过的包不再自动
+        // 重装。上次引导失败后的退避期内直接跳过：上游
         // supply-chain 策略拦截是持续性的，短期反复重试必然失败，只会刷日志。
         if bootstrap_market_pkgs(&app, &config) {
             crate::logging::log("market: 内置插件已变更，将在会话空闲时应用");
@@ -413,20 +477,31 @@ pub(super) fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::
         return removed_any;
     }
     for pkg in market_pkg_ids() {
-        if market_installed_version(config, pkg).is_some() {
-            // 已装（含用户手动安装）即视为该包引导完成
-            market_mark_pkg_bootstrapped(config, pkg);
+        let state = market_install_state(config, pkg);
+        let user_removed = market_user_removed(config, pkg);
+        if !should_bootstrap_market_pkg(state, user_removed) {
             continue;
         }
-        if market_pkg_bootstrapped(config, pkg) {
-            continue; // 曾装过、用户主动卸载 → 尊重卸载意图，不重装
+        if state != MarketInstallState::MissingDependency {
+            crate::logging::log(&format!(
+                "market: 检测到 {pkg} 安装不完整（{}），尝试修复",
+                state.description()
+            ));
         }
         crate::logging::log(&format!("market: 自动安装内置包 {pkg}"));
         match run_dsh_plugin_auto(app, &["add", &market_spec(pkg)]) {
             Ok(_) => {
-                crate::logging::log(&format!("market: {pkg} 安装完成"));
-                market_mark_pkg_bootstrapped(config, pkg);
-                installed_any = true;
+                let actual = market_install_state(config, pkg);
+                if actual == MarketInstallState::Ready {
+                    crate::logging::log(&format!("market: {pkg} 安装完成并通过校验"));
+                    installed_any = true;
+                } else {
+                    failed = true;
+                    crate::logging::log(&format!(
+                        "market: {pkg} 命令已结束但安装校验失败（{}），退避后重试",
+                        actual.description()
+                    ));
+                }
             }
             Err(e) => {
                 failed = true;

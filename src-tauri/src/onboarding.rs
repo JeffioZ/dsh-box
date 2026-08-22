@@ -33,19 +33,37 @@ pub struct OnboardingState {
 
 #[derive(Deserialize)]
 pub struct OnboardingPayload {
-    /// 跳过：只落 onboarded 标记，不写任何配置。
-    #[serde(default)]
-    pub skip: bool,
     /// 新的 API Key（空/缺省表示不改动凭据）。
     pub api_key: Option<String>,
     /// 语言（zh-CN / en）。
-    pub language: Option<String>,
+    pub language: String,
     /// 主题（light / dark / system）。
-    pub theme: Option<String>,
+    pub theme: String,
     /// 开机自启动。
-    pub autostart: Option<bool>,
-    /// 用户是否同意自动安装并维护内置插件；缺失按未同意处理。
-    pub install_builtin_plugins: Option<bool>,
+    pub autostart: bool,
+    /// 用户是否同意自动安装并维护内置插件。
+    pub install_builtin_plugins: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadyAction {
+    AwaitPluginRestart,
+    RestartForCredentials,
+    EnterWeb,
+}
+
+fn ready_action(
+    credentials_changed: bool,
+    managed_service: bool,
+    plugin_restart_pending: bool,
+) -> ReadyAction {
+    if plugin_restart_pending {
+        ReadyAction::AwaitPluginRestart
+    } else if credentials_changed && managed_service {
+        ReadyAction::RestartForCredentials
+    } else {
+        ReadyAction::EnterWeb
+    }
 }
 
 /// 读取首次配置状态（启动页拉取用）。
@@ -68,18 +86,16 @@ pub fn state(app: &AppHandle) -> OnboardingState {
     }
 }
 
-/// 保存首次配置（“开始使用”或“跳过”）。
+/// 保存首次配置并开始使用。
 pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
-    let config = app.state::<AppState>().config();
-    if payload.skip {
-        app_state::save_state_value(
-            &config.root,
-            "builtin_plugins_enabled",
-            serde_json::json!(false),
-        )?;
-        finish_onboarding(&config)?;
-        return Ok(());
+    if !can_finish_onboarding(app.state::<AppState>().phase()) {
+        return Err(crate::locale::text(
+            "运行环境尚未准备好，请等待安装和启动完成。",
+            "The runtime is not ready yet. Wait for installation and startup to finish.",
+        )
+        .into());
     }
+    let config = app.state::<AppState>().config();
 
     let api_key = payload
         .api_key
@@ -93,18 +109,10 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         )
         .into());
     }
-    if payload
-        .language
-        .as_deref()
-        .is_some_and(|language| !matches!(language, "zh-CN" | "en"))
-    {
+    if !matches!(payload.language.as_str(), "zh-CN" | "en") {
         return Err(crate::locale::text("不支持的界面语言。", "Unsupported UI language.").into());
     }
-    if payload
-        .theme
-        .as_deref()
-        .is_some_and(|theme| !matches!(theme, "light" | "dark" | "system"))
-    {
+    if !matches!(payload.theme.as_str(), "light" | "dark" | "system") {
         return Err(crate::locale::text("不支持的主题。", "Unsupported theme.").into());
     }
 
@@ -114,68 +122,80 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         credentials_changed = true;
     }
 
-    if let Some(language) = payload.language.as_deref() {
-        app.state::<AppState>().set_ui_language(language)?;
-        // 同步 dsh 界面语言（dsh 语言 id 为 zh/en；文件监视器热发布）
-        let dsh_locale = if language == "zh-CN" { "zh" } else { "en" };
-        if let Err(e) = config.save_dsh_locale(dsh_locale) {
-            crate::logging::log(&format!("onboarding: 同步 dsh 语言失败：{e}"));
-        }
-        crate::tray::apply_language(app, language);
+    app.state::<AppState>().set_ui_language(&payload.language)?;
+    // 同步 dsh 界面语言（dsh 语言 id 为 zh/en；文件监视器热发布）
+    let dsh_locale = if payload.language == "zh-CN" {
+        "zh"
+    } else {
+        "en"
+    };
+    if let Err(e) = config.save_dsh_locale(dsh_locale) {
+        crate::logging::log(&format!("onboarding: 同步 dsh 语言失败：{e}"));
     }
+    crate::tray::apply_language(app, &payload.language);
 
-    if let Some(theme) = payload.theme.as_deref() {
-        config.save_dsh_theme(theme)?;
-        crate::tray::apply_theme(app, theme);
-    }
+    config.save_dsh_theme(&payload.theme)?;
+    crate::tray::apply_theme(app, &payload.theme);
 
-    if let Some(enabled) = payload.autostart {
-        crate::autostart::set_enabled(enabled)?;
-    }
+    crate::autostart::set_enabled(payload.autostart)?;
 
     app_state::save_state_value(
         &config.root,
         "builtin_plugins_enabled",
-        serde_json::json!(payload.install_builtin_plugins.unwrap_or(false)),
+        serde_json::json!(payload.install_builtin_plugins),
     )?;
 
-    // 所有用户选择均已验证并成功落盘后才提交完成标记。前面的写入都是幂等的；
-    // 任一步失败时保留引导，避免下次启动跳过尚未完成的配置。
-    finish_onboarding(&config)?;
-
-    // API Key 变化且服务已就绪：凭据在 dsh 启动时读取，重启服务使其生效
-    // （restart_service 完成后自带 navigate，无需在此补跳转）
-    if credentials_changed && app.state::<AppState>().phase() == BootPhase::Ready {
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            crate::logging::log("onboarding: API Key 已保存，重启服务生效");
-            let _ = crate::updater::restart_service(&handle);
-        });
-        return Ok(());
+    // 所有用户选择均已验证并成功落盘后才准备交接。完成原子标记必须最后
+    // 发布：boot 正在等待该标记，若先发布再设置 Starting，会有机会先进入
+    // dsh、随后又立刻重启。
+    persist_onboarding_completion(&config)?;
+    let managed_service =
+        app.state::<AppState>().service_ownership() == app_state::ServiceOwnership::Managed;
+    let plugin_restart_pending = managed_service && crate::plugins::prepare_deferred_restart(app);
+    let action = ready_action(credentials_changed, managed_service, plugin_restart_pending);
+    if action == ReadyAction::RestartForCredentials {
+        let message = crate::locale::text("正在应用设置…", "Applying settings…");
+        crate::emit_status(app, BootPhase::Starting, message, "");
     }
-    // 服务已就绪但 boot 因首次配置停留（未跳转）：此处补一次跳转。
-    // 尚未就绪则留给 boot_once 正常流程（onboarded 标记已落，不再停留）。
-    if app.state::<AppState>().phase() == BootPhase::Ready {
-        let config = app.state::<AppState>().config();
-        let already_on_dsh = crate::main_webview(app)
-            .and_then(|w| w.url().ok())
-            .is_some_and(|url| crate::is_dsh_url(&url, &config));
-        if !already_on_dsh {
-            crate::navigate(app, &config.web_url());
+    app_state::mark_onboarding_done();
+
+    // 插件重启同样会重新读取凭据；两者合并时不能连续重启两次。外部服务
+    // 不由 DSHBox 重启，本地凭据留到以后切换回本地服务时生效。
+    match action {
+        ReadyAction::AwaitPluginRestart => {
+            crate::logging::log("onboarding: 等待预置插件统一重启后进入 dsh");
+        }
+        ReadyAction::RestartForCredentials => {
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                crate::logging::log("onboarding: API Key 已保存，重启服务生效");
+                let _ = crate::updater::restart_service(&handle);
+            });
+        }
+        ReadyAction::EnterWeb => {
+            let config = app.state::<AppState>().config();
+            let already_on_dsh = crate::main_webview(app)
+                .and_then(|w| w.url().ok())
+                .is_some_and(|url| crate::is_dsh_url(&url, &config));
+            if !already_on_dsh {
+                crate::navigate(app, &config.web_url());
+            }
         }
     }
     Ok(())
 }
 
-fn finish_onboarding(config: &app_state::Config) -> Result<(), String> {
+fn can_finish_onboarding(phase: BootPhase) -> bool {
+    phase == BootPhase::Ready
+}
+
+fn persist_onboarding_completion(config: &app_state::Config) -> Result<(), String> {
     app_state::save_state_value(
         &config.root,
         "local_onboarding_deferred",
         serde_json::Value::Bool(false),
     )?;
-    app_state::save_state_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
-    app_state::mark_onboarding_done();
-    Ok(())
+    app_state::save_state_value(&config.root, "onboarded", serde_json::Value::Bool(true))
 }
 
 /// 与启动状态机共用同一首次引导判定。
@@ -192,8 +212,27 @@ fn save_credentials_api_key(config: &app_state::Config, key: &str) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_onboarding, needs_onboarding, save_credentials_api_key, DEEPSEEK_API_KEY_NAME,
+        can_finish_onboarding, needs_onboarding, persist_onboarding_completion, ready_action,
+        save_credentials_api_key, ReadyAction, DEEPSEEK_API_KEY_NAME,
     };
+
+    #[test]
+    fn plugin_restart_absorbs_the_onboarding_credentials_restart() {
+        assert_eq!(
+            ready_action(true, true, true),
+            ReadyAction::AwaitPluginRestart
+        );
+        assert_eq!(
+            ready_action(false, true, true),
+            ReadyAction::AwaitPluginRestart
+        );
+        assert_eq!(
+            ready_action(true, true, false),
+            ReadyAction::RestartForCredentials
+        );
+        assert_eq!(ready_action(true, false, false), ReadyAction::EnterWeb);
+        assert_eq!(ready_action(false, true, false), ReadyAction::EnterWeb);
+    }
     use crate::app_state::Config;
     use std::path::PathBuf;
 
@@ -219,6 +258,23 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_can_finish_only_after_the_service_is_ready() {
+        assert!(can_finish_onboarding(crate::app_state::BootPhase::Ready));
+        for phase in [
+            crate::app_state::BootPhase::Starting,
+            crate::app_state::BootPhase::SwitchingService,
+            crate::app_state::BootPhase::ServiceChoice,
+            crate::app_state::BootPhase::InstallingNode,
+            crate::app_state::BootPhase::InstallingDsh,
+            crate::app_state::BootPhase::StartingServer,
+            crate::app_state::BootPhase::Cancelled,
+            crate::app_state::BootPhase::Error,
+        ] {
+            assert!(!can_finish_onboarding(phase));
+        }
+    }
+
+    #[test]
     fn completing_local_onboarding_clears_external_deferral() {
         let dir = std::env::temp_dir().join(format!("dshd-onb-deferred-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -231,7 +287,7 @@ mod tests {
         )
         .unwrap();
 
-        finish_onboarding(&cfg).unwrap();
+        persist_onboarding_completion(&cfg).unwrap();
 
         assert_eq!(
             crate::app_state::load_state_value(&dir, "local_onboarding_deferred")

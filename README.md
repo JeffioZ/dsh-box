@@ -56,12 +56,12 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 - macOS：把应用拖入 Applications。若 Gatekeeper 拦截，按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
 - Linux：解压后运行 `DSHBox`；请先安装发行版要求的 WebKitGTK 4.1 依赖。
 
-首次启动会准备运行时，然后显示可跳过的配置页：
+首次启动会准备运行时，然后显示首次配置页（DeepSeek API Key 可留空）：
 
 1. API Key 写入 dsh 的 `$DSH_HOME/.credentials.yaml`，不会再复制到 DSHBox 的 `config.json`。
 2. 语言与主题写入 dsh 的 `settings.yaml`，与官方 CLI/Web 界面共享。
 3. 开机自启动使用各平台系统机制。
-4. “安装推荐插件”默认勾选，但可取消；直接跳过首次配置视为不同意自动安装。
+4. “安装推荐插件”默认勾选，但可取消；未勾选时不会自动安装。
 
 之后可在“设置 → 服务管理 → DeepSeek API Key”中替换或清除密钥；若环境变量已提供密钥，该区域只读并显示由外部管理。
 
@@ -79,7 +79,8 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 - `config.json`：用户可理解的外壳设置。
 - `state.json`：窗口位置、首次引导和后台维护标记；不建议手工编辑。
-- `node/`、`dsh/`、`npm-cache/`：DSHBox 管理的运行时。
+- `node/`、`dsh/`、`package-manager/`：DSHBox 管理的 Node、dsh 与固定版本 pnpm。
+- `npm-cache/`、`pnpm-store/`：安装与插件维护共用的本地包缓存。
 - `logs/dshbox.log`：UTC 日志，超过 2 MiB 轮转为 `.old`。
 - `$DSH_HOME`：默认 `~/.dsh`，由官方 dsh 与 DSHBox 共享，不位于上述数据根目录。
 

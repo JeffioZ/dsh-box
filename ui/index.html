@@ -86,27 +86,28 @@
               <span class="ob-sec-label" id="ob-runtime-label" data-i18n="runtimeEnvironment">运行环境</span>
               <span id="ob-runtime-state" class="ob-runtime-state" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
-            <button type="button" id="ob-runtime-toggle" class="ob-runtime-toggle hidden" aria-expanded="false" aria-controls="ob-runtime-actions" data-i18n-aria-label="changeDownloadSource">
-              <span data-i18n="change">更换</span>
-              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
-            </button>
             <span id="ob-runtime-detail" class="ob-runtime-detail"></span>
-            <span id="ob-runtime-source" class="ob-runtime-source"></span>
           </div>
           <div id="ob-runtime-progress" class="bar ob-runtime-progress" role="progressbar" data-i18n-aria-label="startProgress" aria-valuemin="0" aria-valuemax="100"><div id="ob-runtime-progress-fill" class="bar-fill"></div></div>
           <div id="ob-runtime-actions" class="ob-runtime-actions hidden">
-            <div class="install-source" role="group" data-i18n-aria-label="installSource">
-              <button type="button" class="btn small source-choice" data-source="auto" aria-pressed="true" data-i18n="installSourceAuto">自动</button>
-              <button type="button" class="btn small source-choice" data-source="official" aria-pressed="false" data-i18n="installSourceOfficial">官方</button>
-              <button type="button" class="btn small source-choice" data-source="mirror" aria-pressed="false" data-i18n="installSourceMirror">镜像</button>
+            <span class="ob-runtime-source-label" id="ob-source-label" data-i18n="installSource">下载源</span>
+            <div class="dshd-select ob-source-select" id="ob-source">
+              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="ob-source-list" aria-labelledby="ob-source-label ob-source-value">
+                <span class="dshd-select-value" id="ob-source-value" data-i18n="installSourceAutoShort">自动</span>
+                <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+              </button>
+              <ul class="dshd-select-list" id="ob-source-list" role="listbox" data-i18n-aria-label="installSource" hidden>
+                <li role="option" data-value="auto" data-trigger-i18n="installSourceAutoShort" aria-selected="true" data-i18n="installSourceAuto">自动（推荐）</li>
+                <li role="option" data-value="official" aria-selected="false" data-i18n="installSourceOfficial">官方源</li>
+                <li role="option" data-value="mirror" aria-selected="false" data-i18n="installSourceMirror">镜像源</li>
+              </ul>
             </div>
             <button type="button" class="btn small install-cancel-control hidden" data-install-cancel data-i18n="cancelInstall">取消安装</button>
             <button type="button" class="btn small primary install-reinstall-control hidden" data-install-reinstall data-i18n="reinstall">重新安装</button>
           </div>
         </section>
         <div class="ob-actions">
-          <button type="button" id="ob-start" class="btn primary ob-primary" data-i18n="startUsing">开始使用</button>
-          <button type="button" id="ob-skip" class="ob-skip-btn" data-i18n="skip">跳过</button>
+          <button type="button" id="ob-start" class="btn primary ob-primary" data-i18n="startUsing" disabled>开始使用</button>
         </div>
         <div id="ob-error" class="ob-error hidden" role="alert" aria-live="polite"></div>
       </div>

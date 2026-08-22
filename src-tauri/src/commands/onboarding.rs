@@ -14,7 +14,7 @@ pub fn get_onboarding_state(
     Ok(crate::onboarding::state(&app))
 }
 
-/// 保存首次配置（“开始使用”或“跳过”）。
+/// 保存首次配置并开始使用。
 #[tauri::command]
 pub fn save_onboarding(
     app: AppHandle,
@@ -26,7 +26,7 @@ pub fn save_onboarding(
 }
 
 /// 启动页回报首次配置面板已显示：boot 等待据此切换为无限等待
-/// （有跳过按钮无需兜底；未显示时保留 60 秒防卡死兜底）。
+/// （面板显示后等待用户明确完成；未显示时保留 60 秒防卡死兜底）。
 #[tauri::command]
 pub fn onboarding_shown(_app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;

@@ -60,6 +60,32 @@ pub fn plugin_apply_status() -> PluginApplyStatus {
     apply_status()
 }
 
+/// 首次引导仍停留在内置页时，若后台预置插件已经待应用，就让启动流程
+/// 把页面交给统一重启协调器；避免先进入 dsh 再立即断开。返回 false 时
+/// 调用方按普通 Ready 流程进入 dsh。
+pub(crate) fn prepare_deferred_restart(app: &AppHandle) -> bool {
+    if app.state::<AppState>().service_ownership() != crate::app_state::ServiceOwnership::Managed {
+        return false;
+    }
+    let pending = {
+        let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        state.pending && state.deferred
+    };
+    if !pending {
+        return false;
+    }
+    let message = crate::locale::text("正在应用插件…", "Applying plugins…");
+    app.state::<AppState>()
+        .set_phase(crate::app_state::BootPhase::Starting, message, "");
+    crate::emit_status(app, crate::app_state::BootPhase::Starting, message, "");
+    true
+}
+
+pub(crate) fn deferred_restart_pending() -> bool {
+    let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.pending && state.deferred
+}
+
 fn mark_plugin_changes(app: &AppHandle, apply_when_idle: bool) {
     {
         let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -637,6 +663,89 @@ mod tests {
         assert_eq!(market_spec("dshmarket"), "dshmarket");
         // 未收录的包 spec 回退为 id 本身
         assert_eq!(market_spec("unknown"), "unknown");
+    }
+
+    #[test]
+    fn preset_install_state_requires_dependency_package_and_bundle() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-market-state-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home().join("profiles/web");
+        let package_dir = profile.join("node_modules/dshmarket");
+        std::fs::create_dir_all(&package_dir).unwrap();
+
+        assert_eq!(
+            market_install_state(&config, "dshmarket"),
+            MarketInstallState::MissingDependency
+        );
+
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dshmarket":"^1.0.0"},"dsh":{"profile":{"bundles":[]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            market_install_state(&config, "dshmarket"),
+            MarketInstallState::MissingPackage
+        );
+
+        std::fs::write(package_dir.join("package.json"), r#"{"name":"dshmarket"}"#).unwrap();
+        assert_eq!(
+            market_install_state(&config, "dshmarket"),
+            MarketInstallState::MissingBundleDeclaration
+        );
+
+        std::fs::write(
+            package_dir.join("package.json"),
+            r#"{"name":"dshmarket","dsh":{"bundle":{"patch":"cordis.patch.yml"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            market_install_state(&config, "dshmarket"),
+            MarketInstallState::MissingBundleEntry
+        );
+
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dshmarket":"^1.0.0"},"dsh":{"profile":{"bundles":["dshmarket"]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            market_install_state(&config, "dshmarket"),
+            MarketInstallState::Ready
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preset_repair_uses_explicit_user_removal_only() {
+        assert!(should_bootstrap_market_pkg(
+            MarketInstallState::MissingDependency,
+            false
+        ));
+        assert!(should_bootstrap_market_pkg(
+            MarketInstallState::MissingBundleEntry,
+            false
+        ));
+        assert!(!should_bootstrap_market_pkg(
+            MarketInstallState::MissingDependency,
+            true
+        ));
+        assert!(!should_bootstrap_market_pkg(
+            MarketInstallState::Ready,
+            false
+        ));
     }
 
     #[test]

@@ -270,13 +270,24 @@ if (read('ui/control-center.html').includes('&#xE8BB;')) {
   fail('ui/control-center.html: 控制中心关闭按钮必须使用跨平台 SVG');
 }
 const startupJs = read('ui/startup.js');
+const runtimeRenderer = startupJs.indexOf('function renderRuntimePresentation(');
+const onboardingRenderer = startupJs.indexOf(
+  'renderRuntimePresentation(payload, {', startupJs.indexOf('function renderOnboardingRuntime('),
+);
+const startupRenderer = startupJs.indexOf(
+  'renderRuntimePresentation(payload, {', startupJs.indexOf('function setStatus('),
+);
+if (runtimeRenderer < 0 || onboardingRenderer < runtimeRenderer || startupRenderer < runtimeRenderer) {
+  fail('ui/startup.js: 普通启动与首次配置必须复用同一套运行状态渲染器');
+}
 for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape']) {
   if (!startupJs.includes(`event.key === '${key}'`)) fail(`ui/startup.js: 自绘下拉缺少 ${key} 键盘交互`);
 }
 const startupHtml = read('ui/index.html');
 for (const contract of [
   'id="ob-runtime" class="ob-runtime hidden"',
-  'aria-controls="ob-runtime-actions"',
+  'id="ob-source"',
+  'aria-controls="ob-source-list"',
   'id="ob-runtime-progress"',
   'data-install-cancel',
   'data-install-reinstall',
@@ -285,12 +296,18 @@ for (const contract of [
 }
 for (const contract of [
   'renderOnboardingRuntime',
-  'setOnboardingSourceExpanded',
+  "setupSelect('ob-source'",
+  'changeInstallSource',
   'onboardingPausedByError',
   "document.querySelectorAll('[data-install-cancel]')",
   "document.querySelectorAll('[data-install-reinstall]')",
 ]) {
   if (!startupJs.includes(contract)) fail(`ui/startup.js: 首次配置下载源流程缺少契约 ${contract}`);
+}
+for (const stale of ['ob-runtime-toggle', 'onboardingSourceExpanded']) {
+  if (startupHtml.includes(stale) || startupJs.includes(stale)) {
+    fail(`首次配置下载源不应恢复会撑高布局的展开控件：${stale}`);
+  }
 }
 if (!startupJs.includes("generation: installGeneration")
     || !read('src-tauri/src/dsh.rs').includes('BootOutcome::RestartWithSource')
@@ -312,6 +329,17 @@ if (!startupJs.includes("invoke('choose_service'")
     || !dshLifecycle.includes('config.port = 0;')
     || dshLifecycle.includes('PORT_SCAN_WINDOW')) {
   fail('服务归属必须经过显式选择与官方 RPC 校验，端口回退必须交给系统分配');
+}
+const updater = read('src-tauri/src/updater/mod.rs');
+const restartNavigation = read('src-tauri/src/webview/navigation.rs');
+const restartService = updater.indexOf('fn restart_service_locked(');
+const restartStatus = updater.indexOf('emit_status(app, BootPhase::Starting', restartService);
+const enterRestartView = updater.indexOf('enter_restart_view(app, resume_url.is_some())', restartStatus);
+const stopRestartedService = updater.indexOf('dsh::shutdown(app)', enterRestartView);
+if (restartService < 0 || restartStatus < restartService || enterRestartView < restartStatus
+    || stopRestartedService < enterRestartView
+    || !restartNavigation.includes('navigate(app, &local_app_entry_url(dev_origin.as_ref()))')) {
+  fail('重启服务必须先进入与普通启动相同的内置加载页，再停止托管服务');
 }
 
 const statusbar = read('ui/statusbar.js');

@@ -4,7 +4,7 @@
 
 const $ = (id) => document.getElementById(id);
 
-/// onboarding 面板是否可见（未保存/未跳过）：期间 boot 后台推进，
+/// onboarding 面板是否可见（尚未保存）：期间 boot 后台推进，
 /// 只把必要进度投影到面板内，不让独立状态区/更新区/整体淡出打断配置。
 const onboardingActive = () => {
   const box = $('ob-box');
@@ -40,7 +40,6 @@ let sourceSwitchPending = false;
 let installGeneration = 0;
 let installCanCancel = false;
 let readyTransitionSequence = 0;
-let onboardingSourceExpanded = false;
 let serviceChoiceVisible = false;
 
 function notifyReadyTransition() {
@@ -84,15 +83,6 @@ function statusDetail(payload) {
     : (payload.detail || '');
 }
 
-function sourceText(source) {
-  const key = {
-    auto: 'installSourceAuto',
-    official: 'installSourceOfficial',
-    mirror: 'installSourceMirror',
-  }[source];
-  return key ? dshdT(key) : source;
-}
-
 function renderProgress(payload, progressBar, fill) {
   if (!progressBar || !fill) return;
   fill.classList.toggle('done', payload.phase === 'ready');
@@ -130,20 +120,6 @@ function renderRuntimePresentation(payload, view) {
   return { state, detail };
 }
 
-function setOnboardingSourceExpanded(expanded) {
-  onboardingSourceExpanded = expanded;
-  const actions = $('ob-runtime-actions');
-  const toggle = $('ob-runtime-toggle');
-  if (!actions || !toggle) return;
-  actions.classList.toggle('hidden', !expanded);
-  $('ob-runtime-source').classList.toggle('hidden', expanded);
-  toggle.setAttribute('aria-expanded', String(expanded));
-  const key = expanded ? 'collapseDownloadSource' : 'changeDownloadSource';
-  toggle.setAttribute('aria-label', dshdT(key));
-  const label = toggle.querySelector('span');
-  if (label) label.textContent = dshdT(expanded ? 'collapse' : 'change');
-}
-
 function renderOnboardingRuntime(payload) {
   const box = $('ob-runtime');
   if (!box || !onboardingActive()) return;
@@ -155,14 +131,15 @@ function renderOnboardingRuntime(payload) {
     fill: $('ob-runtime-progress-fill'),
     hideEmptyDetail: true,
   });
-  $('ob-runtime-source').textContent = sourceText(installSource);
   const canChange = installCanCancel || payload.phase === 'cancelled';
-  const toggle = $('ob-runtime-toggle');
-  toggle.classList.toggle('hidden', !canChange);
-  toggle.disabled = sourceSwitchPending || installCancelRequested;
-  if (payload.phase === 'cancelled') setOnboardingSourceExpanded(true);
-  else if (!canChange) setOnboardingSourceExpanded(false);
-  else setOnboardingSourceExpanded(onboardingSourceExpanded);
+  // 从准备安装到启动服务始终保留这一行，切源重启时只禁用控件，不反复
+  // 收起/展开卡片。Ready 后来源不再影响本轮启动，才移除该行。
+  const showSource = !['ready', 'service-choice'].includes(payload.phase);
+  $('ob-runtime-actions').classList.toggle('hidden', !showSource);
+  if (obSourceSel) {
+    obSourceSel.set(installSource);
+    obSourceSel.setDisabled(!canChange || sourceSwitchPending || installCancelRequested);
+  }
 }
 
 function setStatus(phaseOrPayload, message, detail) {
@@ -350,6 +327,7 @@ function renderStatus(payload) {
   setStatus(presentation);
   renderVersions(payload);
   renderOnboardingRuntime(presentation);
+  syncOnboardingCompletionAction();
   $('btn-use-local').classList.toggle('hidden', payload.service_mode !== 'external-disconnected');
   if (renderServiceChoice(payload)) return;
   if (payload.phase === 'error') showError(payload.message);
@@ -361,8 +339,16 @@ function renderStatus(payload) {
 let onboardingSaving = false;
 let obLangSel = null;
 let obThemeSel = null;
+let obSourceSel = null;
 
-// dsh 风格下拉（语言/主题）：trigger + 列表，选中态 ghost-active-fill
+/** 只有服务就绪后才能结束引导并进入可用的 dsh 页面。 */
+function syncOnboardingCompletionAction() {
+  const ready = lastStatusPayload && lastStatusPayload.phase === 'ready';
+  const button = $('ob-start');
+  if (button) button.disabled = onboardingSaving || !ready;
+}
+
+// dsh 风格下拉（语言/主题/下载源）：trigger + 浮层列表，选中态 ghost-active-fill
 function setupSelect(selId, onChange) {
   const root = $(selId);
   if (!root) return null;
@@ -372,7 +358,8 @@ function setupSelect(selId, onChange) {
   let value = '';
   const labelOf = (v) => {
     const opt = list.querySelector('[data-value="' + v + '"]');
-    return opt ? opt.textContent : v;
+    if (!opt) return v;
+    return opt.dataset.triggerI18n ? dshdT(opt.dataset.triggerI18n) : opt.textContent;
   };
   const options = () => [...list.querySelectorAll('li')];
   const closeList = (restoreFocus) => {
@@ -461,7 +448,12 @@ function setupSelect(selId, onChange) {
       options().forEach((option) => { option.tabIndex = -1; });
     } else setValue(value, false);
   };
-  return { get: () => value, set: (v) => setValue(v, false), setDisabled };
+  return {
+    get: () => value,
+    set: (v) => setValue(v, false),
+    setDisabled,
+    refresh: () => setValue(value, false),
+  };
 }
 
 function setOnboardingBusy(busy) {
@@ -470,12 +462,18 @@ function setOnboardingBusy(busy) {
   if (obLangSel) obLangSel.setDisabled(busy);
   if (obThemeSel) obThemeSel.setDisabled(busy);
   box.toggleAttribute('aria-busy', busy);
+  const startButton = $('ob-start');
+  const startKey = busy ? 'enteringApp' : 'startUsing';
+  startButton.dataset.i18n = startKey;
+  startButton.textContent = dshdT(startKey);
+  startButton.toggleAttribute('aria-busy', busy);
   if (!busy && onboardingActive() && lastStatusPayload) {
     const installPending = sourceSwitchPending || installCancelRequested;
     setInstallSourceBusy(installPending);
     setInstallCancelPending(installPending, sourceSwitchPending);
     renderOnboardingRuntime(lastStatusPayload);
   }
+  syncOnboardingCompletionAction();
 }
 
 async function initOnboarding() {
@@ -485,13 +483,19 @@ async function initOnboarding() {
     // 语言/主题下拉：选中即预览（保存时才持久化）
     obLangSel = setupSelect('ob-lang', (lang) => {
       window.dshdSetLanguage && window.dshdSetLanguage(lang);
+      // 选项文案由 i18n 原地更新；刷新三个 trigger，避免仍显示切换前语言。
+      if (obLangSel) obLangSel.refresh();
+      if (obThemeSel) obThemeSel.refresh();
+      if (obSourceSel) obSourceSel.refresh();
       window.__TAURI__.core.invoke('preview_language', { language: lang }).catch(() => {});
     });
     obThemeSel = setupSelect('ob-theme', (theme) => {
       window.__TAURI__.core.invoke('preview_theme', { theme }).catch(() => {});
     });
+    obSourceSel = setupSelect('ob-source', (source) => { void changeInstallSource(source); });
     if (obLangSel) obLangSel.set(st.language === 'en' ? 'en' : 'zh-CN');
     if (obThemeSel) obThemeSel.set(st.theme || 'system');
+    if (obSourceSel) obSourceSel.set(installSource);
     $('ob-autostart').checked = !!st.autostart;
     $('ob-builtin-plugins').checked = st.install_builtin_plugins !== false;
     document.body.classList.add('onboarding-mode');
@@ -500,39 +504,35 @@ async function initOnboarding() {
     $('ob-box').classList.add('reveal');
     // onboarding 模式下聚焦配置面板：隐藏启动状态区
     $('status').classList.add('hidden');
+    syncOnboardingCompletionAction();
     // 回报面板已显示：boot 等待切换为无限等待（无 60 秒兜底）
     window.__TAURI__.core.invoke('onboarding_shown').catch(() => {});
   } catch (e) { /* 后端未就绪时忽略 */ }
 }
 
-async function submitOnboarding(skip) {
-  if (onboardingSaving) return;
+async function submitOnboarding() {
+  if (onboardingSaving || !lastStatusPayload || lastStatusPayload.phase !== 'ready') return;
   const errBox = $('ob-error');
   // 格式校验（不占用 saving 状态）：非空 key 必须以 sk- 开头，否则提示并
   // 聚焦输入框；留空仍允许（之后可在桌面端设置中配置）
-  if (!skip) {
-    const key = $('ob-apikey').value.trim();
-    if (key && !/^sk-/.test(key)) {
-      errBox.textContent = dshdT('apiKeyFormatHint');
-      errBox.classList.remove('hidden');
-      $('ob-apikey').setAttribute('aria-invalid', 'true');
-      $('ob-apikey').focus();
-      return;
-    }
+  const key = $('ob-apikey').value.trim();
+  if (key && !/^sk-/.test(key)) {
+    errBox.textContent = dshdT('apiKeyFormatHint');
+    errBox.classList.remove('hidden');
+    $('ob-apikey').setAttribute('aria-invalid', 'true');
+    $('ob-apikey').focus();
+    return;
   }
+  errBox.classList.add('hidden');
   onboardingSaving = true;
   setOnboardingBusy(true);
   const payload = {
-    skip,
     language: obLangSel ? obLangSel.get() : 'zh-CN',
     theme: obThemeSel ? obThemeSel.get() : 'system',
     autostart: $('ob-autostart').checked,
-    install_builtin_plugins: !skip && $('ob-builtin-plugins').checked,
+    install_builtin_plugins: $('ob-builtin-plugins').checked,
   };
-  if (!skip) {
-    const key = $('ob-apikey').value.trim();
-    if (key) payload.api_key = key;
-  }
+  if (key) payload.api_key = key;
   try {
     await window.__TAURI__.core.invoke('save_onboarding', { payload });
     onboardingPausedByError = false;
@@ -602,8 +602,9 @@ function renderUpdate(result) {
 function setInstallSourceBusy(busy) {
   document.querySelectorAll('.install-source').forEach((group) => group.toggleAttribute('aria-busy', busy));
   document.querySelectorAll('.source-choice').forEach((button) => { button.disabled = busy; });
-  const toggle = $('ob-runtime-toggle');
-  if (toggle) toggle.disabled = busy;
+  const onboardingSource = $('ob-source');
+  if (onboardingSource) onboardingSource.toggleAttribute('aria-busy', busy);
+  if (obSourceSel) obSourceSel.setDisabled(busy);
 }
 
 function setInstallCancelPending(pending, switchingSource) {
@@ -624,6 +625,46 @@ function resetInstallPendingControls() {
   if (lastStatusPayload) renderOnboardingRuntime(lastStatusPayload);
 }
 
+function syncInstallSourceSelection() {
+  document.querySelectorAll('.source-choice').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.source === installSource));
+  });
+  if (obSourceSel && obSourceSel.get() !== installSource) obSourceSel.set(installSource);
+}
+
+async function changeInstallSource(source) {
+  if (!source || source === installSource || sourceSwitchPending) {
+    syncInstallSourceSelection();
+    return;
+  }
+  const previousSource = installSource;
+  sourceSwitchPending = true;
+  installCancelRequested = true;
+  setInstallSourceBusy(true);
+  setInstallCancelPending(true, true);
+  try {
+    const restarted = await window.__TAURI__.core.invoke('set_install_source', {
+      source,
+      generation: installGeneration,
+    });
+    if (restarted) {
+      installSource = source;
+      syncInstallSourceSelection();
+    } else {
+      // cancelled 阶段会保存来源但无需重启；过期页面也返回 false。
+      // 重新取权威快照，避免把被拒绝的选择留在界面上。
+      const payload = await window.__TAURI__.core.invoke('get_status');
+      renderStatus(payload);
+      resetInstallPendingControls();
+    }
+  } catch (e) {
+    installSource = previousSource;
+    syncInstallSourceSelection();
+    resetInstallPendingControls();
+    showError(String(e));
+  }
+}
+
 function bind() {
   dshdBindPasswordToggle($('ob-apikey'), $('ob-apikey-toggle'));
   $('ob-apikey').addEventListener('input', () => {
@@ -632,30 +673,7 @@ function bind() {
     if (error.textContent === dshdT('apiKeyFormatHint')) error.classList.add('hidden');
   });
   document.querySelectorAll('.source-choice').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const source = button.dataset.source;
-      if (!source || source === installSource || sourceSwitchPending) return;
-      sourceSwitchPending = true;
-      installCancelRequested = true;
-      setInstallSourceBusy(true);
-      setInstallCancelPending(true, true);
-      try {
-        const restarted = await window.__TAURI__.core.invoke('set_install_source', {
-          source,
-          generation: installGeneration,
-        });
-        installSource = source;
-        document.querySelectorAll('.source-choice').forEach((item) => {
-          item.setAttribute('aria-pressed', String(item.dataset.source === installSource));
-        });
-        if (!restarted) {
-          resetInstallPendingControls();
-        }
-      } catch (e) {
-        resetInstallPendingControls();
-        showError(String(e));
-      }
-    });
+    button.addEventListener('click', () => { void changeInstallSource(button.dataset.source); });
   });
   document.querySelectorAll('[data-install-cancel]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -695,9 +713,6 @@ function bind() {
         });
       }
     });
-  });
-  $('ob-runtime-toggle').addEventListener('click', () => {
-    setOnboardingSourceExpanded(!onboardingSourceExpanded);
   });
   $('btn-retry').addEventListener('click', async () => {
     const button = $('btn-retry');
@@ -798,8 +813,7 @@ function bind() {
       button.removeAttribute('aria-busy');
     }
   });
-  $('ob-start').addEventListener('click', () => submitOnboarding(false));
-  $('ob-skip').addEventListener('click', () => submitOnboarding(true));
+  $('ob-start').addEventListener('click', submitOnboarding);
 }
 
 async function init() {
@@ -814,6 +828,7 @@ async function init() {
     // 下拉 trigger 的值不是 data-i18n 节点，语言切换后按当前 option 文案刷新。
     if (obLangSel) obLangSel.set(obLangSel.get());
     if (obThemeSel) obThemeSel.set(obThemeSel.get());
+    if (obSourceSel) obSourceSel.set(obSourceSel.get());
     // 快照的 message/detail 是 Rust 按旧语言生成的文本，重渲染时必须剥离，
     // 由 phaseText/stepLine 按当前语言重译固定文案（进度数字语言无关保留）
     if (lastStatusPayload) renderStatus({ ...lastStatusPayload, message: '', detail: '' });

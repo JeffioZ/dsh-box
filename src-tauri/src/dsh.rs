@@ -11,7 +11,7 @@ use crate::app_state::{
 };
 use crate::processes;
 use crate::runtime::{self, ensure_dsh, ensure_node, start_server};
-use crate::{emit_status, navigate, SPLASH_ORIGIN};
+use crate::{emit_status, navigate, navigate_to_splash};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
@@ -107,25 +107,25 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     );
 }
 
-/// 首次使用配置未完成时停留启动页等待确认（save_onboarding 完成后补跳转）。
-/// 返回 true 表示已停留：调用方应直接返回，不再 navigate。
+/// 首次使用配置未完成时停留启动页等待确认。保存返回后，调用方必须
+/// 重新检查阶段：配置保存可能已把后续导航交给服务重启流程。
 /// 防御：等待上限 60 秒——若启动页因任何原因未显示配置面板（如 IPC 时序），
 /// 自动落 onboarded 标记并放行，避免永久卡在启动页。
-/// 等待解除条件：用户已保存/跳过（onboarding_done）——dev 构建下
-/// 首次引导判定恒为 true，必须以用户动作为准。
-fn wait_onboarding(state: &AppState) -> bool {
+/// 等待解除条件：用户已保存（onboarding_done）。开发构建每个进程仍展示
+/// 一次，但同一进程内的服务重启不会再次进入引导。
+fn wait_onboarding(state: &AppState) {
     if !state.onboarding_pending() {
-        return false;
+        return;
     }
     crate::logging::log("boot: 首次使用配置未完成，停留启动页等待确认");
-    // 面板已显示：无限等待用户操作（有跳过按钮，随时可退出，无需兜底）；
+    // 面板已显示：无限等待用户明确完成；
     // 面板未显示（启动页 IPC 异常等）：60 秒兜底自动放行，避免卡死
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     loop {
         std::thread::sleep(Duration::from_secs(1));
         if crate::app_state::onboarding_done() {
             crate::logging::log("boot: 用户已完成首次配置，继续启动");
-            return false;
+            return;
         }
         if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
             // 超时兜底：自动落标记并继续，避免启动页卡死
@@ -146,9 +146,25 @@ fn wait_onboarding(state: &AppState) -> bool {
                 serde_json::Value::Bool(true),
             );
             crate::logging::log("boot: 首次配置面板未显示，60 秒兜底放行");
-            return false;
+            return;
         }
     }
+}
+
+/// 首次配置可能触发凭据或插件重启。此时加载页已显示对应忙碌状态，当前
+/// boot 必须立即释放生命周期锁，让统一重启协调器继续，不能先进入 dsh。
+fn onboarding_handoff_pending(state: &AppState) -> bool {
+    if state.phase() != BootPhase::Ready {
+        crate::logging::log("boot: 首次配置后的界面切换已由其他生命周期流程接管");
+        return true;
+    }
+    if state.service_ownership() == ServiceOwnership::Managed
+        && crate::plugins::deferred_restart_pending()
+    {
+        crate::logging::log("boot: 预置插件待应用，保持启动页并交给统一重启流程");
+        return true;
+    }
+    false
 }
 
 /// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
@@ -204,10 +220,13 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         crate::logging::log("boot: 服务已由并发路径就绪，直接复用");
         let ready = crate::locale::text("已就绪", "Ready");
         state.set_phase(BootPhase::Ready, ready, "");
-        // 先等首次配置完成，再 emit Ready：前端收到 ready 会整体淡出
-        // 启动页（含首次配置面板）——若先 emit 后等待，面板会视觉消失
-        // 而 boot 仍在等待用户操作
-        if wait_onboarding(&state) {
+        // 首次设置的完成按钮以真实 Ready 为门控；面板可见时前端只更新
+        // 卡片而不淡出，保存后 enter_web_app 再完成统一过渡。
+        if state.onboarding_pending() {
+            emit_status(app, BootPhase::Ready, ready, "");
+        }
+        wait_onboarding(&state);
+        if onboarding_handoff_pending(&state) {
             return Ok(());
         }
         enter_web_app(app, &config.web_url());
@@ -236,7 +255,11 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         ));
         let ready = crate::locale::text("已就绪", "Ready");
         state.set_phase(BootPhase::Ready, ready, "");
-        if wait_onboarding(&state) {
+        if state.onboarding_pending() {
+            emit_status(app, BootPhase::Ready, ready, "");
+        }
+        wait_onboarding(&state);
+        if onboarding_handoff_pending(&state) {
             return Ok(());
         }
         enter_web_app(app, &config.web_url());
@@ -291,9 +314,11 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         state.node_version().unwrap_or_default(),
         config.port
     ));
-    // 先等首次配置完成再 emit Ready：ready 会触发启动页整体淡出（含面板），
-    // 若先 emit 后等待，面板会视觉消失而 boot 仍在等待用户操作
-    if wait_onboarding(&state) {
+    if state.onboarding_pending() {
+        emit_status(app, BootPhase::Ready, ready, "");
+    }
+    wait_onboarding(&state);
+    if onboarding_handoff_pending(&state) {
         return Ok(());
     }
     enter_web_app(app, &config.web_url());
@@ -686,7 +711,7 @@ pub(crate) fn forget_external_service(app: &AppHandle) -> Result<(), String> {
         "Switching to DSHBox's local service…",
     );
     state.set_phase(BootPhase::SwitchingService, message, "");
-    navigate(app, SPLASH_ORIGIN);
+    navigate_to_splash(app);
     emit_status(app, BootPhase::SwitchingService, message, "");
     if previous_phase == BootPhase::Error {
         state.signal_retry();
@@ -697,7 +722,7 @@ pub(crate) fn forget_external_service(app: &AppHandle) -> Result<(), String> {
 // ---------- 看门狗 ----------
 
 /// 看门狗：服务掉线时回到启动页并自动重启（重启失败会走 Err 分支显示错误+手动重试）。
-/// 更新流程进行中（updating=true）时跳过，避免打断 npm/node 安装。
+/// 更新流程进行中（updating=true）时跳过，避免打断运行时安装。
 fn watchdog(app: &AppHandle) {
     let mut failures = 0u32;
     loop {
@@ -746,7 +771,7 @@ fn watchdog(app: &AppHandle) {
                 // 外部进程不属于 DSHBox：不停止、不替换、不偷偷切换数据源。
                 crate::logging::log("watchdog: 外部 dsh 服务已断开，等待用户恢复或改用本地服务");
                 state.mark_external_disconnected();
-                navigate(app, SPLASH_ORIGIN);
+                navigate_to_splash(app);
                 let message = crate::locale::text(
                     "外部 dsh 服务已断开。可重试连接，或改用 DSHBox 本地服务。",
                     "The external dsh service disconnected. Try reconnecting, or switch to DSHBox's local service.",
@@ -758,7 +783,7 @@ fn watchdog(app: &AppHandle) {
             // 托管服务已停止：清理残留进程，回启动页，由外层循环自动重启。
             crate::logging::log("watchdog: dsh 服务已停止，准备自动重启");
             shutdown(app);
-            navigate(app, SPLASH_ORIGIN);
+            navigate_to_splash(app);
             let state = app.state::<AppState>();
             let restarting = crate::locale::text(
                 "服务已停止，正在自动重启…",

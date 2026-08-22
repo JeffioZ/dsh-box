@@ -77,9 +77,9 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
             ));
         }
     };
-    // 插件命令也纳入进程树守卫：应用退出或超时时一并回收 npm 后代进程。
+    // 插件命令也纳入进程树守卫：应用退出或超时时一并回收包管理器后代进程。
     let _guard = crate::processes::TreeGuard::from_child(&child);
-    // 5 分钟超时（npm 安装可能较慢）；超时杀掉避免线程悬挂
+    // 5 分钟超时（插件安装可能较慢）；超时杀掉避免线程悬挂
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     let status = loop {
         match child.try_wait() {

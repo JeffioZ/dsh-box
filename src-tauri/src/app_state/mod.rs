@@ -91,7 +91,7 @@ pub struct StatusPayload {
     /// 当前使用的 Node 版本（如 v24.19.0）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_version: Option<String>,
-    /// 便携 Node 自带 npm 版本（如 npm 12.0.2；npm 11 会卡 dsh 安装）。
+    /// 当前 Node 自带的 npm 版本（如 12.0.2）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub npm_version: Option<String>,
     /// 实际监听端口。
@@ -139,9 +139,8 @@ pub(crate) fn dev_build() -> bool {
     DEV_BUILD.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// 首次配置是否已由用户完成（保存/跳过）。boot 等待用：
-/// dev 构建下首次引导判定恒为 true，等待解除必须以用户动作为准，
-/// 否则保存后仍等满 60 秒兜底超时才继续。
+/// 首次配置是否已由用户在本进程完成。开发版借此保持
+/// “每次启动展示一次”，同时避免服务重启返回启动页时重复展示。
 static ONBOARDING_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn mark_onboarding_done() {
@@ -158,8 +157,8 @@ pub(crate) fn onboarding_done() -> bool {
 }
 
 /// 首次配置面板是否已在启动页显示（前端显示后回报）。
-/// boot 等待据此区分：面板已显示则无限等待用户操作（有跳过按钮，
-/// 无需兜底）；未显示（启动页异常）60 秒后自动放行防卡死。
+/// boot 等待据此区分：面板已显示则无限等待用户完成配置；未显示
+/// （启动页异常）60 秒后自动放行防卡死。
 static ONBOARDING_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn mark_onboarding_shown() {
@@ -170,14 +169,21 @@ pub(crate) fn onboarding_shown() -> bool {
     ONBOARDING_SHOWN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+fn onboarding_required_for(
+    is_dev_build: bool,
+    completed_in_process: bool,
+    persisted_onboarded: bool,
+) -> bool {
+    if is_dev_build {
+        return !completed_in_process;
+    }
+    !persisted_onboarded
+}
+
 pub(crate) fn onboarding_required(root: &Path) -> bool {
-    if dev_build() {
-        return true;
-    }
-    if load_state_value(root, "onboarded").and_then(|value| value.as_bool()) == Some(true) {
-        return false;
-    }
-    true
+    let persisted_onboarded =
+        load_state_value(root, "onboarded").and_then(|value| value.as_bool()) == Some(true);
+    onboarding_required_for(dev_build(), onboarding_done(), persisted_onboarded)
 }
 
 pub(crate) struct Inner {
@@ -340,6 +346,15 @@ impl AppState {
         let mut inner = self.lock_inner();
         inner.last_heartbeat = Some(std::time::Instant::now());
         inner.heartbeat_failures = 0;
+    }
+
+    /// 主页面当前不应被判死时顺延观察窗口，但不把它伪装成一次成功心跳，
+    /// 也不清除真实失败累积的退避次数。
+    pub(crate) fn defer_heartbeat(&self) {
+        let mut inner = self.lock_inner();
+        if inner.last_heartbeat.is_some() {
+            inner.last_heartbeat = Some(std::time::Instant::now());
+        }
     }
 
     /// 连续重载计数 +1，返回新值（指数退避用）。
@@ -543,7 +558,7 @@ impl AppState {
         Ok(restart_install)
     }
 
-    /// 首次使用配置是否尚未完成；开发构建仍每次展示以便测试。
+    /// 首次使用配置是否尚未完成；开发构建每次进程启动展示一次。
     pub(crate) fn onboarding_pending(&self) -> bool {
         onboarding_required(&self.config().root)
     }
@@ -888,7 +903,21 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_section_field;
+    use super::{merge_section_field, onboarding_required_for};
+
+    #[test]
+    fn onboarding_gate_distinguishes_dev_processes_from_internal_navigation() {
+        // 开发版无视持久化完成标记，因此每次新进程仍可测试首次设置。
+        assert!(onboarding_required_for(true, false, true));
+        // 同一进程已完成后，服务重启返回启动页不得再次展示。
+        assert!(!onboarding_required_for(true, true, false));
+    }
+
+    #[test]
+    fn onboarding_gate_keeps_production_persistence_semantics() {
+        assert!(onboarding_required_for(false, false, false));
+        assert!(!onboarding_required_for(false, false, true));
+    }
 
     #[test]
     fn merge_section_field_replaces_only_the_target() {
