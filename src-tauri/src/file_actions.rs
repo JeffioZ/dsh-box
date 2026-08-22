@@ -104,9 +104,8 @@ pub fn is_potentially_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return path.metadata().is_ok_and(|metadata| {
-            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-        });
+        path.metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     false

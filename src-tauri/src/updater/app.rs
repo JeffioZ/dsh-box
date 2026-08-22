@@ -317,6 +317,7 @@ fn download_app_exe_inner(
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 pub(super) fn windows_replace_script(
     source: &std::path::Path,
     destination: &std::path::Path,
