@@ -18,9 +18,9 @@ pub fn start_save_settle(millis: u64) {
         Some(Instant::now() + std::time::Duration::from_millis(millis));
 }
 
-/// 保存主窗口位置/大小到 config.json（Resized/Moved 事件）。
+/// 保存主窗口位置/大小到 state.json（Resized/Moved 事件）。
 /// 不做节流：节流窗口内进程被强制结束会丢失最后一次调整。
-/// config.json 仅几百字节，拖动/缩放期间的写入频率完全可接受。
+/// state.json 仅几百字节，拖动/缩放期间的写入频率完全可接受。
 pub fn save_window_state(app: &AppHandle) {
     if let Some(until) = *SAVE_SETTLE_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) {
         if Instant::now() < until {
@@ -30,7 +30,7 @@ pub fn save_window_state(app: &AppHandle) {
     save_now(app);
 }
 
-/// 保存主窗口位置/大小到 config.json（强制版，供关闭/退出事件，确保最后位置落盘）。
+/// 保存主窗口位置/大小到 state.json（强制版，供关闭/退出事件，确保最后位置落盘）。
 pub fn save_window_state_now(app: &AppHandle) {
     save_now(app);
 }

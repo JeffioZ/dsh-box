@@ -1,4 +1,4 @@
-//! 统一消息对话框：
+//! 统一原生消息对话框：
 //! - 主窗口可见时设为模态父窗口（置顶显示，不会被主窗口遮挡）；
 //! - 全局互斥：同一时刻只显示一个对话框，多处触发也不会重叠。
 //!
@@ -31,10 +31,10 @@ fn show(
     // 挂主窗口会被它遮住——PowerShell 更新提示曾出现在弹窗下方）；
     // 否则挂主窗口。两者都不可见（仅托盘）时不设父级。
     let dialog_open = app
-        .get_webview_window(crate::app_dialog::APP_DIALOG_WINDOW)
+        .get_webview_window(crate::control_center::APP_DIALOG_WINDOW)
         .is_some_and(|win| win.is_visible().unwrap_or(false));
     if dialog_open {
-        if let Some(win) = app.get_webview_window(crate::app_dialog::APP_DIALOG_WINDOW) {
+        if let Some(win) = app.get_webview_window(crate::control_center::APP_DIALOG_WINDOW) {
             builder = builder.parent(&win);
         }
     } else if let Some(win) = main_window(app).filter(|win| win.is_visible().unwrap_or(false)) {

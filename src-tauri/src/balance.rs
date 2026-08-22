@@ -1,8 +1,6 @@
 //! DeepSeek API 余额查询：GET {base}/user/balance。
 //!
-//! API Key 解析顺序：环境变量 DSH_BOX_API_KEY → config.json 的 api_key
-//! → 环境变量 DEEPSEEK_API_KEY → dsh 凭据文件（$DSH_HOME/.credentials.yaml，
-//! 格式 `DEEPSEEK_API_KEY: sk-...`）。
+//! API Key 解析顺序：DSH_BOX_API_KEY → DEEPSEEK_API_KEY → dsh 凭据文件。
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -79,39 +77,23 @@ struct RawBalanceInfo {
     topped_up_balance: String,
 }
 
-/// 解析 dsh 凭据文件（$DSH_HOME/.credentials.yaml）。
-fn key_from_dsh_credentials(config: &Config) -> Option<String> {
-    let file = config.dsh_home().join(".credentials.yaml");
-    let text = std::fs::read_to_string(file).ok()?;
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some((key, value)) = line.split_once(':') {
-            if key.trim().eq_ignore_ascii_case("DEEPSEEK_API_KEY") {
-                let v = value.trim().trim_matches(['"', '\'']);
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 fn resolve_api_key(config: &Config) -> Result<String, String> {
-    if let Some(k) = &config.api_key {
-        return Ok(k.clone());
+    if let Ok(k) = std::env::var("DSH_BOX_API_KEY") {
+        if !k.trim().is_empty() {
+            return Ok(k.trim().to_string());
+        }
     }
     if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") {
-        if !k.is_empty() {
-            return Ok(k);
+        if !k.trim().is_empty() {
+            return Ok(k.trim().to_string());
         }
     }
-    if let Some(k) = key_from_dsh_credentials(config) {
+    if let Some(k) = crate::credentials::value(config, "DEEPSEEK_API_KEY") {
         return Ok(k);
     }
     Err(crate::locale::text(
-        "未找到 DeepSeek API Key。\n可在应用数据目录的 config.json 中添加 api_key 字段，\n或设置环境变量 DSH_BOX_API_KEY / DEEPSEEK_API_KEY，\n或确认 dsh 凭据文件中已有该密钥。",
-        "No DeepSeek API Key was found.\nAdd an api_key field to config.json in the app data directory,\nset DSH_BOX_API_KEY or DEEPSEEK_API_KEY,\nor confirm that the dsh credentials file contains the key.",
+        "未找到 DeepSeek API Key。\n请在应用设置中配置，或设置 DSH_BOX_API_KEY / DEEPSEEK_API_KEY 环境变量。",
+        "No DeepSeek API Key was found.\nConfigure it in the app, or set DSH_BOX_API_KEY / DEEPSEEK_API_KEY.",
     )
     .into())
 }
@@ -176,7 +158,12 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
         if state.is_quitting() {
             return;
         }
-        let payload = query_balance(&state.config());
+        let config = state.config();
+        if config.hide_statusbar || config.hide_balance || !crate::main_is_visible(&app) {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            continue;
+        }
+        let payload = query_balance(&config);
         let _ = app.emit("balance-updated", payload);
         std::thread::sleep(std::time::Duration::from_secs(300));
     });
@@ -184,9 +171,14 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
 
 /// 立即查询并广播一次余额（状态栏首帧数据，不等 5 分钟轮询周期）。
 pub(crate) fn refresh_once(app: AppHandle) {
-    let state = app.state::<AppState>();
-    let payload = query_balance(&state.config());
-    let _ = app.emit("balance-updated", payload);
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let config = state.config();
+        if !config.hide_statusbar && !config.hide_balance && crate::main_is_visible(&app) {
+            let payload = query_balance(&config);
+            let _ = app.emit("balance-updated", payload);
+        }
+    });
 }
 
 #[tauri::command]
@@ -267,4 +259,24 @@ fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
         error_kind: None,
         updated_at: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BalancePayload;
+
+    #[test]
+    fn frontend_contract_serializes_error_kind_in_snake_case() {
+        let payload = BalancePayload {
+            ok: false,
+            is_available: false,
+            balances: Vec::new(),
+            error: Some("missing".into()),
+            error_kind: Some("no_key".into()),
+            updated_at: None,
+        };
+        let json = serde_json::to_value(payload).unwrap();
+        assert_eq!(json["error_kind"], "no_key");
+        assert!(json.get("errorKind").is_none());
+    }
 }

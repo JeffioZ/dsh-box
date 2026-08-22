@@ -1,0 +1,108 @@
+//! plugins IPC 转发。
+
+use super::*;
+
+// ---------- 插件管理（plugins 窗口调用） ----------
+
+/// 已安装插件列表。
+#[tauri::command]
+pub fn plugin_list(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::PluginInfo>, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::plugins::list(&app))
+}
+
+/// npm 搜索插件。
+#[tauri::command]
+pub async fn plugin_search(
+    app: AppHandle,
+    webview: tauri::Webview,
+    query: String,
+) -> Result<Vec<crate::plugins::PluginInfo>, String> {
+    ensure_local_origin(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::plugins::search(&query).map(|mut list| {
+            // 标注已安装状态（与 list 结果合并）
+            let installed: std::collections::HashMap<String, String> = crate::plugins::list(&app)
+                .into_iter()
+                .filter_map(|p| p.installed.map(|v| (p.name, v)))
+                .collect();
+            for p in &mut list {
+                p.installed = installed.get(&p.name).cloned();
+            }
+            list
+        })
+    })
+    .await
+    .map_err(|e| format!("插件搜索任务异常结束：{e}"))?
+}
+
+/// 安装插件（成功后进入待应用状态，可继续批量操作）。
+#[tauri::command]
+pub async fn plugin_install(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || crate::plugins::install(&app, &name))
+        .await
+        .map_err(|e| format!("插件安装任务异常结束：{e}"))?
+}
+
+/// 卸载插件（成功后进入待应用状态，可继续批量操作）。
+#[tauri::command]
+pub async fn plugin_remove(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || crate::plugins::remove(&app, &name))
+        .await
+        .map_err(|e| format!("插件卸载任务异常结束：{e}"))?
+}
+
+/// 检查内置插件（dshmarket/dsh-file-drop）是否有新版本（只读）。
+#[tauri::command]
+pub async fn plugin_updates(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::UpdateStatus>, String> {
+    ensure_local_origin(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || crate::plugins::check_updates(&app))
+        .await
+        .map_err(|e| format!("插件更新检查任务异常结束：{e}"))?
+}
+
+/// 手动升级单个插件（绕过退避与门控；成功后进入待应用状态）。
+#[tauri::command]
+pub async fn plugin_update(
+    app: AppHandle,
+    webview: tauri::Webview,
+    name: String,
+) -> Result<crate::plugins::UpdateStatus, String> {
+    ensure_local_origin(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || crate::plugins::update_pkg(&app, &name))
+        .await
+        .map_err(|e| format!("插件更新任务异常结束：{e}"))?
+}
+
+#[tauri::command]
+pub fn plugin_apply_status(
+    webview: tauri::Webview,
+) -> Result<crate::plugins::PluginApplyStatus, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::plugins::plugin_apply_status())
+}
+
+#[tauri::command]
+pub fn plugin_apply_changes(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::plugins::PluginApplyStatus, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::plugins::apply_plugin_changes(&app))
+}

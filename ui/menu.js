@@ -1,5 +1,18 @@
 // 托盘菜单与标题栏主菜单共用的渲染与键盘导航逻辑。
 
+function dshdNormalizeMenuItems(nextItems) {
+  const normalized = [];
+  for (const item of (Array.isArray(nextItems) ? nextItems : [])) {
+    if (item && item.sep) {
+      // 分隔线只表达两个相邻条目组的边界，不允许出现在菜单首尾或连续出现。
+      if (!normalized.length || normalized[normalized.length - 1].sep) continue;
+    }
+    normalized.push(item);
+  }
+  if (normalized.length && normalized[normalized.length - 1].sep) normalized.pop();
+  return normalized;
+}
+
 function dshdCreateMenu(container, options) {
   const settings = options || {};
   const keyboardNavKeys = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' ']);
@@ -97,7 +110,7 @@ function dshdCreateMenu(container, options) {
   }
 
   function setItems(nextItems) {
-    const normalized = nextItems || [];
+    const normalized = dshdNormalizeMenuItems(nextItems);
     const key = JSON.stringify(normalized);
     if (key === lastItemsKey) {
       container.querySelectorAll('.dshd-row.pressed').forEach((row) => row.classList.remove('pressed'));

@@ -14,6 +14,104 @@ pub fn is_absolute(path: &str) -> bool {
     Path::new(path).is_absolute()
 }
 
+/// 展开浏览器常见的主目录/MSYS 路径写法，供右键菜单在交给系统动作前规范化。
+pub fn normalize_user_path(path: &str) -> Option<PathBuf> {
+    if path == "~" || path.starts_with("~/") || path.starts_with("~\\") {
+        let home = dirs::home_dir()?;
+        let rest = path
+            .strip_prefix('~')
+            .unwrap_or(path)
+            .trim_start_matches(['/', '\\']);
+        return Some(if rest.is_empty() {
+            home
+        } else {
+            home.join(rest)
+        });
+    }
+    #[cfg(windows)]
+    {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b'/'
+        {
+            let drive = (bytes[1] as char).to_ascii_uppercase();
+            let rest = path[3..].replace('/', "\\");
+            return Some(PathBuf::from(format!("{drive}:\\{rest}")));
+        }
+    }
+    let path = PathBuf::from(path);
+    path.is_absolute().then_some(path)
+}
+
+fn current_platform() -> &'static str {
+    #[cfg(windows)]
+    return "windows";
+    #[cfg(target_os = "macos")]
+    return "macos";
+    #[cfg(target_os = "linux")]
+    return "linux";
+    #[allow(unreachable_code)]
+    "other"
+}
+
+fn dangerous_extension(ext: &str, platform: &str) -> bool {
+    match platform {
+        "windows" => matches!(
+            ext,
+            "exe"
+                | "com"
+                | "bat"
+                | "cmd"
+                | "ps1"
+                | "psm1"
+                | "vbs"
+                | "vbe"
+                | "js"
+                | "jse"
+                | "wsf"
+                | "wsh"
+                | "msi"
+                | "msp"
+                | "mst"
+                | "scr"
+                | "pif"
+                | "cpl"
+                | "reg"
+                | "lnk"
+                | "appx"
+                | "msix"
+                | "msixbundle"
+        ),
+        "macos" => matches!(ext, "app" | "command" | "pkg" | "dmg" | "scpt"),
+        "linux" => matches!(ext, "appimage" | "desktop" | "run" | "sh"),
+        _ => false,
+    }
+}
+
+/// 默认打开会触发执行或安装的高风险文件；只应用当前平台真正会执行的后缀，
+/// 避免在 macOS/Linux 因 Windows 专属扩展名产生无意义确认。
+pub fn is_potentially_executable(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if dangerous_extension(&ext, current_platform()) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return path.metadata().is_ok_and(|metadata| {
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        });
+    }
+    #[cfg(not(unix))]
+    false
+}
+
 /// 用默认程序打开文件。
 pub fn open_default(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
@@ -100,18 +198,18 @@ pub fn open_with_picker(path: &Path, parent_hwnd: Option<isize>) -> Result<(), S
             oaifInFlags: flags,
         };
         let init = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-        let hr = unsafe { SHOpenWithDialog(owner, &info) };
-        if init == 0 {
-            unsafe { CoUninitialize() };
+        if init < 0 {
+            return Err(crate::locale::owned(
+                format!("COM 初始化失败（HRESULT 0x{init:08X}）"),
+                format!("COM initialization failed (HRESULT 0x{init:08X})"),
+            ));
         }
+        let hr = unsafe { SHOpenWithDialog(owner, &info) };
+        // S_OK 与 S_FALSE 都会增加当前线程的 COM 初始化引用计数，必须成对释放。
+        unsafe { CoUninitialize() };
         // S_OK(0)=已选择并启动应用；S_FALSE(1)=用户取消——均视为正常
         if hr >= 0 {
             Ok(())
-        } else if init < 0 {
-            Err(crate::locale::owned(
-                format!("COM 初始化失败（HRESULT 0x{init:08X}）"),
-                format!("COM initialization failed (HRESULT 0x{init:08X})"),
-            ))
         } else {
             Err(crate::locale::owned(
                 format!("SHOpenWithDialog 失败（HRESULT 0x{hr:08X}）"),
@@ -231,7 +329,17 @@ pub fn read_text_file(path: &Path, max_bytes: usize) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|e| {
         crate::locale::owned(format!("读取失败：{e}"), format!("Failed to read: {e}"))
     })?;
-    if file.metadata().map(|m| m.len()).unwrap_or(0) > max_bytes as u64 {
+    let metadata = file.metadata().map_err(|e| {
+        crate::locale::owned(format!("读取失败：{e}"), format!("Failed to read: {e}"))
+    })?;
+    if !metadata.is_file() {
+        return Err(crate::locale::text(
+            "只能复制普通文件的内容",
+            "Only regular file contents can be copied",
+        )
+        .into());
+    }
+    if metadata.len() > max_bytes as u64 {
         return Err(crate::locale::owned(
             format!("文件超过 {} MB 上限", max_bytes / 1024 / 1024),
             format!("The file exceeds the {} MB limit", max_bytes / 1024 / 1024),
@@ -305,5 +413,50 @@ fn shell_execute(verb: &str, path: &Path, params: Option<&str>) -> Result<(), St
         Ok(())
     } else {
         Err(format!("ShellExecuteW 失败（错误码 {}）", ret as isize))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dangerous_extension, is_potentially_executable, normalize_user_path};
+    use std::path::Path;
+
+    #[test]
+    fn executable_extensions_are_case_insensitive() {
+        assert_eq!(
+            is_potentially_executable(Path::new("setup.EXE")),
+            cfg!(windows)
+        );
+        assert_eq!(
+            is_potentially_executable(Path::new("bootstrap.ps1")),
+            cfg!(windows)
+        );
+        assert!(!is_potentially_executable(Path::new("notes.md")));
+    }
+
+    #[test]
+    fn dangerous_extensions_are_platform_specific() {
+        assert!(dangerous_extension("exe", "windows"));
+        assert!(!dangerous_extension("exe", "macos"));
+        assert!(!dangerous_extension("exe", "linux"));
+        assert!(dangerous_extension("app", "macos"));
+        assert!(dangerous_extension("desktop", "linux"));
+        assert!(!dangerous_extension("desktop", "other"));
+    }
+
+    #[test]
+    fn home_path_expands_without_touching_lookalikes() {
+        assert!(normalize_user_path("~/notes.md").is_some());
+        assert!(normalize_user_path("~\\notes.md").is_some());
+        assert!(normalize_user_path("~someone/notes.md").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msys_drive_path_normalizes_on_windows() {
+        assert_eq!(
+            normalize_user_path("/c/work/file.txt").unwrap(),
+            std::path::PathBuf::from(r"C:\work\file.txt")
+        );
     }
 }

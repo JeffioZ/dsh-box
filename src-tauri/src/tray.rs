@@ -58,38 +58,46 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let model = crate::tray_menu::items(true);
-    let item = |id: &str| {
-        model
-            .iter()
-            .find(|entry| entry.id == id)
-            .expect("shared tray menu item must exist")
+    let item = |id: &str| -> tauri::Result<&crate::tray_menu::TrayMenuItem> {
+        model.iter().find(|entry| entry.id == id).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("shared tray menu item is missing: {id}"),
+            )
+            .into()
+        })
     };
 
-    let open_item = MenuItem::with_id(app, "open", &item("open").label, true, None::<&str>)?;
+    let open_item = MenuItem::with_id(app, "open", &item("open")?.label, true, None::<&str>)?;
     let balance_item =
-        MenuItem::with_id(app, "balance", &item("balance").label, true, None::<&str>)?;
+        MenuItem::with_id(app, "balance", &item("balance")?.label, true, None::<&str>)?;
     let browser_item = MenuItem::with_id(
         app,
         "open_browser",
-        &item("open_browser").label,
+        &item("open_browser")?.label,
         true,
         None::<&str>,
     )?;
     let restart_item =
-        MenuItem::with_id(app, "restart", &item("restart").label, true, None::<&str>)?;
+        MenuItem::with_id(app, "restart", &item("restart")?.label, true, None::<&str>)?;
     let check_item = MenuItem::with_id(
         app,
         "check_update",
-        &item("check_update").label,
+        &item("check_update")?.label,
         true,
         None::<&str>,
     )?;
     let plugins_item =
-        MenuItem::with_id(app, "plugins", &item("plugins").label, true, None::<&str>)?;
-    let settings_item =
-        MenuItem::with_id(app, "settings", &item("settings").label, true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", &item("quit").label, true, None::<&str>)?;
-    let about_item = MenuItem::with_id(app, "about", &item("about").label, true, None::<&str>)?;
+        MenuItem::with_id(app, "plugins", &item("plugins")?.label, true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(
+        app,
+        "settings",
+        &item("settings")?.label,
+        true,
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, "quit", &item("quit")?.label, true, None::<&str>)?;
+    let about_item = MenuItem::with_id(app, "about", &item("about")?.label, true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
@@ -135,13 +143,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 pub(crate) fn run_action(app: &AppHandle, id: &str) {
     match id {
         "open" => show_main(app),
-        "balance" => crate::app_dialog::open_balance(app),
+        "balance" => crate::control_center::open_balance(app),
         "open_browser" => open_browser(app),
         "restart" => restart_from_tray(app),
-        "check_update" => crate::app_dialog::open_check(app),
-        "plugins" => crate::app_dialog::open_plugins(app),
-        "settings" => crate::app_dialog::open_settings(app),
-        "about" => crate::app_dialog::open_about(app),
+        "check_update" => crate::control_center::open_check(app),
+        "plugins" => crate::control_center::open_plugins(app),
+        "settings" => crate::control_center::open_settings(app),
+        "about" => crate::control_center::open_about(app),
         "quit" => quit(app),
         _ => {}
     }
@@ -162,7 +170,7 @@ pub(crate) fn apply_language(app: &AppHandle, language: &str) {
         }
     }
     for label in [
-        crate::app_dialog::APP_DIALOG_WINDOW,
+        crate::control_center::APP_DIALOG_WINDOW,
         crate::tray_menu::TRAY_MENU_WINDOW,
     ] {
         if let Some(window) = app.get_webview_window(label) {
@@ -202,7 +210,7 @@ pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
     }
     // 弹窗与托盘菜单：透明宿主只更新 prefers-color-scheme。
     for label in [
-        crate::app_dialog::APP_DIALOG_WINDOW,
+        crate::control_center::APP_DIALOG_WINDOW,
         crate::tray_menu::TRAY_MENU_WINDOW,
     ] {
         if let Some(window) = app.get_webview_window(label) {
@@ -328,7 +336,7 @@ fn open_browser(app: &AppHandle) {
     let config = app.state::<AppState>().config();
     if !crate::dsh::health_check(config.port) {
         use tauri_plugin_dialog::MessageDialogKind;
-        crate::dialog::show_message(
+        crate::native_dialog::show_message(
             app,
             crate::locale::text(
                 "dsh 服务当前未运行，无法在浏览器中打开。",
@@ -367,7 +375,7 @@ fn restart_from_tray(app: &AppHandle) {
     use tauri_plugin_dialog::MessageDialogKind;
     let state = app.state::<AppState>();
     if state.is_updating() {
-        crate::dialog::show_message(
+        crate::native_dialog::show_message(
             app,
             crate::locale::text(
                 "更新流程正在进行，请稍后再重启。",
@@ -386,7 +394,7 @@ fn restart_from_tray(app: &AppHandle) {
             | crate::app_state::BootPhase::InstallingDsh
             | crate::app_state::BootPhase::StartingServer
     ) {
-        crate::dialog::show_message(
+        crate::native_dialog::show_message(
             app,
             crate::locale::text(
                 "启动流程进行中，请稍后再试。",
@@ -403,7 +411,7 @@ fn restart_from_tray(app: &AppHandle) {
         // 重启本身在内部处理成功/失败状态（失败会进错误页）；失败额外弹窗告知原因。
         if let Err(e) = crate::updater::restart_service(&handle) {
             use tauri_plugin_dialog::MessageDialogKind;
-            crate::dialog::show_message(
+            crate::native_dialog::show_message(
                 &handle,
                 format!(
                     "{}: {e}",

@@ -38,8 +38,10 @@ function renderStats() {
     el.dataset.truncated = '0';
     el.title = '';
     el.setAttribute('aria-label', dshdT('statsRegion'));
+    el.disabled = true;
     return;
   }
+  el.disabled = false;
   // tok/s 实时优先、平均回退（speeds 组的 Rust 文本只含首 token）
   const tps = liveTps != null ? liveTps : avgTps;
   const tpsText = tps != null ? formatTps(tps) : '';
@@ -61,8 +63,8 @@ function formatTps(v) {
   return (Math.round(v * 10) / 10) + ' tok/s';
 }
 
-/// 窄窗口降级：从尾到首隐藏次要组（首组保底），隐藏组的完整信息经
-/// 系统默认 tooltip 可获。
+// 窄窗口降级：从尾到首隐藏次要组（首组保底），隐藏组的完整信息经
+// 系统默认 tooltip 可获。
 function fitGroups() {
   const el = $('stats');
   const groups = [...el.querySelectorAll('.g')];
@@ -100,9 +102,8 @@ function onStats(payload) {
       if (d && d.key && Array.isArray(d.lines)) detailsMap[d.key] = d.lines;
     });
   }
-  const edgeSep = $('edge-sep');
-  if (edgeSep) edgeSep.style.display = show ? '' : 'none';
   renderStats();
+  updateEdgeSeparator();
 }
 
 function onLiveRate(payload) {
@@ -116,9 +117,10 @@ function onLiveRate(payload) {
 
 function balanceChipState() {
   const b = lastBalance;
-  if (!b || !b.ok) return { text: '--', dot: 'err', kind: 'unavailable' };
-  if (b.errorKind === 'no_key') return { text: dshdT('balanceNoKey'), dot: 'neutral', kind: 'no_key' };
-  if (b.errorKind === 'invalid_key') return { text: dshdT('balanceInvalidKey'), dot: 'warn', kind: 'invalid_key' };
+  if (!b) return { text: '--', dot: 'err', kind: 'unavailable' };
+  if (b.error_kind === 'no_key') return { text: dshdT('balanceNoKey'), dot: 'neutral', kind: 'no_key' };
+  if (b.error_kind === 'invalid_key') return { text: dshdT('balanceInvalidKey'), dot: 'warn', kind: 'invalid_key' };
+  if (!b.ok) return { text: '--', dot: 'err', kind: 'unavailable' };
   if (b.error) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
   if (!b.balances || !b.balances.length) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
   const first = b.balances[0];
@@ -135,15 +137,13 @@ function balanceChipState() {
 function renderBalance() {
   const chip = $('balance-chip');
   const hide = currentSettings && currentSettings.hide_balance;
-  const sep = $('edge-sep');
   if (hide) {
     chip.style.display = 'none';
-    // 分隔线属于「余额尾组」，隐藏余额时一并隐藏；onStats 会按统计区状态重设
-    if (sep) sep.style.display = 'none';
+    updateEdgeSeparator();
     return;
   }
   chip.style.display = '';
-  if (sep) sep.style.removeProperty('display');
+  updateEdgeSeparator();
   const state = balanceChipState();
   const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
   chip.innerHTML =
@@ -154,19 +154,30 @@ function renderBalance() {
   if (state.kind === 'no_key') {
     // 未配置 Key：引导点击去设置页（不点 Details 语义）
     hints.push(dshdT('balanceNoKeyHint'));
+  } else if (state.kind === 'invalid_key') {
+    hints.push(dshdT('balanceInvalidKeyHint'));
   } else {
     hints.push(dshdT('balanceChipHint'));
   }
   if (lastBalance && lastBalance.stale) hints.push(dshdT('staleBalance'));
   chip.title = hints.join('\n');
-  chip.dataset.noKey = state.kind === 'no_key' ? '1' : '';
-  chip.setAttribute('aria-label', state.text + (state.kind === 'no_key' ? ' — ' + dshdT('balanceNoKeyHint') : ' — ' + dshdT('balanceDetailsAria')));
+  const credentialIssue = state.kind === 'no_key' || state.kind === 'invalid_key';
+  chip.dataset.credentialIssue = credentialIssue ? '1' : '';
+  const actionHint = state.kind === 'invalid_key' ? dshdT('balanceInvalidKeyHint') : dshdT('balanceNoKeyHint');
+  chip.setAttribute('aria-label', state.text + (credentialIssue ? ' — ' + actionHint : ' — ' + dshdT('balanceDetailsAria')));
+}
+
+function updateEdgeSeparator() {
+  const sep = $('edge-sep');
+  if (!sep) return;
+  const balanceVisible = !(currentSettings && currentSettings.hide_balance);
+  sep.style.display = statsGroups.length > 0 && balanceVisible ? '' : 'none';
 }
 
 function onBalance(payload) {
   // stale 保留：刷新失败但已有成功数据时保留上次金额（标记过期），
   // 而非丢弃旧值显示 --（借鉴 dsh-api-balance 的 stale-while-revalidate）
-  if (payload && !payload.ok && lastBalance && lastBalance.ok) {
+  if (payload && !payload.ok && !payload.error_kind && lastBalance && lastBalance.ok) {
     lastBalance = Object.assign({}, lastBalance, { stale: true });
     renderBalance();
     return;
@@ -232,8 +243,12 @@ function init() {
   const chip = $('balance-chip');
   chip.addEventListener('click', () => {
     // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开余额详情
-    const cmd = chip.dataset.noKey ? 'app_dialog_open_settings' : 'app_dialog_open_balance';
+    const cmd = chip.dataset.credentialIssue ? 'app_dialog_open_settings' : 'app_dialog_open_balance';
     invoke(cmd).catch(() => {});
+  });
+  statsEl.addEventListener('click', (event) => {
+    const group = event.target.closest('.g');
+    invoke('app_dialog_open_stats', { group: group ? group.dataset.key : null }).catch(() => {});
   });
   // 屏蔽 WebView 默认右键菜单（与标题栏一致）
   document.addEventListener('contextmenu', (event) => event.preventDefault());

@@ -4,13 +4,13 @@ fn main() {
     // 图标文件来源是 tauri.conf.json 的 bundle.icon（bundle 未激活，但 tauri-build
     // 仍从中取 .ico 嵌入 exe），因此 bundle.icon 列表不能删除。
     println!("cargo:rerun-if-changed=icons/icon.ico");
-    println!("cargo:rerun-if-changed=icons/favicon-source.svg");
+    println!("cargo:rerun-if-changed=../assets/brand/deepseek-mark.svg");
     // tauri-codegen 嵌入 frontendDist（../ui）资源时同样没有跟踪声明：
     // 补上目录级跟踪，改 UI 文件后 release 构建自动重新嵌入资源
     println!("cargo:rerun-if-changed=../ui");
     println!("cargo:rerun-if-changed=app.manifest.xml");
-    // 预设插件清单：改 resources/preset-plugins.json 后重新构建即生效
-    println!("cargo:rerun-if-changed=resources/preset-plugins.json");
+    // 内置插件清单：改 resources/builtin-plugins.json 后重新构建即生效
+    println!("cargo:rerun-if-changed=resources/builtin-plugins.json");
     // 自定义 Windows 应用清单：默认清单缺 dpiAwareness，高 DPI 屏（150%+）
     // 下窗口尺寸被系统虚拟化（逻辑像素按 96 DPI 解释），弹窗/主窗口偏小
     let mut windows = tauri_build::WindowsAttributes::new();

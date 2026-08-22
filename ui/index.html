@@ -4,253 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DeepSeek Harness Box</title>
-  <link rel="icon" href="assets/favicon.svg" />
+  <link rel="icon" href="assets/app-icon.svg" />
   <link rel="stylesheet" href="common.css" />
-  <style>
-:root {
-  --bg: var(--dshd-bg);
-  --card: var(--dshd-card);
-  --line: var(--dshd-border-strong);
-  --text: var(--dshd-text);
-  --muted: var(--dshd-text-dim);
-  --blue: var(--dshd-accent);
-  --blue-dim: var(--dshd-accent-hover);
-  --blue-surface: var(--dshd-accent-surface);
-  --blue-surface-hover: var(--dshd-accent-surface-hover);
-  --blue-surface-pressed: var(--dshd-accent-surface-pressed);
-  --red: var(--dshd-error-text);
-  --green: var(--dshd-success);
-}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  /* dsh 字体栈（dsw-font-family） */
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
-  background: radial-gradient(1200px 600px at 50% -10%, #1b1b26 0%, var(--bg) 60%);
-  color: var(--text);
-  display: flex; align-items: center; justify-content: center;
-  user-select: none; overflow: hidden;
-  /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪 */
-  transition: opacity .3s ease;
-}
-/* 就绪后由 app.js 添加：内容淡出，露出与 dsh 界面一致的深色背景 */
-body.fade-out { opacity: 0; }
-.stage {
-  width: 100%; height: 100%; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 20px;
-  /* 小屏兜底：内容超高时可滚动（卡片 margin:auto 在 flex 中仍居中，
-     溢出时顶部可达） */
-  overflow-y: auto;
-}
-.card { width: min(420px, 86vw); display: flex; flex-direction: column; align-items: center; gap: 8px; margin: auto; }
-.logo-wrap {
-  width: 56px; height: 56px;
-  display: flex; align-items: center; justify-content: center;
-  /* 蓝底与圆角由 app-icon.svg 自身提供（与标题栏/关于弹窗同款完整图标）；
-     此处仅作居中容器。不叠加动画/光晕：图标缩放与 box-shadow 沿圆角外扩
-     会让圆角外泛色、视觉不干净 */
-}
-.logo {
-  width: 56px; height: 56px;
-}
-.title { font-size: 20px; font-weight: 600; letter-spacing: .2px; margin-top: 4px; }
-.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 6px; }
-
-.status { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
-.status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
-.status-detail { text-align: center; font-size: 12px; color: var(--muted); min-height: 16px; }
-.bar { height: 4px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
-.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #679efe); transition: width .45s ease; animation: slide 1.4s linear infinite; }
-.bar-fill.determinate { animation: none; }
-.bar-fill.done { width: 100%; animation: none; }
-.bar-fill.err { width: 100%; background: var(--red); animation: none; }
-@keyframes slide { 0% { margin-left: -20%; } 100% { margin-left: 110%; } }
-
-.spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin var(--dshd-anim-spin); }
-/* 用 visibility 而非 display 隐藏：占位保留，就绪/失败切换时文字不跳动 */
-.spinner.hidden { visibility: hidden; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.error-box { width: 100%; background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .35); border-radius: 12px; padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
-.error-box.reveal { animation: error-in .11s ease-out; }
-@keyframes error-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-.error-head { display: flex; align-items: center; gap: 8px; }
-.error-icon { width: 18px; height: 18px; color: var(--red); flex: none; }
-.error-title { font-size: 14px; font-weight: 600; color: var(--red); }
-.error-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
-.error-hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
-.error-msg { font-size: 12px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; max-height: 96px; overflow: auto; user-select: text; }
-.error-actions { display: flex; gap: 8px; }
-.update-box { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.update-line { font-size: 12px; color: var(--muted); }
-.update-actions { display: flex; gap: 8px; }
-
-.btn {
-  background: #23232b; color: var(--text); border: 1px solid var(--line);
-  /* dsh 按钮圆角 18px pill */
-  border-radius: var(--dshd-r-btn); padding: 7px 16px; font-size: 13px; cursor: pointer;
-  transition: var(--dshd-anim-state);
-}
-.btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
-.btn:active { background: var(--dshd-pressed); }
-.btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
-.btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
-.btn.primary:active { background: var(--blue-surface-pressed); border-color: var(--blue-surface-pressed); }
-.btn:disabled { cursor: default; opacity: .55; }
-.btn:disabled:hover { background: #23232b; border-color: var(--line); }
-.btn.primary:disabled:hover { background: var(--blue-surface); border-color: var(--blue-surface); }
-.btn.small { padding: 4px 12px; font-size: 12px; }
-.hidden { display: none !important; }
-
-.footer { position: fixed; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); }
-.versions { opacity: .75; }
-
-/* 首次使用配置：现代 onboarding 卡片——大内边距、分段控件、全宽主按钮 */
-.ob-box {
-  width: 100%;
-  max-width: 480px;
-  margin-top: 12px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  /* dsh 弹窗圆角 24px */
-  border-radius: 24px;
-  padding: 20px 24px;
-  display: flex; flex-direction: column; gap: 16px;
-  text-align: left;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, .28);
-}
-.ob-head { display: flex; flex-direction: column; gap: 6px; }
-.ob-title { font-size: 20px; font-weight: 600; letter-spacing: .1px; }
-.ob-sub { font-size: 13px; color: var(--muted); line-height: 1.6; }
-.ob-section { display: flex; flex-direction: column; gap: 12px; }
-.ob-sec-label { font-size: 11px; color: var(--muted); letter-spacing: .8px; text-transform: uppercase; }
-.ob-field { display: flex; flex-direction: column; gap: 7px; }
-.ob-label { font-size: 13px; color: var(--muted); }
-.ob-input {
-  height: 38px; background: var(--dshd-hover); border: 1px solid var(--line);
-  border-radius: 10px; padding: 0 12px; color: var(--text); font-size: 14px;
-  outline: none; transition: var(--dshd-anim-state);
-}
-.ob-input:hover { border-color: var(--dshd-text-dim); background: var(--dshd-pressed); }
-.ob-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(86, 134, 254, .18); }
-.ob-hint { font-size: 11.5px; color: var(--muted); }
-.ob-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-/* —— dsh 设置下拉：trigger 容器默认态（border-l2 + bg-layer-2），
-   12px 圆角、14px/22px；列表 7px 圆角；选中项勾选标记 + ghost-active-fill —— */
-.dshd-select { position: relative; }
-.dshd-select-trigger {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 32px; min-width: 112px; padding: 0 10px 0 12px;
-  border: 1px solid var(--dshd-border); border-radius: 12px;
-  background: var(--dshd-hover); color: var(--text);
-  font: inherit; font-size: 14px; line-height: 22px; cursor: pointer; outline: none;
-  transition: var(--dshd-anim-state);
-}
-.dshd-select-trigger:hover { border-color: var(--dshd-border-strong); }
-.dshd-select-trigger:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.dshd-select-value { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dshd-select-arrow {
-  width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
-  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted);
-}
-/* compactList：min-width 164、padding 2、7px 圆角、1px border-inverted、
-   背景 = dsh 菜单色（specific-menu） */
-.dshd-select-list {
-  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
-  min-width: 140px; margin: 0; padding: 4px; list-style: none;
-  border: 1px solid var(--dshd-border); border-radius: 7px;
-  background: var(--dshd-card); color: var(--text);
-  box-shadow: 0 0 1px 0 rgba(0, 0, 0, .2), 0 0 4px 0 rgba(0, 0, 0, .02), 0 12px 32px 0 rgba(0, 0, 0, .08);
-}
-.dshd-select-list[hidden] { display: none; }
-.dshd-select-list li {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-radius: 5px; font-size: 14px; line-height: 22px;
-  cursor: pointer; white-space: nowrap;
-  transition: var(--dshd-anim-state);
-}
-.dshd-select-list li:hover { background: var(--dshd-hover); }
-/* 勾选标记：右侧（dsh 下拉勾在文字右侧），margin-left:auto 推至行尾 */
-.dshd-select-list li::after {
-  content: ""; width: 14px; height: 14px; flex: none;
-  margin-left: auto;
-}
-.dshd-select-list li[aria-selected="true"]::after {
-  content: "✓"; color: var(--dshd-selected-text); font-size: 12px; line-height: 14px;
-  text-align: center;
-}
-/* 选中：dsh ghost-active-fill（bluish-750 深色） + label-primary */
-.dshd-select-list li[aria-selected="true"] { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
-.ob-switch { position: relative; width: 38px; height: 22px; flex: none; }
-.ob-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-.ob-track {
-  display: block; width: 100%; height: 100%; border-radius: 999px;
-  /* dshmarket 开关：未选中 bg-layer-2 + border-l2 */
-  background: var(--dshd-switch-bg); border: 1px solid var(--dshd-border-strong);
-  transition: var(--dshd-anim-state);
-}
-.ob-track::before {
-  content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; border-radius: 50%; background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
-  transition: var(--dshd-anim-state);
-}
-.ob-switch input:checked + .ob-track { background: var(--dshd-switch-on); border-color: var(--dshd-switch-on); }
-.ob-switch input:checked + .ob-track::before { transform: translate(18px, -50%); background: #fff; }
-.ob-switch input:focus-visible + .ob-track { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ob-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
-.ob-primary { width: 100%; height: 38px; font-size: 14px; font-weight: 500; }
-.ob-skip-btn {
-  background: none; border: none; color: var(--muted); font-size: 12.5px;
-  /* button 的 font 默认不继承 UA 样式（Arial + line-height normal），
-     中英文行盒随字体变化（中文 fallback 行盒更高），导致切换语言时
-     按钮高度差 5px、卡片整体位移；显式继承字体并固定行高使其一致 */
-  font-family: inherit; line-height: 1.4;
-  cursor: pointer; padding: 4px; align-self: center; border-radius: 6px;
-  transition: color var(--dshd-m-fast) var(--dshd-ease-out);
-}
-.ob-skip-btn:hover { color: var(--text); }
-.ob-skip-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ob-skip-btn:disabled { opacity: .55; cursor: default; }
-.ob-error { font-size: 12.5px; color: var(--red); overflow-wrap: anywhere; line-height: 1.5; }
-@media (prefers-color-scheme: light) {
-  .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
-  .ob-input { background: #fff; }
-  .ob-input:focus { box-shadow: 0 0 0 3px rgba(86, 134, 254, .14); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ob-input, .ob-track, .ob-track::before, .ob-skip-btn { transition: none; }
-}
-/* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
-@media (prefers-color-scheme: light) {
-  body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
-  .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
-  .btn:hover { background: #e6e8ef; }
-  .btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
-  .btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
-  .error-box { background: rgba(248, 81, 73, .06); }
-  .spinner { border-color: var(--line); border-top-color: var(--blue); }
-}
-
-/* 系统“减弱动态效果”：关闭全部动画 */
-@media (prefers-reduced-motion: reduce) {
-  body { transition: none; }
-  .spinner { animation: none; }
-  .bar-fill { animation: none; transition: none; }
-  .error-box.reveal { animation: none; }
-}
-</style>
+  <link rel="stylesheet" href="startup.css" />
 </head>
 <body>
   <main class="stage">
     <div class="card">
       <div class="logo-wrap" aria-hidden="true">
-        <!-- 用 app-icon.svg（蓝底白鲸，固定 fill）：favicon.svg 的鲸鱼为
-             fill="#000" 且仅媒体查询变白，而 <img> 内 SVG 是独立文档，
-             外部 CSS 与 Tauri 窗口强制主题都不生效 → 黑鲸 -->
+        <!-- 使用与窗口图标同源的 app-icon.svg，避免多份品牌资源漂移。 -->
         <img class="logo" src="assets/app-icon.svg" alt="" />
       </div>
       <h1 class="title">DeepSeek Harness Box</h1>
@@ -265,8 +27,8 @@ body.fade-out { opacity: 0; }
           <div class="ob-sec-label">API</div>
           <label class="ob-field">
             <span class="ob-label">DeepSeek API Key</span>
-            <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-            <span class="ob-hint" data-i18n="apiKeyHint">留空则之后在 dsh 设置页配置</span>
+            <input id="ob-apikey" class="ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" aria-describedby="ob-apikey-hint ob-error" />
+            <span id="ob-apikey-hint" class="ob-hint" data-i18n="apiKeyHint">留空则之后可在桌面端设置中配置</span>
           </label>
         </div>
         <div class="ob-section">
@@ -305,6 +67,16 @@ body.fade-out { opacity: 0; }
               <span class="ob-track" aria-hidden="true"></span>
             </span>
           </label>
+          <label class="ob-row ob-switch-row ob-consent-row">
+            <span class="ob-option-copy">
+              <span class="ob-label" data-i18n="builtinPluginsOptIn">安装推荐插件</span>
+              <span class="ob-hint" data-i18n="builtinPluginsOptInDesc">自动安装 DSH Market 与 File Drop，并每日检查更新；可取消勾选。</span>
+            </span>
+            <span class="ob-switch">
+              <input id="ob-builtin-plugins" type="checkbox" role="switch" checked />
+              <span class="ob-track" aria-hidden="true"></span>
+            </span>
+          </label>
         </div>
         <div class="ob-actions">
           <button type="button" id="ob-start" class="btn primary ob-primary" data-i18n="startUsing">开始使用</button>
@@ -320,6 +92,15 @@ body.fade-out { opacity: 0; }
         </div>
         <div id="progress-bar" class="bar" role="progressbar" data-i18n-aria-label="startProgress" aria-valuemin="0" aria-valuemax="100"><div id="bar-fill" class="bar-fill"></div></div>
         <div id="status-detail" class="status-detail"></div>
+        <div id="install-actions" class="install-actions hidden">
+          <span class="install-source-label" data-i18n="installSource">下载源</span>
+          <div class="install-source" role="group" data-i18n-aria-label="installSource">
+            <button type="button" class="btn small source-choice" data-source="auto" data-i18n="installSourceAuto">自动</button>
+            <button type="button" class="btn small source-choice" data-source="official" data-i18n="installSourceOfficial">官方</button>
+            <button type="button" class="btn small source-choice" data-source="mirror" data-i18n="installSourceMirror">镜像</button>
+          </div>
+          <button type="button" id="btn-cancel-install" class="btn small" data-i18n="cancelInstall">取消安装</button>
+        </div>
       </div>
 
       <div id="error-box" class="error-box hidden" role="alert" aria-live="assertive" tabindex="-1">
@@ -350,7 +131,8 @@ body.fade-out { opacity: 0; }
     </div>
   </main>
 
+  <script src="i18n.js"></script>
   <script src="common.js"></script>
-  <script src="app.js"></script>
+  <script src="startup.js"></script>
 </body>
 </html>

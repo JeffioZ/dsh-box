@@ -1,4 +1,4 @@
-//! 提取文件/应用的 16×16 小图标并编码为 PNG（右键菜单图标显示用）。
+//! 提取文件/应用关联的 16×16 小图标并编码为 PNG（右键菜单图标显示用）。
 //!
 //! Windows 走 SHGetFileInfoW（文件 → 关联应用图标；exe → 自身图标），
 //! HICON 经 GetDIBits 取 32bpp BGRA 像素后手写 PNG 编码（flate2 压缩），

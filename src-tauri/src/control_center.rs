@@ -1,4 +1,4 @@
-//! 统一自绘弹窗（app-dialog 窗口 + dialog.html）：
+//! 统一控制中心（兼容窗口标签 app-dialog）：
 //! 余额详情 / 检查更新（带进度）/ 关于。
 //!
 //! 替代原生消息框：立即出窗显示进度，网络查询后台进行、结果经事件下发，
@@ -11,6 +11,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_state::AppState;
 
+static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CHECK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// 弹窗窗口 label。
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 
@@ -19,7 +22,7 @@ pub const APP_DIALOG_WINDOW: &str = "app-dialog";
 /// 内容区滚动浏览，轻量页（余额/设置/关于）不再因统一高度而大片留空。
 /// 高度不做按 kind 切换（切换时窗口跳变观感差），统一折中。
 /// 自绘阴影余量（dsh shadow-lv3：上扩 20px、下 12px+32px、左右 32px 扩散）：
-/// 透明窗口 = 卡片 + 阴影空间，阴影由 dialog.html 卡片层自绘；
+/// 透明窗口 = 卡片 + 阴影空间，阴影由 control-center.html 卡片层自绘；
 /// 余量不足会被窗口边缘硬切（视觉不自然）。
 const SHADOW_TOP: f64 = 24.0;
 const SHADOW_BOTTOM: f64 = 48.0;
@@ -62,7 +65,7 @@ fn main_is_presented(main: &tauri::Window) -> bool {
 #[derive(serde::Serialize, Clone)]
 pub struct AppDialogOpen {
     pub title: String,
-    /// balance / check / about
+    /// stats / balance / check / plugins / settings / about
     pub kind: String,
     pub initial: serde_json::Value,
 }
@@ -100,7 +103,7 @@ pub fn precreate(app: &AppHandle) {
     let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         APP_DIALOG_WINDOW,
-        WebviewUrl::App("dialog.html".into()),
+        WebviewUrl::App("control-center.html".into()),
     )
     .title(crate::APP_TITLE)
     .inner_size(dialog_w, dialog_h);
@@ -135,7 +138,7 @@ pub fn precreate(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            // 透明窗口：背景色由 dialog.html 的卡片层自绘（含 24px 圆角），
+            // 透明窗口：背景色由 control-center.html 的卡片层自绘（含 24px 圆角），
             // 窗口本身不设背景色；关闭系统圆角裁剪避免与自绘圆角叠加
             let theme = app.state::<AppState>().config().resolve_dsh_theme();
             if let Some(theme) = theme {
@@ -167,26 +170,9 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
         }
     };
     // 代次 +1：若上次关闭的延迟隐藏尚未执行，令其失效，避免误藏本次弹窗
-    app.state::<AppState>().bump_dialog_gen();
+    let dialog_gen = app.state::<AppState>().bump_dialog_gen();
     let (ww, wh) = dialog_size(app);
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(ww, wh)));
-    // 等待尺寸生效（异步 IPC）：弹窗预创建于 setup 早期（主窗口尚未恢复尺寸），
-    // 第一次 show 时几何与预创建不同——若立即 show，首帧按旧几何显示后跳到
-    // 新几何，造成"位置不对 + 闪一下"；等待生效后再显示可消除
-    for _ in 0..30 {
-        let ok = win
-            .inner_size()
-            .map(|s| {
-                let scale = win.scale_factor().unwrap_or(1.0);
-                (s.width as f64 / scale - ww).abs() < 1.0
-                    && (s.height as f64 / scale - wh).abs() < 1.0
-            })
-            .unwrap_or(false);
-        if ok {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
     let mut target_pos: Option<(f64, f64)> = None;
     let main = crate::main_window(app);
     let main_presented = main.as_ref().is_some_and(main_is_presented);
@@ -252,40 +238,16 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
             let _ = win.center();
         }
     }
-    // 等位置生效（异步 IPC）：首帧若按窗口默认位置显示再跳到目标位置，
-    // 会闪一下且位置"不对"（第二次起窗口已在目标位置所以正常）
-    if let Some((tx, ty)) = target_pos {
-        for _ in 0..30 {
-            let ok = win
-                .outer_position()
-                .map(|p| {
-                    let scale = win.scale_factor().unwrap_or(1.0);
-                    (p.x as f64 / scale - tx).abs() < 1.0 && (p.y as f64 / scale - ty).abs() < 1.0
-                })
-                .unwrap_or(false);
-            if ok {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        if let Ok(p) = win.outer_position() {
-            let scale = win.scale_factor().unwrap_or(1.0);
-            crate::logging::log(&format!(
-                "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
-                p.x as f64 / scale,
-                p.y as f64 / scale
-            ));
-        }
-    }
     // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。
     let mut initial = if initial.is_object() {
         initial
     } else {
         serde_json::json!({})
     };
-    let obj = initial
-        .as_object_mut()
-        .expect("dialog initial must be an object");
+    let Some(obj) = initial.as_object_mut() else {
+        crate::logging::log("app-dialog: 初始载荷无法转换为对象，已取消显示");
+        return;
+    };
     obj.insert(
         "app_version".into(),
         serde_json::json!(env!("CARGO_PKG_VERSION")),
@@ -306,19 +268,44 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
     // 事件通道对隐藏窗口不可靠，下方 emit 仅作兜底（页面按载荷印章去重）
     let json = serde_json::to_string(&payload).unwrap_or_default();
     let _ = win.eval(format!("window.__dshdOpen && window.__dshdOpen({json})"));
-    let _ = win.show();
     if let Err(e) = app.emit_to(APP_DIALOG_WINDOW, "app-dialog-open", payload) {
         crate::logging::log(&format!("app-dialog: 事件下发失败：{e}"));
     }
-    let _ = win.set_focus();
-    // 模态：主窗口可见时禁用之（点击主窗口无效，符合系统模态语义）；
-    // 主窗口隐藏（仅托盘运行）时不处理，弹窗独立显示。关闭时恢复。
-    if let Some(main) = main {
-        if main_presented {
-            let _ = main.set_enabled(false);
-            app.state::<AppState>().set_main_disabled(true);
-        }
-    }
+    // 尺寸/位置设置交给事件循环处理一帧后再显示，既保留首帧位置稳定性，
+    // 又不在主线程用最多 1.2 秒的 sleep 轮询阻塞标题栏与菜单响应。
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        let dispatch = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            if dispatch.state::<AppState>().dialog_gen() != dialog_gen {
+                return;
+            }
+            let Some(win) = dispatch.get_webview_window(APP_DIALOG_WINDOW) else {
+                return;
+            };
+            if let Some((tx, ty)) = target_pos {
+                if let Ok(position) = win.outer_position() {
+                    let scale = win.scale_factor().unwrap_or(1.0);
+                    crate::logging::log(&format!(
+                        "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
+                        position.x as f64 / scale,
+                        position.y as f64 / scale
+                    ));
+                }
+            }
+            let _ = win.show();
+            let _ = win.set_focus();
+            // 模态：只在弹窗真正显示的同一代次禁用主窗口；关闭/快速重开
+            // 让旧代次失效，不会留下主窗口被禁用的孤立状态。
+            if main_presented {
+                if let Some(main) = crate::main_window(&dispatch) {
+                    let _ = main.set_enabled(false);
+                    dispatch.state::<AppState>().set_main_disabled(true);
+                }
+            }
+        });
+    });
 }
 
 /// 隐藏弹窗（关闭按钮/动作完成后）：恢复主窗口可用状态。
@@ -435,23 +422,40 @@ pub fn run_check(app: &AppHandle) {
     if app.state::<AppState>().is_updating() {
         return;
     }
-    // 防并发：上一轮检查未完成则忽略本次（更新源切换后连续触发时，
-    // 旧通道的晚到结果不会覆盖新通道的检查）
-    static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if CHECKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
+    // 每次请求都推进代次。已有检查不并发启动，但完成后会发现代次变化并按
+    // 最新配置重跑；旧通道的晚到结果因此既不会覆盖，也不会让新请求丢失。
+    CHECK_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let handle = app.clone();
     handle.state::<AppState>().set_last_check(None);
     handle.state::<AppState>().set_update_done(false, None);
     handle.state::<AppState>().set_check_progress(Some(
         crate::locale::text("正在检查更新…", "Checking for updates…").into(),
     ));
+    if CHECKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     std::thread::spawn(move || {
-        let result = crate::updater::check(&handle);
-        handle.state::<AppState>().set_last_check(Some(result));
-        handle.state::<AppState>().set_check_progress(None);
-        CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
+        loop {
+            let generation = CHECK_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+            let result = crate::updater::check(&handle);
+            if CHECK_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                continue;
+            }
+            handle.state::<AppState>().set_last_check(Some(result));
+            handle.state::<AppState>().set_check_progress(None);
+            CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
+            // 覆盖“结果提交”和释放 CHECKING 之间到达的新请求。若另一线程已
+            // 抢到检查权，本线程退出；否则继续复用当前线程完成最新代次。
+            if CHECK_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation
+                || CHECKING.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                break;
+            }
+            handle.state::<AppState>().set_last_check(None);
+            handle.state::<AppState>().set_check_progress(Some(
+                crate::locale::text("正在检查更新…", "Checking for updates…").into(),
+            ));
+        }
     });
 }
 
@@ -498,6 +502,15 @@ pub fn open_plugins(app: &AppHandle) {
         crate::locale::text("插件管理", "Plugin manager"),
         "plugins",
         serde_json::json!({}),
+    );
+}
+
+pub fn open_stats(app: &AppHandle, group: Option<&str>) {
+    show(
+        app,
+        crate::locale::text("会话统计", "Session stats"),
+        "stats",
+        serde_json::json!({ "group": group }),
     );
 }
 

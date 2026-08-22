@@ -4,8 +4,6 @@
 //! 只读复用官方会话日志（不建立第二套运行时/数据库）；解析失败仅跳过
 //! 该轮，不影响外壳主流程。
 
-use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -17,21 +15,19 @@ use crate::app_state::AppState;
 
 /// 轮询间隔：会话日志由 mtime 变化驱动，不需要太密。
 const POLL_INTERVAL: Duration = Duration::from_secs(20);
-/// 单个会话文件压缩体积上限：异常大文件跳过，避免轮询卡顿。
-const MAX_SESSION_COMPRESSED: u64 = 256 * 1024 * 1024;
-
 struct WatchedSession {
+    path: PathBuf,
     mtime: Option<SystemTime>,
-    /// 文件尾部最近一次观察到的 turn/end 序号。
-    last_turn_end_seq: Option<u64>,
     /// 已通知过的最大 turn/end 序号（None = 首次见到，不通知）。
     notified_seq: Option<u64>,
+    /// 区分“刚开始观察，不通知历史事件”和“观察时尚无完成事件”。
+    initialized: bool,
 }
 
 /// 启动任务完成监视（后台线程，退出中自动停止）。
 pub fn start_task_watch(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut watched: HashMap<PathBuf, WatchedSession> = HashMap::new();
+        let mut watched: Option<WatchedSession> = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
             if app.state::<AppState>().is_quitting() {
@@ -44,126 +40,76 @@ pub fn start_task_watch(app: AppHandle) {
     });
 }
 
-fn poll_once(
-    app: &AppHandle,
-    watched: &mut HashMap<PathBuf, WatchedSession>,
-) -> Result<(), String> {
-    let sessions_root = app.state::<AppState>().config().dsh_home().join("sessions");
-    if !sessions_root.is_dir() {
-        return Ok(()); // dsh 尚未产生会话目录，静默等待
-    }
-    let mut current: HashMap<PathBuf, SystemTime> = HashMap::new();
-    collect_sessions(&sessions_root, &mut current)?;
-
-    // 清理已删除的会话
-    watched.retain(|p, _| current.contains_key(p));
-
-    for (path, mtime) in current {
-        let entry = watched.entry(path.clone()).or_insert(WatchedSession {
-            mtime: None,
-            last_turn_end_seq: None,
-            notified_seq: None,
-        });
-        if entry.mtime == Some(mtime) {
-            continue; // 文件未变：不重复解压
-        }
-        entry.mtime = Some(mtime);
-        let Some(seq) = latest_turn_end_seq(&path)? else {
-            continue; // 没有 turn/end（空会话/异常文件），等待下次变化
-        };
-        let is_new = entry.notified_seq.is_some_and(|notified| seq > notified);
-        entry.last_turn_end_seq = Some(seq);
-        entry.notified_seq = Some(seq);
-        if !is_new {
-            continue;
-        }
-        // 主窗口不可见（最小化/隐藏到托盘）时才通知，避免打扰正在查看的用户
-        let visible = crate::main_window(app)
-            .and_then(|w| w.is_visible().ok())
-            .unwrap_or(true);
-        if !visible {
-            crate::logging::log(&format!(
-                "notify: 会话 {} 出现新完成轮次（seq {seq}），发送系统通知",
-                path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-            ));
-            show_notification(app)?;
-        }
-    }
-    Ok(())
-}
-
-/// 递归收集所有 `session.jsonl.zstd` 及其 mtime。
-fn collect_sessions(root: &Path, out: &mut HashMap<PathBuf, SystemTime>) -> Result<(), String> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|e| format!("读取会话目录失败：{e}"))?;
-        for ent in entries.flatten() {
-            let p = ent.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.file_name().and_then(|n| n.to_str()) == Some("session.jsonl.zstd")
-                && !p.to_string_lossy().contains(".pre-repair-bak")
-            {
-                if let Ok(meta) = ent.metadata() {
-                    if let Ok(mtime) = meta.modified() {
-                        out.insert(p, mtime);
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 解压上限：防止高压缩比会话日志膨胀耗尽内存（压缩体积上限见下）。
-const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
-
-/// 解压会话日志，返回最后一个 `turn/end` 事件的 seq（无则 None）。
-/// 只做尾部行级扫描，不全量 JSON 解析。
-fn latest_turn_end_seq(path: &Path) -> Result<Option<u64>, String> {
-    let meta = std::fs::metadata(path).map_err(|e| format!("读取会话文件失败：{e}"))?;
-    if meta.len() > MAX_SESSION_COMPRESSED {
-        return Ok(None); // 异常大文件：跳过，不阻塞轮询
-    }
-    let file = std::fs::File::open(path).map_err(|e| format!("打开会话文件失败：{e}"))?;
-    let mut decoder =
-        zstd::stream::read::Decoder::new(file).map_err(|e| format!("zstd 解压失败：{e}"))?;
-    let mut buf = Vec::new();
-    // 解压膨胀超限即跳过（高压缩比日志可能膨胀到 GB 级）
-    decoder
-        .by_ref()
-        .take(MAX_DECOMPRESSED_BYTES + 1)
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("zstd 解压失败：{e}"))?;
-    if buf.len() as u64 > MAX_DECOMPRESSED_BYTES {
-        return Ok(None);
-    }
-    let text = String::from_utf8_lossy(&buf);
-    // 从尾部找最后一个 turn/end 行，提取其 seq
-    let marker = "\"type\":\"turn/end\"";
-    let Some(pos) = text.rfind(marker) else {
-        return Ok(None);
+fn poll_once(app: &AppHandle, watched: &mut Option<WatchedSession>) -> Result<(), String> {
+    let config = app.state::<AppState>().config();
+    let Some(session_id) = crate::stats::current_session_id(&config) else {
+        return Ok(());
     };
-    let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line = &text[line_start..];
-    let line = line.split('\n').next().unwrap_or(line);
-    let seq = parse_seq(line);
-    Ok(seq)
+    let path = config
+        .dsh_home()
+        .join("sessions")
+        .join(session_id)
+        .join("session.jsonl.zstd");
+    let Ok(mtime) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+        return Ok(());
+    };
+    if watched.as_ref().is_none_or(|entry| entry.path != path) {
+        *watched = Some(WatchedSession {
+            path: path.clone(),
+            mtime: None,
+            notified_seq: None,
+            initialized: false,
+        });
+    }
+    let Some(entry) = watched.as_mut() else {
+        return Ok(());
+    };
+    if entry.mtime == Some(mtime) {
+        return Ok(());
+    }
+    // 只有尾帧读取/解析成功后才提交 mtime；瞬时读失败留到下一轮重试，
+    // 避免把一次错误永久记成“已处理”而漏掉完成通知。
+    let latest = latest_turn_end_seq(&path)?;
+    entry.mtime = Some(mtime);
+    if !entry.initialized {
+        entry.initialized = true;
+        entry.notified_seq = latest;
+        return Ok(());
+    }
+    let Some(seq) = latest else {
+        return Ok(());
+    };
+    let is_new = entry.notified_seq.is_none_or(|notified| seq > notified);
+    entry.notified_seq = Some(seq);
+    if is_new && !crate::main_is_visible(app) {
+        crate::logging::log(&format!(
+            "notify: 当前会话出现新完成轮次（seq {seq}），发送系统通知"
+        ));
+        show_notification(app)?;
+    }
+    Ok(())
 }
 
-/// 从事件行提取 `"seq":<n>` 字段（行级轻量解析；取行尾最后一个 seq，
-/// 避免事件 data 内自带的同名字段干扰）。
-fn parse_seq(line: &str) -> Option<u64> {
-    let idx = line.rfind("\"seq\"")?;
-    let rest = &line[idx + 5..];
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
-    }
+#[derive(serde::Deserialize)]
+struct EventHeader {
+    #[serde(rename = "type")]
+    kind: String,
+    seq: Option<u64>,
+}
+
+/// 只解压追加式会话日志的尾帧，返回最后一个顶层 `turn/end` 事件序号。
+/// 大会话的轮询成本因此固定在尾部窗口，不再每 20 秒全量解压数百 MB。
+fn latest_turn_end_seq(path: &Path) -> Result<Option<u64>, String> {
+    let frames = crate::session_log::read_tail_frames(path, 8)
+        .map_err(|error| format!("读取会话尾帧失败：{error}"))?;
+    Ok(frames
+        .iter()
+        .find_map(|text| text.lines().rev().find_map(parse_turn_end_seq)))
+}
+
+fn parse_turn_end_seq(line: &str) -> Option<u64> {
+    let event: EventHeader = serde_json::from_str(line).ok()?;
+    (event.kind == "turn/end").then_some(event.seq).flatten()
 }
 
 fn show_notification(app: &AppHandle) -> Result<(), String> {
@@ -183,16 +129,26 @@ fn show_notification(app: &AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_seq;
+    use super::parse_turn_end_seq;
 
     #[test]
     fn extracts_seq_from_event_line() {
         assert_eq!(
-            parse_seq(r#"{"type":"turn/end","seq":187,"time":1786779959436,"data":{}}"#),
+            parse_turn_end_seq(r#"{"type":"turn/end","seq":187,"time":1786779959436,"data":{}}"#),
             Some(187)
         );
-        assert_eq!(parse_seq(r#"{"type":"turn/start","seq":6}"#), Some(6));
-        assert_eq!(parse_seq(r#"{"type":"session"}"#), None);
-        assert_eq!(parse_seq(""), None);
+        assert_eq!(parse_turn_end_seq(r#"{"type":"turn/start","seq":6}"#), None);
+        assert_eq!(parse_turn_end_seq(r#"{"type":"session"}"#), None);
+        assert_eq!(parse_turn_end_seq(""), None);
+    }
+
+    #[test]
+    fn nested_seq_cannot_override_the_top_level_sequence() {
+        assert_eq!(
+            parse_turn_end_seq(
+                r#"{"type":"turn/end","seq":7,"data":{"seq":999,"type":"turn/end"}}"#
+            ),
+            Some(7)
+        );
     }
 }

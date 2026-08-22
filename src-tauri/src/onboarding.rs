@@ -2,10 +2,9 @@
 //!
 //! 提供 API Key、界面语言、主题与开机自启动四项配置。全部写入 dsh 的
 //! 原生配置文件（`$DSH_HOME/.credentials.yaml`、`$DSH_HOME/settings.yaml`）
-//! 与外壳 config.json——不修改 dsh 代码，dsh 界面即时可见。
+//! 与外壳用户配置——不修改 dsh 代码，dsh 界面即时可见。
 //!
-//! 触发规则：config.json 无 `onboarded: true` 标记（保存或跳过都会落标记，
-//! 之后不再打扰）。跳过不写入任何用户配置。
+//! 完成标记写入内部 `state.json`。
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -20,7 +19,7 @@ const DEEPSEEK_API_KEY_NAME: &str = "DEEPSEEK_API_KEY";
 pub struct OnboardingState {
     /// 是否显示首次配置。
     pub needs_onboarding: bool,
-    /// 是否已配置 API Key（外壳 config 或 dsh 凭据文件任一存在）。
+    /// 是否已通过环境变量或 dsh 凭据文件配置 API Key。
     pub api_key_set: bool,
     /// 当前界面语言（zh-CN / en）。
     pub language: String,
@@ -28,6 +27,8 @@ pub struct OnboardingState {
     pub theme: String,
     /// 开机自启动当前状态。
     pub autostart: bool,
+    /// 是否默认勾选内置插件安装（仅首次引导展示；新安装默认开启）。
+    pub install_builtin_plugins: bool,
 }
 
 #[derive(Deserialize)]
@@ -43,6 +44,8 @@ pub struct OnboardingPayload {
     pub theme: Option<String>,
     /// 开机自启动。
     pub autostart: Option<bool>,
+    /// 用户是否同意自动安装并维护内置插件；缺失按未同意处理。
+    pub install_builtin_plugins: Option<bool>,
 }
 
 /// 读取首次配置状态（启动页拉取用）。
@@ -50,7 +53,10 @@ pub fn state(app: &AppHandle) -> OnboardingState {
     let config = app.state::<AppState>().config();
     OnboardingState {
         needs_onboarding: needs_onboarding(&config),
-        api_key_set: config.api_key.is_some() || dsh_credentials_has_api_key(&config),
+        api_key_set: ["DSH_BOX_API_KEY", "DEEPSEEK_API_KEY"]
+            .iter()
+            .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+            || crate::credentials::has(&config, DEEPSEEK_API_KEY_NAME),
         language: if crate::locale::is_chinese() {
             "zh-CN".to_string()
         } else {
@@ -58,64 +64,84 @@ pub fn state(app: &AppHandle) -> OnboardingState {
         },
         theme: config.load_dsh_theme().unwrap_or("system").to_string(),
         autostart: crate::autostart::is_enabled(),
+        install_builtin_plugins: true,
     }
 }
 
 /// 保存首次配置（“开始使用”或“跳过”）。
 pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     let config = app.state::<AppState>().config();
-    // 先持久化 onboarded：即使后续可选配置失败，下次启动也不重复引导；
-    // 只有这一步成功后才放行 boot，避免保存失败但内存状态已完成。
-    app_state::save_config_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
-    app_state::mark_onboarding_done();
     if payload.skip {
+        app_state::save_state_value(
+            &config.root,
+            "builtin_plugins_enabled",
+            serde_json::json!(false),
+        )?;
+        finish_onboarding(&config)?;
         return Ok(());
     }
 
-    let mut credentials_changed = false;
-    if let Some(key) = payload
+    let api_key = payload
         .api_key
         .as_deref()
         .map(str::trim)
-        .filter(|k| !k.is_empty())
+        .filter(|key| !key.is_empty());
+    if api_key.is_some_and(|key| key.chars().any(char::is_control)) {
+        return Err(crate::locale::text(
+            "API Key 含有不允许的控制字符。",
+            "The API key contains invalid control characters.",
+        )
+        .into());
+    }
+    if payload
+        .language
+        .as_deref()
+        .is_some_and(|language| !matches!(language, "zh-CN" | "en"))
     {
+        return Err(crate::locale::text("不支持的界面语言。", "Unsupported UI language.").into());
+    }
+    if payload
+        .theme
+        .as_deref()
+        .is_some_and(|theme| !matches!(theme, "light" | "dark" | "system"))
+    {
+        return Err(crate::locale::text("不支持的主题。", "Unsupported theme.").into());
+    }
+
+    let mut credentials_changed = false;
+    if let Some(key) = api_key {
         save_credentials_api_key(&config, key)?;
-        // config.json 的 api_key 仅为外壳余额查询的便捷副本：写入失败只记
-        // 日志不阻断（凭据已写入 dsh 文件，balance 会回退到凭据文件解析）
-        if let Err(e) = app_state::save_config_value(
-            &config.root,
-            "api_key",
-            serde_json::Value::String(key.to_string()),
-        ) {
-            crate::logging::log(&format!(
-                "onboarding: config.json 写入 api_key 失败（凭据已保存）：{e}"
-            ));
-        }
         credentials_changed = true;
     }
 
     if let Some(language) = payload.language.as_deref() {
-        if matches!(language, "zh-CN" | "en") {
-            app.state::<AppState>().set_ui_language(language)?;
-            // 同步 dsh 界面语言（dsh 语言 id 为 zh/en；文件监视器热发布）
-            let dsh_locale = if language == "zh-CN" { "zh" } else { "en" };
-            if let Err(e) = config.save_dsh_locale(dsh_locale) {
-                crate::logging::log(&format!("onboarding: 同步 dsh 语言失败：{e}"));
-            }
-            crate::tray::apply_language(app, language);
+        app.state::<AppState>().set_ui_language(language)?;
+        // 同步 dsh 界面语言（dsh 语言 id 为 zh/en；文件监视器热发布）
+        let dsh_locale = if language == "zh-CN" { "zh" } else { "en" };
+        if let Err(e) = config.save_dsh_locale(dsh_locale) {
+            crate::logging::log(&format!("onboarding: 同步 dsh 语言失败：{e}"));
         }
+        crate::tray::apply_language(app, language);
     }
 
     if let Some(theme) = payload.theme.as_deref() {
-        if matches!(theme, "light" | "dark" | "system") {
-            config.save_dsh_theme(theme)?;
-            crate::tray::apply_theme(app, theme);
-        }
+        config.save_dsh_theme(theme)?;
+        crate::tray::apply_theme(app, theme);
     }
 
     if let Some(enabled) = payload.autostart {
         crate::autostart::set_enabled(enabled)?;
     }
+
+    app_state::save_state_value(
+        &config.root,
+        "builtin_plugins_enabled",
+        serde_json::json!(payload.install_builtin_plugins.unwrap_or(false)),
+    )?;
+
+    // 所有用户选择均已验证并成功落盘后才提交完成标记。前面的写入都是幂等的；
+    // 任一步失败时保留引导，避免下次启动跳过尚未完成的配置。
+    finish_onboarding(&config)?;
 
     // API Key 变化且服务已就绪：凭据在 dsh 启动时读取，重启服务使其生效
     // （restart_service 完成后自带 navigate，无需在此补跳转）
@@ -141,57 +167,26 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     Ok(())
 }
 
-/// 是否首次使用：仅当 config.json 完全不存在（全新安装）。
-/// 与 AppState::onboarding_pending 保持一致（老用户升级不再引导；
-/// dev 构建恒引导）。
-fn needs_onboarding(config: &app_state::Config) -> bool {
-    crate::app_state::dev_build() || !config.root.join("config.json").is_file()
+fn finish_onboarding(config: &app_state::Config) -> Result<(), String> {
+    app_state::save_state_value(&config.root, "onboarded", serde_json::Value::Bool(true))?;
+    app_state::mark_onboarding_done();
+    Ok(())
 }
 
-/// dsh 凭据文件是否已配置 DEEPSEEK_API_KEY。
-fn dsh_credentials_has_api_key(config: &app_state::Config) -> bool {
-    std::fs::read_to_string(config.dsh_home().join(".credentials.yaml"))
-        .ok()
-        .is_some_and(|text| {
-            text.lines().any(|line| {
-                line.trim_start().starts_with(DEEPSEEK_API_KEY_NAME)
-                    && line
-                        .split_once(':')
-                        .is_some_and(|(_, v)| !v.trim().is_empty())
-            })
-        })
+/// 与启动状态机共用同一首次引导判定。
+fn needs_onboarding(config: &app_state::Config) -> bool {
+    crate::app_state::onboarding_required(&config.root)
 }
 
 /// 行级合并写入 dsh 凭据文件（`DEEPSEEK_API_KEY: <key>`），原子替换。
 /// 不触碰文件中的其他凭据条目。
 fn save_credentials_api_key(config: &app_state::Config, key: &str) -> Result<(), String> {
-    let path = config.dsh_home().join(".credentials.yaml");
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut out = String::new();
-    let mut wrote = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with(DEEPSEEK_API_KEY_NAME) {
-            if !wrote {
-                out.push_str(&format!("{DEEPSEEK_API_KEY_NAME}: {key}\n"));
-                wrote = true;
-            }
-            continue; // 跳过旧行（仅保留一份）
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !wrote {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&format!("{DEEPSEEK_API_KEY_NAME}: {key}\n"));
-    }
-    app_state::atomic_write(&path, &out)
+    crate::credentials::save(config, DEEPSEEK_API_KEY_NAME, key)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dsh_credentials_has_api_key, needs_onboarding, save_credentials_api_key};
+    use super::{needs_onboarding, save_credentials_api_key, DEEPSEEK_API_KEY_NAME};
     use crate::app_state::Config;
     use std::path::PathBuf;
 
@@ -210,7 +205,7 @@ mod tests {
         let cfg = config_with_root(dir.clone());
         assert!(needs_onboarding(&cfg));
         // 写入标记后不再需要
-        crate::app_state::save_config_value(&dir, "onboarded", serde_json::Value::Bool(true))
+        crate::app_state::save_state_value(&dir, "onboarded", serde_json::Value::Bool(true))
             .unwrap();
         assert!(!needs_onboarding(&cfg));
         let _ = std::fs::remove_dir_all(&dir);
@@ -222,7 +217,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = config_with_root(dir.clone());
-        cfg.dsh_home = Some(dir.join("home"));
+        cfg.dsh_home = dir.join("home");
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
@@ -253,7 +248,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = config_with_root(dir.clone());
-        cfg.dsh_home = Some(dir.join("home"));
+        cfg.dsh_home = dir.join("home");
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
@@ -263,10 +258,10 @@ mod tests {
         .unwrap();
         save_credentials_api_key(&cfg, "new-key").unwrap();
         let text = std::fs::read_to_string(home.join(".credentials.yaml")).unwrap();
-        assert!(text.contains("DEEPSEEK_API_KEY: new-key"));
+        assert!(text.contains("DEEPSEEK_API_KEY: 'new-key'"));
         assert!(text.contains("IBRAIN_API_KEY: keep-me"));
         assert!(!text.contains("old-key"));
-        assert!(dsh_credentials_has_api_key(&cfg));
+        assert!(crate::credentials::has(&cfg, DEEPSEEK_API_KEY_NAME));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

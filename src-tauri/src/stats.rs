@@ -70,6 +70,9 @@ pub(crate) fn start_periodic(app: AppHandle) {
             return;
         }
         let config = app.state::<AppState>().config();
+        if config.hide_statusbar || !config.hide_stats_line || !crate::main_is_visible(&app) {
+            continue;
+        }
         let payload = poll_once(&config);
         let _ = app.emit("session-stats-updated", payload);
     });
@@ -80,6 +83,9 @@ pub(crate) fn start_periodic(app: AppHandle) {
 pub(crate) fn refresh_once(app: AppHandle) {
     std::thread::spawn(move || {
         let config = app.state::<AppState>().config();
+        if config.hide_statusbar || !crate::main_is_visible(&app) {
+            return;
+        }
         let payload = poll_once(&config);
         let _ = app.emit("session-stats-updated", payload);
     });
@@ -116,6 +122,10 @@ fn poll_once(config: &Config) -> StatsPayload {
     }
 }
 
+pub(crate) fn snapshot(config: &Config) -> StatsPayload {
+    poll_once(config)
+}
+
 /// 调 dsh 后端 unary RPC（同源 POST /api/<method>，client-request 信封），
 /// 成功返回 value；协议不匹配/服务未就绪一律 None。
 fn rpc(config: &Config, method: &str, payload: serde_json::Value) -> Option<serde_json::Value> {
@@ -146,7 +156,7 @@ fn rpc_seq() -> u64 {
 
 /// 推断当前展示会话：running 优先、其次 updatedAt 最新（与注入脚本
 /// resolveAbsPath 的选取逻辑一致——dsh 页面当前打开的正是该会话）。
-fn current_session_id(config: &Config) -> Option<String> {
+fn current_session(config: &Config) -> Option<(String, bool)> {
     let value = rpc(config, "session.list", serde_json::json!({}))?;
     let items = value.get("items")?.as_array()?;
     let mut best: Option<(&str, bool, f64)> = None;
@@ -172,7 +182,26 @@ fn current_session_id(config: &Config) -> Option<String> {
             best = Some((sid, running, updated));
         }
     }
-    best.map(|(sid, _, _)| sid.to_string())
+    best.map(|(sid, running, _)| (sid.to_string(), running))
+}
+
+pub(crate) fn current_session_id(config: &Config) -> Option<String> {
+    current_session(config).map(|(id, _)| id)
+}
+
+/// 当前是否有正在执行的会话。Some(false) 也覆盖“会话列表为空”；
+/// None 表示 RPC 不可用，维护任务应保守等待，避免误打断服务。
+pub(crate) fn session_activity(config: &Config) -> Option<bool> {
+    let value = rpc(config, "session.list", serde_json::json!({}))?;
+    let items = value.get("items")?.as_array()?;
+    if items.is_empty() {
+        return Some(false);
+    }
+    Some(
+        items
+            .iter()
+            .any(|item| item.get("running").and_then(|value| value.as_bool()) == Some(true)),
+    )
 }
 
 #[derive(Deserialize)]
@@ -344,10 +373,6 @@ pub(crate) fn format_tokens(n: f64) -> String {
 
 // —— 实时生成速率（live-rate）：尾帧解码会话日志，估算流式 tok/s ——
 
-/// zstd 帧 magic（0xFD2FB528 小端存储）。
-const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
-/// 尾帧读取窗口：从文件末尾最多回读这些字节找最后一帧。
-const TAIL_WINDOW: u64 = 256 * 1024;
 /// 实时速率统计窗口（毫秒）。
 const LIVE_RATE_WINDOW_MS: i64 = 3000;
 /// 实时速率轮询间隔。
@@ -367,6 +392,11 @@ pub(crate) fn start_live_rate(app: AppHandle) {
                 return;
             }
             let config = app.state::<AppState>().config();
+            if config.hide_statusbar || !config.hide_stats_line || !crate::main_is_visible(&app) {
+                cached_sid = None;
+                cached_at = std::time::Instant::now() - SESSION_ID_TTL;
+                continue;
+            }
             if cached_at.elapsed() >= SESSION_ID_TTL {
                 cached_sid = current_session_id(&config);
                 cached_at = std::time::Instant::now();
@@ -391,33 +421,12 @@ fn live_rate_once(session_id: &str, config: &Config) -> Option<f64> {
 /// 压缩数据内可能出现伪 magic 字节序列：解压失败时继续向前尝试
 /// 下一个候选（最多 3 个），全部失败才放弃。
 fn read_tail_frame(session_id: &str, config: &Config) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
     let path = config
         .dsh_home()
         .join("sessions")
         .join(session_id)
         .join("session.jsonl.zstd");
-    let mut file = std::fs::File::open(&path).ok()?;
-    let len = file.metadata().ok()?.len();
-    if len == 0 {
-        return None;
-    }
-    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_WINDOW)))
-        .ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    // 从后往前尝试 magic 候选（伪 magic 解压会失败，继续向前找）
-    let mut search_from = buf.len();
-    for _ in 0..3 {
-        let rel_start = (0..search_from.saturating_sub(3))
-            .rev()
-            .find(|&i| buf[i..i + 4] == ZSTD_MAGIC)?;
-        if let Ok(decoded) = zstd::bulk::decompress(&buf[rel_start..], 64 * 1024 * 1024) {
-            return String::from_utf8(decoded).ok();
-        }
-        search_from = rel_start; // 伪 magic：继续向前找更早的候选
-    }
-    None
+    crate::session_log::read_tail_frame(&path).ok().flatten()
 }
 
 /// 从事件行文本计算最近窗口的实时速率（token 估算 = 字符数/4，
@@ -541,23 +550,5 @@ mod tests {
         let tps = live_rate_from_lines(&text, now).unwrap();
         // span 下限 500ms，2 token → 4 tok/s
         assert!((tps - 4.0).abs() < 0.2, "tps={tps}");
-    }
-
-    #[test]
-    fn tail_frame_extracts_last_zstd_frame() {
-        // 两个独立 zstd 帧拼接成流（模拟流式追加），尾帧提取应得到第二帧内容
-        let frame_a = zstd::encode_all("first\n".as_bytes(), 3).unwrap();
-        let frame_b = zstd::encode_all("second\n".as_bytes(), 3).unwrap();
-        let mut stream = frame_a.clone();
-        stream.extend_from_slice(&frame_b);
-        // 直接在字节流上扫描尾帧（与 read_tail_frame 同款逻辑）
-        let frame_start = (0..stream.len() - 3)
-            .rev()
-            .find(|&i| stream[i..i + 4] == ZSTD_MAGIC)
-            .unwrap();
-        let decoded = zstd::bulk::decompress(&stream[frame_start..], 1024).unwrap();
-        assert_eq!(String::from_utf8(decoded).unwrap(), "second\n");
-        // 且不是第一帧（frame_a 长度之前的索引处也有 magic）
-        assert!(frame_start > frame_a.len() - 4);
     }
 }

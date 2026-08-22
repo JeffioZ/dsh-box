@@ -103,7 +103,7 @@ pub fn set_expanded(app: &AppHandle, expanded: bool, requested_height: Option<f6
 /// 初始化底部状态栏：独立子 webview（会话统计 + 余额 + 设置入口），
 /// 固定为不透明 26px 高度，避免透明子 WebView 动态合成产生绘制残影。
 pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
-    let window = app.get_window(MAIN_WINDOW).expect("主窗口不存在");
+    let window = main_window(app)?;
     let navigation_app = app.clone();
     let child = WebviewBuilder::new(STATUSBAR_LABEL, WebviewUrl::App("statusbar.html".into()))
         // 禁用后台节流：状态栏实时更新（会话统计/余额），失焦节流会导致
@@ -133,7 +133,7 @@ pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
 
 /// 初始化自绘标题栏：去掉系统标题栏（macOS 除外）、创建子 webview、同步边界。
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
-    let window = app.get_window(MAIN_WINDOW).expect("主窗口不存在");
+    let window = main_window(app)?;
     // macOS 保留系统装饰（Overlay 红绿灯）；其他平台去掉系统标题栏。
     // 主窗口不启用 set_shadow：见 lib.rs 的说明（阴影 insets 导致窗口
     // 尺寸记忆逐次累积变大，并附加 1px 白边）。
@@ -253,3 +253,9 @@ fn rect_y(rect: &tauri::Rect) -> f64 {
 static LAST_TOP_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
 static LAST_MAIN_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
 static LAST_STATUS_KEY: std::sync::Mutex<Option<(f64, f64, f64)>> = std::sync::Mutex::new(None);
+
+fn main_window(app: &AppHandle) -> tauri::Result<tauri::Window> {
+    app.get_window(MAIN_WINDOW).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "main window is unavailable").into()
+    })
+}

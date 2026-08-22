@@ -1,4 +1,4 @@
-// dsh 桌面端 —— 启动画面逻辑
+// DSHBox 启动页交互与状态机。
 // 通过 Tauri IPC 与 Rust 后端通信：事件 dsh-status / update-progress / update-result，
 // 命令 get_status / retry_boot / quit / open_logs / check_updates / apply_updates
 
@@ -26,6 +26,33 @@ let lastUpdateResult = null;
 // 或静默检查发现 dsh 有新版可更——静默检查的“已是最新/检查失败”
 // 在安装进行中弹出来纯属噪音
 let updateCheckRequested = false;
+let installCancelRequested = false;
+let installSource = 'auto';
+let sourceSwitchPending = false;
+let readyTransitionSequence = 0;
+
+function notifyReadyTransition() {
+  const sequence = ++readyTransitionSequence;
+  let sent = false;
+  let onEnd = null;
+  const finish = () => {
+    if (sent || sequence !== readyTransitionSequence) return;
+    sent = true;
+    if (onEnd) document.body.removeEventListener('transitionend', onEnd);
+    window.__TAURI__.core.invoke('startup_transition_done').catch(() => {});
+  };
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) {
+    finish();
+    return;
+  }
+  onEnd = (event) => {
+    if (event.target === document.body && event.propertyName === 'opacity') finish();
+  };
+  document.body.addEventListener('transitionend', onEnd, { once: true });
+  // transitionend 可能因页面不可见、动画被系统取消而不触发；兜底保证导航必达。
+  setTimeout(finish, 360);
+}
 
 function phaseText(phase) {
   return PHASE_KEYS[phase] ? dshdT(PHASE_KEYS[phase]) : phase;
@@ -44,13 +71,25 @@ function setStatus(phase, message, detail) {
   }
   text.textContent = display;
   $('status-detail').textContent = detail || '';
+  const cancellable = phase === 'installing-node' || phase === 'installing-dsh';
+  const installActions = $('install-actions');
+  const cancelButton = $('btn-cancel-install');
+  installActions.classList.toggle('hidden', !cancellable);
+  if (!cancellable) installCancelRequested = false;
+  if (cancellable) {
+    cancelButton.disabled = installCancelRequested;
+    cancelButton.textContent = installCancelRequested ? dshdT('cancellingInstall') : dshdT('cancelInstall');
+  }
   if (phase === 'ready') {
     spinner.classList.add('hidden');
     fill.classList.add('done');
     // onboarding 未完成时跳过整体淡出：ready 可能在面板显示期间到达
     // （服务复用/并发路径下 get_status 直接返回 Ready），淡出会让配置
     // 面板视觉消失而 boot 仍在等待用户操作；保存后面板隐藏即恢复正常
-    if (!onboardingActive()) document.body.classList.add('fade-out');
+    if (!onboardingActive()) {
+      document.body.classList.add('fade-out');
+      notifyReadyTransition();
+    }
   }
   else if (phase === 'error') { spinner.classList.add('hidden'); fill.classList.add('err'); }
   else {
@@ -91,6 +130,20 @@ function renderVersions(payload) {
 
 function renderStatus(payload) {
   lastStatusPayload = payload;
+  if (payload.download_source) installSource = payload.download_source;
+  document.querySelectorAll('.source-choice').forEach((button) => {
+    const selected = button.dataset.source === installSource;
+    button.setAttribute('aria-pressed', String(selected));
+    button.disabled = sourceSwitchPending || installCancelRequested || selected;
+  });
+  if (payload.phase === 'error' && sourceSwitchPending) {
+    sourceSwitchPending = false;
+    installCancelRequested = false;
+    hideError();
+    setStatus('starting', dshdT('installSourceSwitching'));
+    window.__TAURI__.core.invoke('retry_boot').catch((e) => showError(String(e)));
+    return;
+  }
   // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
   // 纯固定文案的 phase 改用当前语言重译；动态消息（下载/安装进度、
   // 端口回退等）保持后端快照，避免错译。
@@ -189,6 +242,7 @@ async function initOnboarding() {
     if (obLangSel) obLangSel.set(st.language === 'en' ? 'en' : 'zh-CN');
     if (obThemeSel) obThemeSel.set(st.theme || 'system');
     $('ob-autostart').checked = !!st.autostart;
+    $('ob-builtin-plugins').checked = st.install_builtin_plugins !== false;
     $('ob-box').classList.remove('hidden');
     // 首次显示用 opacity 渐入（重排不可避免，但避免"整块跳出"的突兀感）；
     // status 隐藏前先让面板进场，避免内容闪跳
@@ -211,7 +265,7 @@ async function submitOnboarding(skip) {
   const skipButton = $('ob-skip');
   const errBox = $('ob-error');
   // 格式校验（不占用 saving 状态）：非空 key 必须以 sk- 开头，否则提示并
-  // 聚焦输入框；留空仍允许（之后在 dsh 设置页配置）
+  // 聚焦输入框；留空仍允许（之后可在桌面端设置中配置）
   if (!skip) {
     const key = $('ob-apikey').value.trim();
     if (key && !/^sk-/.test(key)) {
@@ -230,6 +284,7 @@ async function submitOnboarding(skip) {
     language: obLangSel ? obLangSel.get() : 'zh-CN',
     theme: obThemeSel ? obThemeSel.get() : 'system',
     autostart: $('ob-autostart').checked,
+    install_builtin_plugins: !skip && $('ob-builtin-plugins').checked,
   };
   if (!skip) {
     const key = $('ob-apikey').value.trim();
@@ -299,6 +354,39 @@ function renderUpdate(result) {
 }
 
 function bind() {
+  document.querySelectorAll('.source-choice').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const source = button.dataset.source;
+      if (!source || source === installSource || sourceSwitchPending) return;
+      sourceSwitchPending = true;
+      installCancelRequested = true;
+      document.querySelectorAll('.source-choice').forEach((item) => { item.disabled = true; });
+      $('btn-cancel-install').disabled = true;
+      $('btn-cancel-install').textContent = dshdT('installSourceSwitching');
+      try {
+        await window.__TAURI__.core.invoke('set_install_source', { source });
+        installSource = source;
+      } catch (e) {
+        sourceSwitchPending = false;
+        installCancelRequested = false;
+        showError(String(e));
+      }
+    });
+  });
+  $('btn-cancel-install').addEventListener('click', async () => {
+    const button = $('btn-cancel-install');
+    button.disabled = true;
+    button.textContent = dshdT('cancellingInstall');
+    installCancelRequested = true;
+    try {
+      await window.__TAURI__.core.invoke('cancel_install');
+    } catch (e) {
+      button.disabled = false;
+      button.textContent = dshdT('cancelInstall');
+      installCancelRequested = false;
+      showError(String(e));
+    }
+  });
   $('btn-retry').addEventListener('click', async () => {
     const button = $('btn-retry');
     button.disabled = true;

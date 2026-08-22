@@ -11,6 +11,7 @@ use crate::{emit_status, navigate, SPLASH_ORIGIN};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
+const STARTUP_TRANSITION_TIMEOUT: Duration = Duration::from_millis(400);
 /// 端口扫描窗口：Windows 的 Hyper-V/WSL 动态保留端口（excluded port range）
 /// 可能连续圈定数百个端口（如 2914-3713 共 800 个），50 个远不够跳出保留块。
 const PORT_SCAN_WINDOW: u16 = 2048;
@@ -67,7 +68,7 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
 /// 防御：等待上限 60 秒——若启动页因任何原因未显示配置面板（如 IPC 时序），
 /// 自动落 onboarded 标记并放行，避免永久卡在启动页。
 /// 等待解除条件：用户已保存/跳过（onboarding_done）——dev 构建下
-/// onboarding_pending 恒 true，必须以用户动作为准。
+/// 首次引导判定恒为 true，必须以用户动作为准。
 fn wait_onboarding(state: &AppState) -> bool {
     if !state.onboarding_pending() {
         return false;
@@ -85,7 +86,12 @@ fn wait_onboarding(state: &AppState) -> bool {
         if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
             // 超时兜底：自动落标记并继续，避免启动页卡死
             let config = state.config();
-            let _ = crate::app_state::save_config_value(
+            let _ = crate::app_state::save_state_value(
+                &config.root,
+                "builtin_plugins_enabled",
+                serde_json::Value::Bool(false),
+            );
+            let _ = crate::app_state::save_state_value(
                 &config.root,
                 "onboarded",
                 serde_json::Value::Bool(true),
@@ -94,6 +100,23 @@ fn wait_onboarding(state: &AppState) -> bool {
             return false;
         }
     }
+}
+
+/// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
+pub(crate) fn enter_web_app(app: &AppHandle, url: &str) {
+    let on_startup_page = crate::main_webview(app)
+        .and_then(|webview| webview.url().ok())
+        .is_some_and(|current| {
+            let dev = crate::app_dev_origin(app);
+            crate::is_local_app_url(&current, dev.as_ref())
+        });
+    let transition = on_startup_page.then(|| app.state::<AppState>().arm_startup_transition());
+    let ready = crate::locale::text("已就绪", "Ready");
+    emit_status(app, BootPhase::Ready, ready, "");
+    if let Some(transition) = transition {
+        let _ = transition.recv_timeout(STARTUP_TRANSITION_TIMEOUT);
+    }
+    navigate(app, url);
 }
 
 /// 一轮完整引导；成功返回 Ok(())，失败返回错误信息。
@@ -119,17 +142,13 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         if wait_onboarding(&state) {
             return Ok(());
         }
-        emit_status(app, BootPhase::Ready, ready, "");
-        // 给前端 ready 事件送达 + 启动页淡出（0.3s）留足时间，
-        // 避免淡出未播完就被 navigate 替换（“直接进入 dsh”的跳变感）
-        std::thread::sleep(Duration::from_millis(500));
-        navigate(app, &config.web_url());
+        enter_web_app(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
     }
 
     // 若上次更新被强杀/断电打断，先恢复到确定可用的旧目录。
-    crate::update_txn::recover_interrupted_updates(&state.config())?;
+    crate::updater::transaction::recover_interrupted_updates(&state.config())?;
 
     // 0) 端口复用：配置端口已被一个健康的 dsh 服务占用时（同一 DSH_HOME 的
     //    另一实例——如用户自己终端里跑的 dsh）直接接入，不再改用后续端口
@@ -162,11 +181,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         if wait_onboarding(&state) {
             return Ok(());
         }
-        emit_status(app, BootPhase::Ready, ready, "");
-        // 给前端 ready 事件送达 + 启动页淡出（0.3s）留足时间，
-        // 避免淡出未播完就被 navigate 替换（“直接进入 dsh”的跳变感）
-        std::thread::sleep(Duration::from_millis(500));
-        navigate(app, &config.web_url());
+        enter_web_app(app, &config.web_url());
         crate::updater::silent_check(app);
         return Ok(());
     }
@@ -207,15 +222,12 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
         crate::locale::text("正在检查 Node.js 运行时…", "Checking the Node.js runtime…");
     state.set_phase(BootPhase::Starting, checking_node, "");
     emit_status(app, BootPhase::Starting, checking_node, "");
-    let node_exe = ensure_node(app, &config)?;
-    // 检测一次并缓存版本（snapshot/get_status 直接读取，避免每次 IPC spawn node）
-    state.set_node_version(
-        runtime::node_version(&node_exe).map(|(m, n, p)| format!("v{m}.{n}.{p}")),
-    );
+    let node = ensure_node(app, &config)?;
+    state.set_node_version(Some(node.version.clone()));
     state.set_npm_version(runtime::npm_version(&config));
 
     // 2) dsh 包
-    ensure_dsh(app, &config, &node_exe)?;
+    ensure_dsh(app, &config, &node.executable)?;
 
     // 首装可能耗时数分钟，启动前复检端口，避免绑定冲突被误报为“启动超时”
     if port_is_occupied(config.port) {
@@ -252,7 +264,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     let starting_server = crate::locale::text("正在启动 dsh 服务…", "Starting the dsh service…");
     state.set_phase(BootPhase::StartingServer, starting_server, "");
     emit_status(app, BootPhase::StartingServer, starting_server, "");
-    let (pid, job) = start_server(app, &config, &node_exe)?;
+    let (pid, job) = start_server(app, &config, &node.executable)?;
     state.set_running(pid, job);
 
     // 4) 轮询就绪
@@ -297,10 +309,7 @@ fn boot_once(app: &AppHandle) -> Result<(), String> {
     if wait_onboarding(&state) {
         return Ok(());
     }
-    emit_status(app, BootPhase::Ready, ready, "");
-    // 给启动页 300ms 淡出动画留余量，再跳转 dsh 界面（配合 WebView 背景色，无白闪）
-    std::thread::sleep(Duration::from_millis(320));
-    navigate(app, &config.web_url());
+    enter_web_app(app, &config.web_url());
     // 启动后静默检查 dsh 更新（后台线程，不阻塞；有新版才提示）
     crate::updater::silent_check(app);
     Ok(())
@@ -383,7 +392,7 @@ pub fn shutdown(app: &AppHandle) {
 /// 端口是否已被任意进程占用，仅用于选择可用监听端口。
 pub(crate) fn port_is_occupied(port: u16) -> bool {
     use std::net::{SocketAddr, TcpListener, TcpStream};
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     // 1) 已有监听者：connect 成功即占用。
     if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
         return true;
@@ -399,7 +408,7 @@ pub(crate) fn health_check(port: u16) -> bool {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
 
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
         return false;
     };

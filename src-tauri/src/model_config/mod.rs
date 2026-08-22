@@ -1,4 +1,4 @@
-//! 模型配置导入：把用户粘贴的一段 `llm-pi-ai:` YAML 段解析、校验后写入
+//! 模型配置导入与导出：把 `llm-pi-ai:` YAML 段解析、校验并读写
 //! dsh 的原生配置文件（`$DSH_HOME/settings.yaml` 的 `llm-pi-ai` 段 +
 //! `$DSH_HOME/.credentials.yaml` 的 apiKeyEnv 引用），不修改 dsh 代码。
 //!
@@ -25,6 +25,11 @@
 //!         - id: ...
 //! ```
 
+mod parser;
+
+use parser::{normalize_section, parse_providers, valid_env_name};
+
+use crate::credentials::upsert as upsert_credential;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -64,15 +69,6 @@ pub struct ImportApplyPayload {
     pub yaml: String,
     /// apiKeyEnv 引用名 → 用户粘贴的 key（仅写入 `apiKeyEnv` 声明的引用）。
     pub keys: Vec<(String, String)>,
-}
-
-/// 从文本中逐行识别到的 provider 信息（内部表示）。
-#[derive(Debug)]
-struct ProviderInfo {
-    route: String,
-    display_name: String,
-    model_count: usize,
-    api_key_env: Option<String>,
 }
 
 /// 校验导入文本并返回预览（只读，不写盘）。
@@ -252,6 +248,7 @@ pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String>
             }
         }
     }
+    let mut provided = Vec::new();
     for (name, key) in &payload.keys {
         if !declared.contains(name) {
             return Err(crate::locale::text(
@@ -265,23 +262,41 @@ pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String>
                 crate::locale::text("API Key 不能为空。", "API key cannot be empty.").into(),
             );
         }
+        if !valid_env_name(name) || key.chars().any(char::is_control) {
+            return Err(crate::locale::text(
+                "凭据名称或 API Key 含有不允许的字符。",
+                "The credential name or API key contains invalid characters.",
+            )
+            .into());
+        }
+        if provided.contains(name) {
+            return Err(crate::locale::text(
+                "同一凭据不能重复提供。",
+                "The same credential cannot be provided more than once.",
+            )
+            .into());
+        }
+        provided.push(name.clone());
     }
 
-    // 3) 写 settings.yaml：整体替换或追加 llm-pi-ai 段。
-    let settings_path = config.dsh_home().join("settings.yaml");
-    let settings_text = std::fs::read_to_string(&settings_path).unwrap_or_default();
-    let normalized = normalize_section(&payload.yaml)?;
-    let merged = upsert_section(&settings_text, &normalized);
-    app_state::atomic_write(&settings_path, &merged)?;
-
-    // 4) 写 .credentials.yaml：行级合并每个声明的凭据。
+    // 3) 先写凭据：若后续 settings 写入失败，最多留下未引用的凭据；反过来会让
+    // 已热发布的路由短暂引用不存在的 key，影响正在进行的模型请求。
     let credentials_path = config.dsh_home().join(".credentials.yaml");
-    let credentials_text = std::fs::read_to_string(&credentials_path).unwrap_or_default();
-    let mut credentials_out = credentials_text;
-    for (name, key) in &payload.keys {
-        credentials_out = upsert_credential(&credentials_out, name, key.trim());
+    if !payload.keys.is_empty() {
+        app_state::update_text_file(&credentials_path, |mut text| {
+            for (name, key) in &payload.keys {
+                text = upsert_credential(&text, name, key.trim());
+            }
+            Ok(text)
+        })?;
     }
-    app_state::atomic_write(&credentials_path, &credentials_out)?;
+
+    // 4) 整体替换或追加 llm-pi-ai 段；读—改—写在同一锁内完成。
+    let settings_path = config.dsh_home().join("settings.yaml");
+    let normalized = normalize_section(&payload.yaml)?;
+    app_state::update_text_file(&settings_path, |text| {
+        Ok(upsert_section(&text, &normalized))
+    })?;
 
     crate::logging::log(&format!(
         "model-import: 已导入 {} 个提供方路由（写 settings.yaml + credentials.yaml）",
@@ -295,179 +310,6 @@ fn settings_has_section(text: &str) -> bool {
     let section = format!("{SECTION_KEY}:");
     text.lines()
         .any(|line| !line.starts_with(' ') && line.trim_end() == section)
-}
-
-/// 解析并校验导入文本中的 provider 路由。状态机按缩进层级推进：
-/// 0 = 顶层键（只认 llm-pi-ai）、2 = providers / 段内扩展字段、
-/// 4 = provider 路由键、>=6 = provider 内字段（apiKeyEnv/displayName/models）。
-/// 只做行级结构识别，不要求完整 YAML 语义（模板格式由外部约定并保证）。
-fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
-    if yaml.trim().is_empty() {
-        return Err(crate::locale::text("导入内容为空。", "The imported content is empty.").into());
-    }
-
-    let mut in_section = false;
-    let mut in_providers = false;
-    let mut in_models = false;
-    let mut current: Option<ProviderInfo> = None;
-    let mut providers: Vec<ProviderInfo> = Vec::new();
-    let section = format!("{SECTION_KEY}:");
-
-    for line in yaml.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let indent = line.len() - line.trim_start().len();
-        let content = line.trim_start();
-        if content.starts_with('#') {
-            continue;
-        }
-
-        if indent == 0 {
-            // 顶层键：llm-pi-ai 是唯一合法开头；段内再遇顶层键即段结束。
-            if content == section {
-                if !in_section {
-                    in_section = true;
-                    in_providers = false;
-                    in_models = false;
-                }
-                continue;
-            }
-            if in_section {
-                break;
-            }
-            return Err(crate::locale::text(
-                "导入内容不是模型配置：缺少 llm-pi-ai 顶层段。",
-                "The imported content is not a model config: missing the llm-pi-ai top-level section.",
-            )
-            .into());
-        }
-
-        if !in_section {
-            return Err(crate::locale::text(
-                "导入内容不是模型配置：llm-pi-ai 段结构不合法。",
-                "The imported content is not a valid model config.",
-            )
-            .into());
-        }
-
-        if indent == 2 {
-            // 结束当前 provider（回到段内其他字段或 providers 键）。
-            if let Some(p) = current.take() {
-                providers.push(p);
-            }
-            in_providers = content == "providers:";
-            in_models = false;
-            continue;
-        }
-        if indent == 4 {
-            // provider 路由键（如 `internal-gateway:`）。
-            if in_providers {
-                if let Some(route) = content.strip_suffix(':') {
-                    if !route.is_empty() && !route.contains(' ') {
-                        if let Some(p) = current.take() {
-                            providers.push(p);
-                        }
-                        current = Some(ProviderInfo {
-                            route: route.to_string(),
-                            display_name: route.to_string(),
-                            model_count: 0,
-                            api_key_env: None,
-                        });
-                        in_models = false;
-                        continue;
-                    }
-                }
-                return Err(crate::locale::text(
-                    "模型配置 provider 路由名不合法。",
-                    "Invalid provider route name in model config.",
-                )
-                .into());
-            }
-            continue;
-        }
-        if indent < 4 {
-            continue;
-        }
-
-        // provider 内（indent >= 6）
-        let Some(p) = current.as_mut() else { continue };
-        if in_models {
-            if content.starts_with("- ") {
-                p.model_count += 1;
-                continue;
-            }
-            if indent == 6 {
-                // 退出 models 块，回到 provider 级字段继续解析这一行。
-                in_models = false;
-            } else {
-                continue; // 模型条目字段（id:/name:/...），忽略。
-            }
-        }
-        if let Some(rest) = content.strip_prefix("apiKeyEnv:") {
-            let value = rest.trim().trim_matches(['"', '\'']);
-            if value.is_empty() {
-                return Err(crate::locale::text(
-                    "模型配置中 apiKeyEnv 不能为空。",
-                    "apiKeyEnv cannot be empty in model config.",
-                )
-                .into());
-            }
-            p.api_key_env = Some(value.to_string());
-            continue;
-        }
-        if let Some(rest) = content.strip_prefix("displayName:") {
-            let value = rest.trim().trim_matches(['"', '\'']);
-            if !value.is_empty() {
-                p.display_name = value.to_string();
-            }
-            continue;
-        }
-        if content == "models:" {
-            in_models = true;
-            continue;
-        }
-    }
-    if let Some(p) = current.take() {
-        providers.push(p);
-    }
-
-    if providers.is_empty() {
-        return Err(crate::locale::text(
-            "模型配置中没有识别到任何提供方路由（providers）。",
-            "No provider routes found in the model config.",
-        )
-        .into());
-    }
-    for p in &providers {
-        if p.model_count == 0 {
-            return Err(crate::locale::text(
-                "提供方 {route} 没有声明任何模型（models）。",
-                "Provider {route} declares no models.",
-            )
-            .replace("{route}", &p.route));
-        }
-    }
-    Ok(providers)
-}
-
-/// 把导入文本规范化为可写入的顶层段：去掉前导空行，确保末尾换行。
-fn normalize_section(yaml: &str) -> Result<String, String> {
-    // 先经 parse_providers 校验（保证结构合法）。
-    parse_providers(yaml)?;
-    let mut out = String::new();
-    for line in yaml.lines() {
-        if out.is_empty() && line.trim().is_empty() {
-            continue; // 去掉前导空行
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    Ok(out)
 }
 
 /// 行级替换（或追加）一个顶层段。`new_section` 必须是完整顶层段（含键行）。
@@ -512,31 +354,6 @@ fn upsert_section(text: &str, new_section: &str) -> String {
     out
 }
 
-/// 行级合并写入一个凭据条目（`NAME: value`）：同名行替换、无则追加，
-/// 不触碰其他凭据条目。与 onboarding 的 DEEPSEEK_API_KEY 写入同规格。
-fn upsert_credential(text: &str, name: &str, value: &str) -> String {
-    let mut out = String::new();
-    let mut wrote = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with(&format!("{name}:")) {
-            if !wrote {
-                out.push_str(&format!("{name}: {value}\n"));
-                wrote = true;
-            }
-            continue; // 跳过旧行（仅保留一份）
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !wrote {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&format!("{name}: {value}\n"));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,6 +390,57 @@ llm-pi-ai:
     fn reject_non_model_config() {
         let err = parse_providers("locale:\n  preference: zh\n").unwrap_err();
         assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn reject_additional_top_level_section() {
+        let text = "llm-pi-ai:\n  providers:\n    gw:\n      models:\n        - id: x\nlocale:\n  preference: en\n";
+        let err = normalize_section(text).unwrap_err();
+        assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn reject_duplicate_model_section() {
+        let text = "llm-pi-ai:\n  providers:\n    one:\n      models:\n        - id: x\nllm-pi-ai:\n  providers:\n    two:\n      models:\n        - id: y\n";
+        let err = parse_providers(text).unwrap_err();
+        assert!(
+            err.contains("重复") || err.contains("duplicate"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_malformed_yaml_and_duplicate_provider_keys() {
+        let malformed = "llm-pi-ai:\n  providers:\n    gw: [\n";
+        assert!(parse_providers(malformed).is_err());
+
+        let duplicate = "llm-pi-ai:\n  providers:\n    gw:\n      models: [{ id: x }]\n    gw:\n      models: [{ id: y }]\n";
+        assert!(parse_providers(duplicate).is_err());
+    }
+
+    #[test]
+    fn parses_valid_flow_style_models_semantically() {
+        let text = "llm-pi-ai:\n  providers:\n    gw:\n      displayName: \"Gateway: Primary\"\n      models: [{ id: x }, { id: y }]\n";
+        let providers = parse_providers(text).unwrap();
+        assert_eq!(providers[0].display_name, "Gateway: Primary");
+        assert_eq!(providers[0].model_count, 2);
+    }
+
+    #[test]
+    fn reject_invalid_api_key_env() {
+        let text = "llm-pi-ai:\n  providers:\n    gw:\n      apiKeyEnv: BAD-NAME\n      models:\n        - id: x\n";
+        let err = parse_providers(text).unwrap_err();
+        assert!(err.contains("apiKeyEnv"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn accepts_portable_api_key_env_names() {
+        for name in ["KEY", "_KEY", "Key_2"] {
+            assert!(valid_env_name(name), "expected valid: {name}");
+        }
+        for name in ["", "2KEY", "BAD-NAME", "BAD NAME", "键"] {
+            assert!(!valid_env_name(name), "expected invalid: {name}");
+        }
     }
 
     #[test]
@@ -615,7 +483,7 @@ llm-pi-ai:
     fn credential_upsert_merges_by_name() {
         let text = "DEEPSEEK_API_KEY: keep-me\nCORP_GATEWAY_KEY: old-key\n";
         let out = upsert_credential(text, "CORP_GATEWAY_KEY", "new-key");
-        assert!(out.contains("CORP_GATEWAY_KEY: new-key"));
+        assert!(out.contains("CORP_GATEWAY_KEY: 'new-key'"));
         assert!(out.contains("DEEPSEEK_API_KEY: keep-me"));
         assert!(!out.contains("old-key"));
     }
@@ -625,7 +493,7 @@ llm-pi-ai:
         let text = "DEEPSEEK_API_KEY: keep-me\n";
         let out = upsert_credential(text, "CORP_GATEWAY_KEY", "k");
         assert!(out.contains("DEEPSEEK_API_KEY: keep-me"));
-        assert!(out.contains("CORP_GATEWAY_KEY: k"));
+        assert!(out.contains("CORP_GATEWAY_KEY: 'k'"));
     }
 
     #[test]

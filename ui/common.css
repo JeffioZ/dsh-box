@@ -3,7 +3,7 @@
    - 深色：卡片 bluish-800 / 文字 bluish-50 / 次级 bluish-400
    - 浅色：卡片纯白 / 文字 bluish-1000 / 次级 bluish-600
    - 菜单卡片 r12/pad4；条目 min-h40/r10/14px；hover 8% / 按压 14%
-   供 tray-menu.html、dialog.html 引用；注入 dsh 页面的菜单脚本保持运行时
+   供 tray-menu.html、control-center.html 引用；注入 dsh 页面的菜单脚本保持运行时
    读 dsh 令牌，仅回退色与本文件一致。 */
 :root {
   --dshd-bg: #151517;
@@ -165,6 +165,9 @@
   padding: 4px;
   background: var(--dshd-card);
   border: 1px solid var(--dshd-border);
+  /* 底部由阴影收边；若沿用与组间分隔线相同的描边色，会让末项看起来
+     像还跟着一个空分组。透明边仍保留 1px 几何占位，不改变菜单尺寸。 */
+  border-bottom-color: transparent;
   border-radius: var(--dshd-r-sm);
   box-shadow: var(--dshd-menu-shadow);
 }

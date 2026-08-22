@@ -1,0 +1,286 @@
+//! 更新协调：检查并分派应用、dsh、Node 与 PowerShell 更新。
+
+use std::io::Read;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::app_state::{AppState, BootPhase};
+use crate::processes;
+use crate::runtime::{self, base_envs};
+mod app;
+mod check;
+#[path = "dsh.rs"]
+mod dsh_update;
+mod node;
+mod powershell;
+pub(crate) mod transaction;
+
+use crate::versions;
+use crate::{dsh, emit_status, navigate, SPLASH_ORIGIN};
+pub use app::prefetch_app_update;
+use app::update_app_exe;
+#[cfg(test)]
+use app::{parse_app_release_asset, windows_replace_script};
+use check::check_app_update;
+pub use check::{check, check_and_report, silent_check, start_periodic_check, CheckResult};
+use dsh_update::update_dsh;
+use node::update_node;
+#[cfg(test)]
+use powershell::parse_pwsh_metadata;
+use powershell::{latest_pwsh_version, parse_releases_atom, pwsh_version, update_pwsh};
+use transaction as update_txn;
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    let mut truncated: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        truncated.push('…');
+    }
+    truncated
+}
+
+const APP_REPO: &str = "JeffioZ/dsh-box";
+#[cfg(any(windows, test))]
+const APP_WINDOWS_ASSET: &str = "DSHBox-windows-x64.exe";
+
+/// 确保更新函数无论如何返回都会恢复更新标记。
+struct UpdatingReset<'a>(&'a AppState);
+
+impl Drop for UpdatingReset<'_> {
+    fn drop(&mut self) {
+        self.0.set_updating(false);
+    }
+}
+
+fn emit_progress(app: &AppHandle, message: &str) {
+    // 事件之外同步写入状态：检查更新弹窗关闭再打开后，进行中的更新进度
+    // 仍能经轮询（app_dialog_check_get）拉取——事件通道对隐藏窗口不可靠。
+    app.state::<AppState>()
+        .set_check_progress(Some(message.to_string()));
+    let _ = app.emit("update-progress", serde_json::json!({ "message": message }));
+}
+
+// ---------- 应用更新 ----------
+
+/// 应用更新（which: "dsh" | "node" | "pwsh"）。
+pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if !state.try_begin_update() {
+        let msg = crate::locale::text(
+            "启动或更新流程正在进行，请稍后再试。",
+            "Startup or another update is in progress. Please try again later.",
+        )
+        .to_string();
+        emit_progress(
+            app,
+            &format!(
+                "{}: {msg}",
+                crate::locale::text("更新失败", "Update failed")
+            ),
+        );
+        return Err(msg);
+    }
+    let _updating = UpdatingReset(state.inner());
+    // 覆盖停止、安装、切换目录和重启的完整周期，避免与手动重启交叉执行。
+    let _lifecycle = state.lifecycle_guard();
+    let result = if which == "dsh" {
+        update_dsh(app, &state.config())
+    } else if which == "node" {
+        update_node(app, &state.config())
+    } else if which == "pwsh" {
+        update_pwsh(app)
+    } else if which == "app" {
+        update_app_exe(app, &state.config())
+    } else if which == "npm" {
+        // strict：手动更新失败要报给用户（区别于启动时静默降级）
+        runtime::upgrade_portable_npm(app, &state.config(), true)
+    } else {
+        Err(format!(
+            "{}: {which}",
+            crate::locale::text("未知更新目标", "Unknown update target")
+        ))
+    };
+    if let Err(msg) = &result {
+        // 让启动页/托盘能看到失败原因
+        emit_progress(
+            app,
+            &format!(
+                "{}: {msg}",
+                crate::locale::text("更新失败", "Update failed")
+            ),
+        );
+    }
+    result
+}
+
+// ---------- 重启服务 ----------
+
+/// 重启服务并进入界面（托盘“重启服务”/更新后复用）。
+/// 持有生命周期锁，与 boot_once 互斥，杜绝双服务并发。
+pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.is_updating() {
+        return Err(crate::locale::text(
+            "更新流程正在进行，请稍后再重启。",
+            "An update is in progress. Please restart the service later.",
+        )
+        .into());
+    }
+    let _guard = state.lifecycle_guard();
+    // 覆盖“检查后、拿锁前”更新刚好开始的竞争窗口。
+    if state.is_updating() {
+        return Err(crate::locale::text(
+            "更新流程正在进行，请稍后再重启。",
+            "An update is in progress. Please restart the service later.",
+        )
+        .into());
+    }
+    restart_service_locked(app)
+}
+
+/// 调用方已持有生命周期锁时使用。
+fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let config = state.config();
+    let resume_url = crate::main_webview(app)
+        .and_then(|webview| webview.url().ok())
+        .filter(|url| crate::is_dsh_url(url, &config))
+        .map(|url| url.to_string());
+    let restarting = crate::locale::text("正在重启服务…", "Restarting the service…");
+    state.set_phase(BootPhase::Starting, restarting, "");
+    emit_status(app, BootPhase::Starting, restarting, "");
+    let result = (|| -> Result<(), String> {
+        // 先停掉残留进程
+        dsh::shutdown(app);
+        std::thread::sleep(Duration::from_millis(800));
+        let node = runtime::ensure_node(app, &config)?;
+        state.set_node_version(Some(node.version.clone()));
+        state.set_npm_version(runtime::npm_version(&config));
+        let (pid, job) = runtime::start_server(app, &config, &node.executable)?;
+        state.set_running(pid, job);
+        if !dsh::wait_ready(config.port, Duration::from_secs(60)) {
+            processes::kill_tree(pid);
+            return Err(crate::locale::text(
+                "重启后服务未就绪",
+                "The service did not become ready after restarting",
+            )
+            .into());
+        }
+        Ok(())
+    })();
+    match &result {
+        Ok(()) => {
+            let ready = crate::locale::text("已就绪", "Ready");
+            state.set_phase(BootPhase::Ready, ready, "");
+            // 唤醒可能阻塞在错误页等待的 boot_loop，让其重入引导（复用本服务）进入看门狗
+            state.signal_retry();
+            let target = resume_url.unwrap_or_else(|| config.web_url());
+            dsh::enter_web_app(app, &target);
+        }
+        Err(msg) => {
+            state.set_phase(BootPhase::Error, msg, "");
+            emit_status(app, BootPhase::Error, msg, "");
+            // 用户此刻可能在 dsh 界面：导航回启动页让错误与重试按钮可见
+            navigate(app, SPLASH_ORIGIN);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_app_release_asset, parse_pwsh_metadata, parse_releases_atom, windows_replace_script,
+    };
+
+    #[test]
+    fn parses_official_powershell_stable_tag() {
+        let metadata = serde_json::json!({ "StableReleaseTag": "v7.6.4" });
+        assert_eq!(parse_pwsh_metadata(&metadata).unwrap(), "7.6.4");
+    }
+
+    #[test]
+    fn parses_releases_atom_tags_in_order() {
+        let xml = r#"<?xml version="1.0"?>
+<feed><entry>
+  <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.2.0"/>
+  <title>v0.2.0</title>
+</entry><entry>
+  <link rel="alternate" type="text/html" href="https://github.com/o/r/releases/tag/v0.1.0"/>
+</entry></feed>"#;
+        assert_eq!(parse_releases_atom(xml), vec!["v0.2.0", "v0.1.0"]);
+    }
+
+    #[test]
+    fn releases_atom_skips_non_tag_links() {
+        let xml = "<entry><link rel=\"alternate\" href=\"https://github.com/o/r/releases/tag/v1.0.0\"/><link rel=\"self\" href=\"https://x/atom\"/></entry>";
+        assert_eq!(parse_releases_atom(xml), vec!["v1.0.0"]);
+    }
+
+    #[test]
+    fn release_asset_requires_exact_tag_url_and_digest() {
+        let json = serde_json::json!({
+            "tag_name": "v0.2.0",
+            "draft": false,
+            "prerelease": false,
+            "assets": [{
+                "name": "DSHBox-windows-x64.exe",
+                "state": "uploaded",
+                "browser_download_url": "https://github.com/JeffioZ/dsh-box/releases/download/v0.2.0/DSHBox-windows-x64.exe",
+                "digest": format!("sha256:{}", "ab".repeat(32))
+            }]
+        });
+        let (url, digest) = parse_app_release_asset(&json, "0.2.0").unwrap();
+        assert!(url.contains("/v0.2.0/"));
+        assert_eq!(digest, "ab".repeat(32));
+    }
+
+    #[test]
+    fn release_asset_rejects_missing_digest_and_version_drift() {
+        let mut json = serde_json::json!({
+            "tag_name": "v0.2.0",
+            "draft": false,
+            "prerelease": false,
+            "assets": [{
+                "name": "DSHBox-windows-x64.exe",
+                "state": "uploaded",
+                "browser_download_url": "https://github.com/JeffioZ/dsh-box/releases/download/v0.2.0/DSHBox-windows-x64.exe",
+                "digest": null
+            }]
+        });
+        assert!(parse_app_release_asset(&json, "0.2.0").is_err());
+        json["assets"][0]["digest"] = serde_json::json!(format!("sha256:{}", "ab".repeat(32)));
+        assert!(parse_app_release_asset(&json, "0.3.0").is_err());
+    }
+
+    #[test]
+    fn release_asset_rejects_duplicate_windows_assets() {
+        let asset = serde_json::json!({
+            "name": "DSHBox-windows-x64.exe",
+            "state": "uploaded",
+            "browser_download_url": "https://github.com/JeffioZ/dsh-box/releases/download/v0.2.0/DSHBox-windows-x64.exe",
+            "digest": format!("sha256:{}", "ab".repeat(32))
+        });
+        let json = serde_json::json!({
+            "tag_name": "v0.2.0",
+            "draft": false,
+            "prerelease": false,
+            "assets": [asset.clone(), asset]
+        });
+        assert!(parse_app_release_asset(&json, "0.2.0").is_err());
+    }
+
+    #[test]
+    fn replacement_script_stages_and_atomically_replaces() {
+        let script = windows_replace_script(
+            std::path::Path::new(r"C:\cache\DSHBox.exe"),
+            std::path::Path::new(r"C:\app\DSHBox.exe"),
+            &"a".repeat(64),
+        );
+        assert!(script.contains("Copy-Item -LiteralPath $src -Destination $new"));
+        assert!(script.contains("[System.IO.File]::Replace($new, $dst, $old, $true)"));
+        assert!(script.contains("Get-FileHash -Algorithm SHA256"));
+        assert!(!script.contains("Move-Item -LiteralPath $dst -Destination $old"));
+    }
+}

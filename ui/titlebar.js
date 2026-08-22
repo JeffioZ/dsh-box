@@ -2,12 +2,22 @@
 // （余额 chip 已迁移到窗口底部状态栏，见 statusbar.js）
 const $ = (id) => document.getElementById(id);
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+const listen = (event, handler) => window.__TAURI__.event.listen(event, handler);
 
 let mainMenuOpen = false;
 let mainMenu = null;
 let mainMenuMotion = null;
 let mainMenuRequest = 0;
 let mainMenuSelectionPending = false;
+let closeBehavior = 'tray';
+
+function applyCloseBehavior(value) {
+  closeBehavior = value === 'quit' ? 'quit' : 'tray';
+  const button = $('btn-close');
+  const label = dshdT(closeBehavior === 'quit' ? 'quit' : 'closeToTray');
+  button.title = label;
+  button.setAttribute('aria-label', label);
+}
 
 function initPlatform() {
   const platform = (navigator.userAgentData && navigator.userAgentData.platform)
@@ -165,8 +175,12 @@ async function init() {
   });
   window.addEventListener('dshd-language-changed', () => {
     applyMaxState($('btn-max').classList.contains('maximized'));
+    applyCloseBehavior(closeBehavior);
     refreshMainMenu();
   });
+  listen('settings-changed', (event) => {
+    applyCloseBehavior(event.payload && event.payload.close_behavior);
+  }).catch(() => {});
 
   // 渲染自愈脉冲（Rust 侧周期/获焦时直呼）：WebView2 合成层失效会导致
   // 标题栏间歇空白（DOM 正常仅画面空白），强制创建再销毁合成层恢复渲染
@@ -179,6 +193,9 @@ async function init() {
     });
   };
   refreshMaxState();
+  invoke('settings_get').then((settings) => {
+    applyCloseBehavior(settings && settings.close_behavior);
+  }).catch(() => {});
   // 窗口焦点状态由 Rust 侧广播（WebView2 子窗口的 window focus/blur
   // 与主窗口焦点不同步），挂载全局函数供 Rust eval 直呼
   window.__dshdSetWindowActive = (active) => {

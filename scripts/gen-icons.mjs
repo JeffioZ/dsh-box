@@ -11,8 +11,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const iconDir = path.join(root, 'src-tauri', 'icons');
 
-// 官方 favicon.svg（DeepSeek 鲸鱼 logo path）
-const favicon = fs.readFileSync(path.join(iconDir, 'favicon-source.svg'), 'utf8');
+// 官方 DeepSeek 鲸鱼标志源文件
+const favicon = fs.readFileSync(path.join(root, 'assets', 'brand', 'deepseek-mark.svg'), 'utf8');
 const m = favicon.match(/<path[^>]*d="([^"]+)"[^>]*>/);
 if (!m) throw new Error('favicon path not found');
 const logoPath = m[1];
@@ -42,9 +42,10 @@ fs.mkdirSync(iconDir, { recursive: true });
 
 // 1) 各尺寸应用图标（蓝底白鲸）
 const appSizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
+const appFileSizes = [32, 40, 48, 64, 128, 256];
 const appPngs = {};
 for (const s of appSizes) appPngs[s] = render(appIconSvg(s), s);
-for (const s of appSizes) fs.writeFileSync(path.join(iconDir, `${s}x${s}.png`), appPngs[s]);
+for (const s of appFileSizes) fs.writeFileSync(path.join(iconDir, `${s}x${s}.png`), appPngs[s]);
 
 // 2) 托盘专用图标：与应用图标同风格（蓝底圆角方块+白鲸），
 //    按物理尺寸精确渲染（100%/125%/150%/200% DPI 各一张）
