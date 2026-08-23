@@ -17,6 +17,9 @@ struct PresetPlugin {
     description_zh: String,
     description_en: String,
     homepage: String,
+    /// 被当前包接替的旧内置包；需保留完整历史链，以继承用户选择。
+    #[serde(default)]
+    replaces: Vec<String>,
 }
 
 /// 用户主动卸载后仍可手动装回的内置目录项。它只表示来源，不恢复内置
@@ -81,6 +84,19 @@ pub(crate) fn recommended_not_installed(
         .collect()
 }
 
+pub(crate) fn known_plugin_homepage(id: &str) -> Option<String> {
+    preset_plugins()
+        .iter()
+        .find(|plugin| plugin.id == id)
+        .map(|plugin| plugin.homepage.clone())
+        .or_else(|| {
+            recommended_plugins()
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .map(|plugin| plugin.homepage.clone())
+        })
+}
+
 /// 解析 resources/builtin-plugins.json（编译期嵌入，运行期零 IO）。
 /// 文件缺失/损坏时回落到空清单，绝不因清单问题阻断启动。
 /// OnceLock 缓存避免热路径重复反序列化。
@@ -102,6 +118,51 @@ pub(super) fn is_market_pkg(name: &str) -> bool {
     market_pkg_ids().any(|p| p == name)
 }
 
+pub(super) fn retired_market_pkg_ids() -> impl Iterator<Item = &'static str> {
+    MARKET_REMOVED.iter().copied().chain(
+        preset_plugins()
+            .iter()
+            .flat_map(|plugin| plugin.replaces.iter().map(String::as_str)),
+    )
+}
+
+pub(super) fn is_retired_market_pkg(name: &str) -> bool {
+    retired_market_pkg_ids().any(|pkg| pkg == name)
+}
+
+fn is_replacement_predecessor(name: &str) -> bool {
+    preset_plugins()
+        .iter()
+        .any(|plugin| plugin.replaces.iter().any(|pkg| pkg == name))
+}
+
+/// 换包名不能绕过用户原来的退出决定；新包继承旧包的主动卸载标记。
+pub(super) fn effective_market_user_removed(config: &crate::app_state::Config, pkg: &str) -> bool {
+    market_user_removed(config, pkg)
+        || preset_plugins()
+            .iter()
+            .find(|plugin| plugin.id == pkg)
+            .is_some_and(|plugin| {
+                plugin
+                    .replaces
+                    .iter()
+                    .any(|old| market_user_removed(config, old))
+            })
+}
+
+pub(super) fn installed_replacement_predecessor(
+    config: &crate::app_state::Config,
+    pkg: &str,
+) -> Option<&'static str> {
+    preset_plugins()
+        .iter()
+        .find(|plugin| plugin.id == pkg)?
+        .replaces
+        .iter()
+        .find(|old| market_installed_version(config, old).is_some())
+        .map(String::as_str)
+}
+
 /// 按 id 取安装 spec（`dsh plugin add` 的依赖形式）。未找到回退用 id 本身。
 pub(super) fn market_spec(id: &str) -> String {
     preset_plugins()
@@ -118,7 +179,8 @@ pub(crate) fn reinstallable_builtin_plugins(
     preset_plugins()
         .iter()
         .filter(|plugin| {
-            market_user_removed(config, &plugin.id) && !installed_names.contains(&plugin.id)
+            effective_market_user_removed(config, &plugin.id)
+                && !installed_names.contains(&plugin.id)
         })
         .map(|plugin| ReinstallableBuiltinPlugin {
             id: plugin.id.clone(),
@@ -411,14 +473,6 @@ pub(super) fn market_user_removed(config: &crate::app_state::Config, pkg: &str) 
         .unwrap_or(false)
 }
 
-pub(super) fn market_mark_user_removed(config: &crate::app_state::Config, pkg: &str) {
-    let _ = crate::app_state::save_state_value(
-        &config.root,
-        &format!("market_user_removed_{pkg}"),
-        serde_json::json!(true),
-    );
-}
-
 /// 内置身份判定：用户明确授权、包在当前维护清单中，且未曾主动卸载。
 /// （不含 bootstrapped 条件——引导从未成功的包仍需显示重装入口。）
 pub(super) fn builtin_identity(consented: bool, in_market: bool, user_removed: bool) -> bool {
@@ -592,7 +646,7 @@ pub(crate) fn bootstrap_work_pending(config: &crate::app_state::Config) -> bool 
     }
     let consented = builtin_plugins_enabled(config);
     let retired_pending = consented
-        && MARKET_REMOVED.iter().any(|pkg| {
+        && retired_market_pkg_ids().any(|pkg| {
             !is_market_pkg(pkg)
                 && should_retire(
                     consented,
@@ -606,7 +660,7 @@ pub(crate) fn bootstrap_work_pending(config: &crate::app_state::Config) -> bool 
     }
     builtin_plugins_enabled(config)
         && market_pkg_ids().any(|pkg| {
-            !market_user_removed(config, pkg)
+            !effective_market_user_removed(config, pkg)
                 && market_install_state(config, pkg) != MarketInstallState::Ready
         })
 }
@@ -618,7 +672,7 @@ pub(super) fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::
     }
     let mut installed_any = false;
     let mut failed = false;
-    // 先清理强制下线清单：已装且仍为内置身份的包自动卸载。
+    // 先清理已下线或被替换的包：已装且仍为内置身份的包自动卸载。
     // 失败计入引导退避（6h 后重试），避免每次启动刷失败日志。
     let (removed_any, cleanup_failed) = remove_retired_market_pkgs(app, config);
     if cleanup_failed {
@@ -630,8 +684,15 @@ pub(super) fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::
     }
     for pkg in market_pkg_ids() {
         let state = market_install_state(config, pkg);
-        let user_removed = market_user_removed(config, pkg);
+        let user_removed = effective_market_user_removed(config, pkg);
         if !should_bootstrap_market_pkg(state, user_removed) {
+            continue;
+        }
+        if let Some(old) = installed_replacement_predecessor(config, pkg) {
+            failed = true;
+            crate::logging::log(&format!(
+                "market: {pkg} 暂不安装：被替换的 {old} 仍在 profile 中"
+            ));
             continue;
         }
         if state != MarketInstallState::MissingDependency {
@@ -672,24 +733,28 @@ pub(super) fn bootstrap_market_pkgs(app: &AppHandle, config: &crate::app_state::
     installed_any || removed_any
 }
 
-/// 强制下线清理：遍历 MARKET_REMOVED，对"已装且仍为内置身份"的包自动
-/// 卸载（用户卸载过又手动重装的豁免）。返回 (是否有卸载, 是否有失败)。
+/// 清理强制下线包与被替换的旧内置包。只处理仍属 DSHBox 管理的安装；
+/// 用户卸载过又手动重装的副本保持不动。返回 (是否有卸载, 是否有失败)。
 pub(super) fn remove_retired_market_pkgs(
     app: &AppHandle,
     config: &crate::app_state::Config,
 ) -> (bool, bool) {
     let consented = builtin_plugins_enabled(config);
-    if !consented || MARKET_REMOVED.is_empty() {
+    if !consented || retired_market_pkg_ids().next().is_none() {
         return (false, false);
     }
     let mut removed_any = false;
     let mut failed = false;
-    for pkg in MARKET_REMOVED {
+    let mut seen = std::collections::HashSet::new();
+    for pkg in retired_market_pkg_ids() {
+        if !seen.insert(pkg) {
+            continue;
+        }
         if is_market_pkg(pkg) {
-            // 配置错误防抖：同一包不能同时在维护与下线清单，否则每次
+            // 配置错误防抖：同一包不能同时在当前与退役清单，否则每次
             // 启动"卸载→引导重装"抖动；跳过并提示
             crate::logging::log(&format!(
-                "market: 配置错误：{pkg} 同时存在于内置清单与 MARKET_REMOVED，跳过清理"
+                "market: 配置错误：{pkg} 同时存在于当前与退役清单，跳过清理"
             ));
             continue;
         }
@@ -703,16 +768,21 @@ pub(super) fn remove_retired_market_pkgs(
             }
             continue;
         }
-        crate::logging::log(&format!("market: 强制下线：卸载 {pkg}"));
+        let reason = if is_replacement_predecessor(pkg) {
+            "替换旧内置包"
+        } else {
+            "强制下线"
+        };
+        crate::logging::log(&format!("market: {reason}：卸载 {pkg}"));
         match run_dsh_plugin_auto(app, &["remove", pkg]) {
             Ok(_) => {
-                crate::logging::log(&format!("market: {pkg} 已卸载（强制下线）"));
+                crate::logging::log(&format!("market: {pkg} 已卸载（{reason}）"));
                 removed_any = true;
             }
             Err(e) => {
                 failed = true;
                 crate::logging::log(&format!(
-                    "market: {pkg} 强制下线卸载失败（退避后重试）：{e}"
+                    "market: {pkg} {reason}卸载失败（退避后重试）：{e}"
                 ));
             }
         }
@@ -740,7 +810,7 @@ pub(super) fn sync_market_versions(app: &AppHandle, config: &crate::app_state::C
     for pkg in market_pkg_ids() {
         // 用户卸载过又重装的包：不再视为内置，不自动更新
         // （仍可在插件管理页手动检查/更新）
-        if market_user_removed(config, pkg) {
+        if effective_market_user_removed(config, pkg) {
             continue;
         }
         let Some(installed) = market_installed_version(config, pkg) else {

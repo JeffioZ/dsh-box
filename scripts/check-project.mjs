@@ -435,18 +435,41 @@ function packageNameFromSpec(spec) {
   return versionAt > 0 ? plain.slice(0, versionAt) : plain;
 }
 
+function isPackageId(value) {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(String(value || ''));
+}
+
 const presets = JSON.parse(read('src-tauri/resources/builtin-plugins.json'));
 const presetIds = new Set();
+const replacedPresetIds = new Set();
 for (const preset of presets) {
   if (!preset.id || !preset.spec || !preset.name || !preset.description_zh || !preset.description_en || !preset.homepage) {
     fail(`builtin-plugins.json: 条目字段不完整: ${JSON.stringify(preset)}`);
   }
+  if (!isPackageId(preset.id)) fail(`builtin-plugins.json: id 不是有效包名: ${preset.id}`);
   if (presetIds.has(preset.id)) fail(`builtin-plugins.json: 重复 id=${preset.id}`);
   presetIds.add(preset.id);
   if (packageNameFromSpec(preset.spec) !== preset.id) {
     fail(`builtin-plugins.json: id 与安装 spec 的包名不一致: ${preset.id} / ${preset.spec}`);
   }
   if (!/^https:\/\/github\.com\//.test(preset.homepage || '')) fail(`builtin-plugins.json: 非 GitHub HTTPS 地址: ${preset.homepage}`);
+  if (preset.replaces !== undefined && !Array.isArray(preset.replaces)) {
+    fail(`builtin-plugins.json: replaces 必须是数组: ${preset.id}`);
+  }
+  for (const replaced of preset.replaces || []) {
+    if (!isPackageId(replaced) || packageNameFromSpec(replaced) !== replaced) {
+      fail(`builtin-plugins.json: replaces 不是有效包名: ${preset.id} / ${replaced}`);
+    }
+    if (replaced === preset.id || replacedPresetIds.has(replaced)) {
+      fail(`builtin-plugins.json: replaces 重复或自引用: ${preset.id} / ${replaced}`);
+    }
+    replacedPresetIds.add(replaced);
+  }
+}
+for (const replaced of replacedPresetIds) {
+  if (presetIds.has(replaced)) {
+    fail(`builtin-plugins.json: 被替换包不能仍在内置清单: ${replaced}`);
+  }
 }
 
 const recommended = JSON.parse(read('src-tauri/resources/recommended-plugins.json'));
@@ -455,10 +478,14 @@ for (const plugin of recommended) {
   if (!plugin.id || !plugin.spec || !plugin.name || !plugin.description_zh || !plugin.description_en || !plugin.homepage) {
     fail(`recommended-plugins.json: 条目字段不完整: ${JSON.stringify(plugin)}`);
   }
+  if (!isPackageId(plugin.id)) fail(`recommended-plugins.json: id 不是有效包名: ${plugin.id}`);
   if (recommendedIds.has(plugin.id)) fail(`recommended-plugins.json: 重复 id=${plugin.id}`);
   recommendedIds.add(plugin.id);
   if (presetIds.has(plugin.id)) {
     fail(`插件不能同时出现在内置与社区清单: ${plugin.id}`);
+  }
+  if (replacedPresetIds.has(plugin.id)) {
+    fail(`被替换的旧内置插件不能进入社区清单: ${plugin.id}`);
   }
   if (packageNameFromSpec(plugin.spec) !== plugin.id) {
     fail(`recommended-plugins.json: id 与安装 spec 的包名不一致: ${plugin.id} / ${plugin.spec}`);

@@ -8,11 +8,12 @@
     "homepage": "https://github.com/dsh-market/dsh-market"
   },
   {
-    "id": "dsh-file-drop",
-    "spec": "dsh-file-drop",
-    "name": "DSH File Drop",
-    "description_zh": "把 PDF、Word、Excel、ZIP 等非图片文件拖入输入框",
-    "description_en": "Drop PDF, Word, Excel, ZIP, and other non-image files into the prompt",
-    "homepage": "https://github.com/dannyvan/dsh-file-drop"
+    "id": "dsh-file-upload",
+    "spec": "dsh-file-upload",
+    "name": "DSH File Upload",
+    "description_zh": "拖拽、粘贴或选择文件，支持常见文档转换与按需读取",
+    "description_en": "Upload by drag, paste, or file picker, with on-demand conversion for common documents",
+    "homepage": "https://github.com/HongMing-Huang/dsh-file-upload",
+    "replaces": ["dsh-file-drop"]
   }
 ]

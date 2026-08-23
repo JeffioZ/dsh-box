@@ -127,9 +127,9 @@ API Key 解析顺序为：`DSH_BOX_API_KEY` → `DEEPSEEK_API_KEY` → `$DSH_HOM
 首次引导可选择安装：
 
 - [DSH Market](https://github.com/dsh-market/dsh-market)（`dshmarket`）
-- [DSH File Drop](https://github.com/dannyvan/dsh-file-drop)（`dsh-file-drop`）
+- [DSH File Upload](https://github.com/HongMing-Huang/dsh-file-upload)（`dsh-file-upload`）
 
-同意后，未安装的内置插件会在 dsh 就绪后安装；仍保持内置身份的已安装插件每 24 小时检查一次更新。用户主动卸载后不会自动重装，插件页会保留手动重装入口；装回后按普通用户插件管理，不再恢复内置标签或自动更新。安装、更新和卸载都走 `dsh plugin` CLI；多个手动变更会合并为一次重启，自动维护只在会话空闲后应用。
+同意后，未安装的内置插件会在 dsh 就绪后安装；仍保持内置身份的已安装插件每 24 小时检查一次更新。更换预置插件时，仍由 DSHBox 管理的旧包会迁移到新包；用户曾主动卸载旧包则沿用原选择，不会借换包重新安装。用户主动卸载后，插件页会保留手动重装入口；装回后按普通用户插件管理，不再恢复内置标签或自动更新。安装、更新和卸载都走 `dsh plugin` CLI；多个变更会合并为一次重启，自动维护只在会话空闲后应用。
 
 插件管理页另有“社区插件”列表，仅提供来源和手动安装入口，不会自动安装或更新；卸载后会重新出现在该列表中。
 

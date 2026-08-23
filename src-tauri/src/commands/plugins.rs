@@ -106,7 +106,7 @@ pub async fn plugin_remove(
         })?
 }
 
-/// 检查内置插件（dshmarket/dsh-file-drop）是否有新版本（只读）。
+/// 检查已安装插件及当前内置清单是否有新版本（只读）。
 #[tauri::command]
 pub async fn plugin_updates(
     app: AppHandle,

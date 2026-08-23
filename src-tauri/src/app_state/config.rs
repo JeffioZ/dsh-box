@@ -35,7 +35,7 @@ pub struct Config {
     pub hide_statusbar: bool,
     /// 隐藏状态栏右侧的余额 chip（统计保留，默认显示余额）。
     pub hide_balance: bool,
-    /// 是否自动升级内置插件（dshmarket/dsh-file-drop，默认开启；
+    /// 是否自动升级内置插件清单中的包（默认开启；
     /// 首次预装引导不受此开关影响）。
     pub auto_update_plugins: bool,
     /// dsh 内核更新通道："latest"（稳定推荐，默认）或 "next"（预览尝鲜）。

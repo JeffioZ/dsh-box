@@ -180,8 +180,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .pcat-btn:disabled { opacity: .55; cursor: default; }
 .pcat-btn:disabled:hover { color: var(--dshd-text-dim); border-color: var(--dshd-border); background: transparent; }
 .pcat-btn.active:disabled:hover { background: var(--dshd-selected); border-color: var(--dshd-selected); color: var(--dshd-selected-text); }
-/* 状态行固定行高 18px：空/有文字高度一致，避免提示出现时下方内容位移 */
+/* 有状态时保留稳定行高；空状态收起，避免目录前出现无意义留白。 */
 .pstatus { min-height: 18px; line-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
+.pstatus:empty { min-height: 0; margin-bottom: 0; }
 .pstatus.err { color: var(--dshd-error-text); }
 .pstatus.ok { color: var(--dshd-success-text); }
 .papply {
@@ -197,8 +198,12 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
   .pstatus.err { color: var(--dshd-error-text); }
   .pstatus.ok { color: var(--dshd-success-text); }
 }
-.psection { margin-top: 8px; }
-.psection h3 { font-size: 12px; color: var(--dshd-text-dim); font-weight: 600; margin-bottom: 6px; letter-spacing: .2px; }
+.pdirectory { display: flex; flex-direction: column; }
+.psection { margin-top: 6px; }
+.psection + .psection { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dshd-border); }
+.psection-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.psection h3 { color: var(--dshd-text); font-size: 13px; font-weight: 600; line-height: 20px; margin: 0 0 6px; letter-spacing: 0; }
+.psection-head h3 { margin: 0; }
 .settings-section + .settings-section { margin-top: 16px; }
 .srow-dependent .srow-txt { padding-left: 12px; }
 .settings-scope-note {
@@ -338,10 +343,10 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
   .sswitch, .sswitch::before { transition: none; }
 }
 .pcount { font-weight: 400; color: var(--dshd-text-dim); font-size: 11px; }
-.plist { list-style: none; display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
+.plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
 .pitem {
   display: flex; align-items: center; gap: 10px;
-  border: 1px solid var(--dshd-border); border-radius: 10px; padding: 8px 12px;
+  border: 1px solid var(--dshd-border); border-radius: 8px; padding: 7px 10px;
   background: var(--dshd-hover);
 }
 .pitem .pmark {
@@ -457,8 +462,7 @@ body.update-prompt-mode .body { padding: 0 18px 14px; }
 body.update-prompt-mode #nav { display: none; }
 body.update-prompt-mode #main { width: 100%; }
 
-/* 手动安装目录：用户卸载的内置插件与社区插件保持独立语义。 */
-.p-section-hint { margin: 0 0 6px; font-size: 12px; color: var(--dshd-text-dim); }
-#p-reinstall-sec, #p-recommended-sec { padding-top: 12px; border-top: 1px solid var(--dshd-border); }
+/* 手动安装目录：短标题负责扫描，说明文字补充所有权语义。 */
+.p-section-hint { margin: -2px 0 6px; font-size: 11.5px; line-height: 17px; color: var(--dshd-text-dim); }
 #p-recommended-sec[aria-busy="true"] { min-height: 92px; }
 .recommended-loading { min-height: 28px; justify-content: center; }

@@ -4,6 +4,8 @@
 let pluginsBusy = false;
 let pluginSearchSeq = 0;
 let pluginApplyStamp = '';
+let pluginApplyWasPending = false;
+let pluginStatusTimer = null;
 let pluginRecommendedSeq = 0;
 let pluginReinstallSeq = 0;
 // 当前选中的分类（'' 为「全部」）。分类与搜索框关键词叠加为查询条件，
@@ -25,11 +27,14 @@ function buildQuery(kw, cat) {
   return base || q;
 }
 function renderPlugins() {
+  clearTimeout(pluginStatusTimer);
+  pluginStatusTimer = null;
   // 重新进入页面时让上一次尚未返回的搜索失效，避免旧结果覆盖新页面。
   pluginSearchSeq += 1;
   // DOM 重建后按钮回到「全部」高亮，分类状态必须同步重置，否则
   // 搜索会用残留的旧分类叠加，与界面显示不符。
   activeCat = '';
+  pluginApplyWasPending = false;
   const body = $('body');
   body.innerHTML =
     '<div class="psearch">' +
@@ -57,8 +62,9 @@ function renderPlugins() {
     '<div class="psection hidden" id="p-results-sec">' +
     '<h3>' + esc(dshdT('pluginResults')) + ' <span class="pcount" id="p-results-count"></span></h3>' +
     '<ul class="plist" id="p-results"></ul></div>' +
-    '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span>' +
-    ' <button type="button" class="dshd-btn small" id="p-builtin-check">' + esc(dshdT('pluginCheckUpdates')) + '</button></h3>' +
+    '<div class="pdirectory" id="p-directory">' +
+    '<div class="psection" id="p-installed-sec"><div class="psection-head"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span></h3>' +
+    '<button type="button" class="dshd-btn small" id="p-builtin-check">' + esc(dshdT('pluginCheckUpdates')) + '</button></div>' +
     '<ul class="plist" id="p-installed"></ul></div>' +
     '<div class="psection hidden" id="p-reinstall-sec"><h3>' + esc(dshdT('pluginReinstallTitle')) + '</h3>' +
     '<p class="p-section-hint">' + esc(dshdT('pluginReinstallHint')) + '</p>' +
@@ -66,7 +72,7 @@ function renderPlugins() {
     '<div class="psection" id="p-recommended-sec" aria-busy="true"><h3>' + esc(dshdT('pluginRecommendedTitle')) + '</h3>' +
     '<p class="p-section-hint">' + esc(dshdT('pluginRecommendedHint')) + '</p>' +
     '<ul class="plist recommended-loading" id="p-recommended"><li class="pempty" role="status">' +
-    '<span class="spin" aria-hidden="true"></span>' + esc(dshdT('pluginRecommendedLoading')) + '</li></ul></div>';
+    '<span class="spin" aria-hidden="true"></span>' + esc(dshdT('pluginRecommendedLoading')) + '</li></ul></div></div>';
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
   $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
@@ -94,7 +100,7 @@ function renderPlugins() {
         pluginSearchSeq += 1;
         $('p-results-sec').classList.add('hidden');
         $('p-results').innerHTML = '';
-        $('p-installed-sec').classList.remove('hidden');
+        $('p-directory').classList.remove('hidden');
         pluginStatus('');
       }
     });
@@ -113,7 +119,12 @@ function renderPluginApplyStatus(status) {
   if (!box) return;
   const visible = status && (status.pending || status.applying || status.error);
   box.classList.toggle('hidden', !visible);
-  if (!visible) return;
+  if (!visible) {
+    if (pluginApplyWasPending) pluginStatus('');
+    pluginApplyWasPending = false;
+    return;
+  }
+  pluginApplyWasPending = true;
   const button = $('p-apply-btn');
   let title = dshdT('pluginApplyPending');
   let detail = dshdT('pluginApplyPendingDesc');
@@ -176,9 +187,9 @@ async function refreshBuiltinStatus(silent) {
     // 冷却期内的新版已不计入 update_available：统计即“现在可更新”的数量
     const updatable = (list || []).filter((s) => s.update_available).length;
     if (updatable > 0) {
-      pluginStatus(dshdT('pluginUpdatesFound', { count: updatable }), '');
+      pluginStatus(dshdT('pluginUpdatesFound', { count: updatable }), '', 4000);
     } else {
-      pluginStatus(dshdT('pluginUpdatesChecked'), 'ok');
+      pluginStatus(dshdT('pluginUpdatesChecked'), 'ok', 3000);
     }
   } catch (e) {
     if (openKind === 'plugins' && seq === updateCheckSeq && !silent) {
@@ -223,11 +234,18 @@ async function doPluginUpdate(pkg) {
     if (checkBtn) checkBtn.disabled = false;
   }
 }
-function pluginStatus(text, kind) {
+function pluginStatus(text, kind, clearAfter) {
   const el = $('p-status');
   if (!el) return;
+  clearTimeout(pluginStatusTimer);
+  pluginStatusTimer = null;
   el.textContent = text || '';
   el.className = 'pstatus' + (kind ? ' ' + kind : '');
+  if (text && clearAfter) {
+    pluginStatusTimer = setTimeout(() => {
+      if (el.textContent === text) pluginStatus('');
+    }, clearAfter);
+  }
 }
 async function refreshPlugins() {
   try {
@@ -237,21 +255,27 @@ async function refreshPlugins() {
   } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
 }
 
-function catalogPluginRow(p, actionKey) {
-  const actions = document.createElement('div');
-  actions.className = 'pactions';
+function pluginHomepageButton(p, reportError) {
+  if (!p.homepage) return null;
   const homepageBtn = document.createElement('button');
   homepageBtn.type = 'button';
   homepageBtn.className = 'dshd-btn small plugin-home';
   homepageBtn.title = dshdT('pluginHomepage');
   homepageBtn.setAttribute('aria-label', dshdT('pluginHomepage') + ': ' + p.name);
   homepageBtn.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M15 3h6v6"></path><path d="m10 14 11-11"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg><span>' + esc(dshdT('pluginHomepage')) + '</span>';
+  homepageBtn.addEventListener('click', () => {
+    invoke('open_external_url', { url: p.homepage }).catch(reportError);
+  });
+  return homepageBtn;
+}
+function catalogPluginRow(p, actionKey) {
+  const actions = document.createElement('div');
+  actions.className = 'pactions';
   const installBtn = document.createElement('button');
   installBtn.type = 'button';
   installBtn.className = 'dshd-btn small plugin-action';
   installBtn.textContent = dshdT(actionKey);
   installBtn.disabled = pluginsBusy;
-  actions.append(homepageBtn, installBtn);
   const description = dshdLocale() === 'zh-CN' ? p.description_zh : p.description_en;
   const li = pluginItemRow(p, actions, null, description || '');
   const rowStatus = document.createElement('div');
@@ -259,14 +283,13 @@ function catalogPluginRow(p, actionKey) {
   rowStatus.setAttribute('role', 'status');
   rowStatus.setAttribute('aria-live', 'polite');
   li.querySelector('.info').append(rowStatus);
-  homepageBtn.addEventListener('click', () => {
+  const homepageBtn = pluginHomepageButton(p, () => {
     rowStatus.textContent = '';
-    rowStatus.className = 'pitem-status';
-    invoke('open_external_url', { url: p.homepage }).catch(() => {
-      rowStatus.textContent = dshdT('pluginHomepageFailed');
-      rowStatus.className = 'pitem-status err';
-    });
+    rowStatus.textContent = dshdT('pluginHomepageFailed');
+    rowStatus.className = 'pitem-status err';
   });
+  if (homepageBtn) actions.append(homepageBtn);
+  actions.append(installBtn);
   installBtn.addEventListener('click', async () => {
     if (pluginsBusy) return;
     setPluginsBusy(true);
@@ -386,7 +409,12 @@ function setPluginsBusy(busy) {
   });
   const applyButton = $('p-apply-btn');
   if (applyButton && busy) applyButton.disabled = true;
-  if (!busy) refreshPluginApplyStatus();
+  if (!busy) {
+    // 忙状态下渲染过的同一份状态会把应用按钮留在 disabled；解除忙碌后
+    // 必须绕过去重再渲染一次。
+    pluginApplyStamp = '';
+    refreshPluginApplyStatus();
+  }
 }
 function pluginItemRow(p, actions, verText, descText) {
   const li = document.createElement('li');
@@ -444,6 +472,10 @@ function renderInstalled(list) {
   for (const p of list) {
     const actions = document.createElement('div');
     actions.className = 'pactions';
+    const homepageBtn = pluginHomepageButton(p, () => {
+      pluginStatus(dshdT('pluginHomepageFailed'), 'err');
+    });
+    if (homepageBtn) actions.append(homepageBtn);
     // 检查过的插件行：状态文本 + 版本对比 + 更新按钮（冷却期/失败时无按钮）
     let verText = null;
     let descText = null;
@@ -456,7 +488,7 @@ function renderInstalled(list) {
       if (st.update_available && !st.cooldown_until && !st.error) {
         const up = document.createElement('button');
         up.type = 'button';
-        up.className = 'dshd-btn plugin-action';
+        up.className = 'dshd-btn small plugin-action';
         up.textContent = dshdT('pluginUpdate');
         up.disabled = updateBusy || pluginsBusy;
         up.addEventListener('click', () => doPluginUpdate(p.name));
@@ -465,7 +497,7 @@ function renderInstalled(list) {
     }
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'dshd-btn danger plugin-action';
+    btn.className = 'dshd-btn small danger plugin-action';
     btn.textContent = dshdT('pluginUninstall');
     btn.disabled = pluginsBusy;
     btn.addEventListener('click', async () => {
@@ -498,7 +530,7 @@ function renderInstalled(list) {
     actions.className = 'pactions';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'dshd-btn plugin-action';
+    btn.className = 'dshd-btn small plugin-action';
     btn.textContent = dshdT('pluginInstall');
     btn.disabled = pluginsBusy;
     btn.addEventListener('click', async () => {
@@ -519,7 +551,7 @@ function renderInstalled(list) {
     actions.append(btn);
     repairCount += 1;
     ul.append(pluginItemRow(
-      { name, version: (st && st.latest) || '', description: '', builtin: true },
+      { name, version: '', description: '', builtin: true },
       actions,
       null,
       (st && st.error) || dshdT('pluginNotInstalled')
@@ -540,12 +572,12 @@ function renderResults(list) {
   // 未搜索（null）：整个结果区隐藏，恢复已装区（搜索态覆盖浏览态）
   if (list === null || list === undefined) {
     sec.classList.add('hidden');
-    $('p-installed-sec').classList.remove('hidden');
+    $('p-directory').classList.remove('hidden');
     return;
   }
-  // 搜索态：结果区覆盖已装区——避免两者并存挤压空间
+  // 搜索态只保留结果，避免目录与搜索结果同时出现造成信息拥挤。
   sec.classList.remove('hidden');
-  $('p-installed-sec').classList.add('hidden');
+  $('p-directory').classList.add('hidden');
   const countEl = $('p-results-count');
   if (countEl) countEl.textContent = list.length ? '(' + list.length + ')' : '';
   ul.textContent = '';
@@ -557,9 +589,15 @@ function renderResults(list) {
     return;
   }
   for (const p of list) {
+    const actions = document.createElement('div');
+    actions.className = 'pactions';
+    const homepageBtn = pluginHomepageButton(p, () => {
+      pluginStatus(dshdT('pluginHomepageFailed'), 'err');
+    });
+    if (homepageBtn) actions.append(homepageBtn);
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'dshd-btn primary';
+    btn.className = 'dshd-btn small primary';
     if (p.installed) {
       btn.textContent = dshdT('pluginInstalledTag');
       btn.disabled = true;
@@ -592,7 +630,8 @@ function renderResults(list) {
         }
       });
     }
-    ul.append(pluginItemRow(p, btn));
+    actions.append(btn);
+    ul.append(pluginItemRow(p, actions));
   }
   applyTruncationTips($('body'));
 }

@@ -74,7 +74,7 @@ pub(crate) fn run() {
             // 状态栏等实时更新的子页面也会滞后
             .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
             // Windows 上默认的 drag-drop handler 会禁用页面 HTML5 拖放
-            // （破坏 dsh 页面自身的拖放与 dsh-file-drop 插件），显式关闭
+            // （破坏 dsh 页面自身的拖放与文件上传插件），显式关闭
             .disable_drag_drop_handler()
             .initialization_script(page_init_script)
             .on_navigation(move |url| {

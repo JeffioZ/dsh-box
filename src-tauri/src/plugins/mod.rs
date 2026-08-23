@@ -313,12 +313,49 @@ pub struct PluginInfo {
     /// 已安装版本（未安装为 None）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<String>,
-    /// 是否为 DSHBox 内置预装包（dshmarket/dsh-file-drop）。
+    /// 是否为当前 DSHBox 内置清单中的包。
     pub builtin: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+}
+
+fn github_repository_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let normalized = if let Some(path) = raw.strip_prefix("git@github.com:") {
+        format!("https://github.com/{path}")
+    } else if let Some(path) = raw.strip_prefix("git://github.com/") {
+        format!("https://github.com/{path}")
+    } else {
+        raw.strip_prefix("git+").unwrap_or(raw).to_string()
+    };
+    let url = url::Url::parse(&normalized).ok()?;
+    if url.host_str()?.eq_ignore_ascii_case("github.com") {
+        let mut segments = url.path_segments()?.filter(|segment| !segment.is_empty());
+        let owner = segments.next()?;
+        let repository = segments.next()?.trim_end_matches(".git");
+        if !owner.is_empty() && !repository.is_empty() {
+            return Some(format!("https://github.com/{owner}/{repository}"));
+        }
+    }
+    None
+}
+
+fn npm_search_package_homepage(package: &serde_json::Value) -> Option<String> {
+    let links = package.get("links")?;
+    links
+        .get("repository")
+        .and_then(|value| value.as_str())
+        .and_then(github_repository_url)
+        .or_else(|| {
+            links
+                .get("homepage")
+                .and_then(|value| value.as_str())
+                .and_then(github_repository_url)
+        })
 }
 
 /// 已安装插件列表：读 web profile 的 package.json dependencies；
-/// 描述从本地 node_modules/<pkg>/package.json 读取（零网络）。
+/// 描述与项目主页从本地 node_modules/<pkg>/package.json 读取（零网络）。
 pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
     let config = app.state::<AppState>().config();
     let builtin_consent = builtin_plugins_enabled(&config);
@@ -333,8 +370,8 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
     if let Some(deps) = json.get("dependencies").and_then(|d| d.as_object()) {
         for (name, ver) in deps {
             let version = ver.as_str().unwrap_or("?").to_string();
-            // 本地包描述：scope 包（@scope/name）的目录按嵌套路径拼接
-            let description = std::fs::read_to_string(
+            // 本地元数据：scope 包（@scope/name）的目录按嵌套路径拼接。
+            let local_manifest = std::fs::read_to_string(
                 config
                     .dsh_home()
                     .join("profiles/web/node_modules")
@@ -342,12 +379,33 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
                     .join("package.json"),
             )
             .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|j| {
-                j.get("description")
-                    .and_then(|d| d.as_str())
-                    .map(String::from)
-            });
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+            let description = local_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.get("description"))
+                .and_then(|value| value.as_str())
+                .map(String::from);
+            let homepage = local_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.get("homepage"))
+                .and_then(|value| value.as_str())
+                .and_then(github_repository_url)
+                .or_else(|| {
+                    local_manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.get("repository"))
+                        .and_then(|repository| {
+                            repository
+                                .as_str()
+                                .or_else(|| repository.get("url").and_then(|value| value.as_str()))
+                        })
+                        .and_then(github_repository_url)
+                })
+                .or_else(|| {
+                    maintenance::known_plugin_homepage(name)
+                        .as_deref()
+                        .and_then(github_repository_url)
+                });
             out.push(PluginInfo {
                 name: name.clone(),
                 version: version.clone(),
@@ -358,12 +416,13 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
                 builtin: builtin_identity(
                     builtin_consent,
                     is_market_pkg(name),
-                    market_user_removed(&config, name),
+                    effective_market_user_removed(&config, name),
                 ),
+                homepage,
             });
         }
     }
-    // 排序规则：内置插件靠前（dshmarket/dsh-file-drop 优先），其余按名称
+    // 排序规则：内置插件靠前，其余按名称
     // 字典序稳定排序，保证已安装列表展示确定性。
     out.sort_by(|a, b| b.builtin.cmp(&a.builtin).then_with(|| a.name.cmp(&b.name)));
     out
@@ -420,6 +479,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
             ) else {
                 continue;
             };
+            let homepage = pkg.and_then(npm_search_package_homepage);
             out.push(PluginInfo {
                 name: name.to_string(),
                 version: version.to_string(),
@@ -429,6 +489,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
                     .map(|s| s.to_string()),
                 installed: None,
                 builtin: false,
+                homepage,
             });
         }
     }
@@ -445,11 +506,21 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
     }
     let config = app.state::<AppState>().config();
     run_dsh_plugin_auto(app, &["add", name])?;
-    // 手动重装被强制下线的包 = 知情保留：记录标记，下次启动豁免清理
-    if MARKET_REMOVED.contains(&name) {
-        market_mark_user_removed(&config, name);
+    // 手动重装已下线或被替换的包 = 知情保留：记录标记，下次启动豁免清理
+    if let Some(package) = spec_package_name(name).filter(|package| is_retired_market_pkg(package))
+    {
+        try_mark_user_removed(&config, package).map_err(|error| {
+            crate::locale::owned(
+                format!(
+                    "插件已安装，但保存用户管理状态失败：{error}。请勿重启应用，并在插件页重试安装。"
+                ),
+                format!(
+                    "The plugin was installed, but its user-managed state could not be saved: {error}. Do not restart the app; retry the installation from the Plugins page."
+                ),
+            )
+        })?;
         crate::logging::log(&format!(
-            "plugins: 已记录 {name} 被手动重装（强制下线豁免）"
+            "plugins: 已记录 {package} 被手动重装（自动清理豁免）"
         ));
     }
     crate::logging::log(&format!("plugins: 已安装 {name}，等待统一应用"));
@@ -489,7 +560,7 @@ pub struct UpdateStatus {
     pub installed: Option<String>,
     pub latest: String,
     pub update_available: bool,
-    /// 是否为 DSHBox 内置预装包（dshmarket/dsh-file-drop）。
+    /// 是否为当前 DSHBox 内置清单中的包。
     pub builtin: bool,
     /// 新版仍在 supply-chain 冷却期：此时间戳（epoch 秒）前不应执行升级。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -663,8 +734,11 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
     // 卸载或从未授权的目录项不参与查询，避免无意义的网络请求与身份混淆。
     let mut pkgs = installed_pkgs(&config);
     for p in market_pkg_ids() {
-        if builtin_identity(builtin_consent, true, market_user_removed(&config, p))
-            && !pkgs.iter().any(|x| x == p)
+        if builtin_identity(
+            builtin_consent,
+            true,
+            effective_market_user_removed(&config, p),
+        ) && !pkgs.iter().any(|x| x == p)
         {
             pkgs.push((*p).to_string());
         }
@@ -684,7 +758,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
                     builtin: builtin_identity(
                         builtin_consent,
                         is_market_pkg(&pkg),
-                        market_user_removed(&config, &pkg),
+                        effective_market_user_removed(&config, &pkg),
                     ),
                     cooldown_until: None,
                     error: Some(
@@ -713,7 +787,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
             builtin: builtin_identity(
                 builtin_consent,
                 is_market_pkg(&pkg),
-                market_user_removed(&config, &pkg),
+                effective_market_user_removed(&config, &pkg),
             ),
             cooldown_until,
             error: None,
@@ -738,7 +812,7 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
     let builtin = builtin_identity(
         builtin_plugins_enabled(&config),
         is_market_pkg(pkg),
-        market_user_removed(&config, pkg),
+        effective_market_user_removed(&config, pkg),
     );
     let (latest, published) = market_latest_info(pkg).ok_or_else(|| {
         crate::locale::text("版本查询失败。", "Failed to query the latest version.")
@@ -859,6 +933,49 @@ mod tests {
             None
         );
         assert_eq!(spec_package_name("./plugin"), None);
+    }
+
+    #[test]
+    fn project_url_normalizes_only_github_repositories() {
+        assert_eq!(
+            github_repository_url("git+https://github.com/example/plugin.git").as_deref(),
+            Some("https://github.com/example/plugin")
+        );
+        assert_eq!(
+            github_repository_url("git@github.com:example/plugin.git").as_deref(),
+            Some("https://github.com/example/plugin")
+        );
+        assert_eq!(
+            github_repository_url("https://github.com/example/plugin/releases/latest").as_deref(),
+            Some("https://github.com/example/plugin")
+        );
+        assert!(github_repository_url("https://gitlab.com/example/plugin").is_none());
+        assert!(github_repository_url("file:///tmp/plugin").is_none());
+    }
+
+    #[test]
+    fn npm_search_project_url_prefers_a_github_repository() {
+        let package = serde_json::json!({
+            "links": {
+                "repository": "git+https://github.com/example/plugin.git",
+                "homepage": "https://example.com/plugin"
+            }
+        });
+        assert_eq!(
+            npm_search_package_homepage(&package).as_deref(),
+            Some("https://github.com/example/plugin")
+        );
+
+        let fallback = serde_json::json!({
+            "links": {
+                "repository": "https://gitlab.com/example/plugin",
+                "homepage": "https://github.com/example/fallback#readme"
+            }
+        });
+        assert_eq!(
+            npm_search_package_homepage(&fallback).as_deref(),
+            Some("https://github.com/example/fallback")
+        );
     }
 
     #[test]
@@ -1118,8 +1235,55 @@ mod tests {
     fn preset_plugins_loads_from_embedded_json() {
         let ids: Vec<&str> = market_pkg_ids().collect();
         assert!(ids.contains(&"dshmarket"));
-        assert!(ids.contains(&"dsh-file-drop"));
+        assert!(ids.contains(&"dsh-file-upload"));
+        assert!(!ids.contains(&"dsh-file-drop"));
+        assert!(is_retired_market_pkg("dsh-file-drop"));
         assert!(!ids.is_empty());
+
+        let current: std::collections::HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(current.len(), ids.len());
+        let retired: Vec<&str> = retired_market_pkg_ids().collect();
+        let unique_retired: std::collections::HashSet<&str> = retired.iter().copied().collect();
+        assert_eq!(unique_retired.len(), retired.len());
+        assert!(current.is_disjoint(&unique_retired));
+    }
+
+    #[test]
+    fn replacement_inherits_user_removal_and_blocks_parallel_install() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-replacement-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+
+        try_mark_user_removed(&config, "dsh-file-drop").unwrap();
+        assert!(effective_market_user_removed(&config, "dsh-file-upload"));
+        assert!(
+            reinstallable_builtin_plugins(&config, &std::collections::HashSet::new())
+                .iter()
+                .any(|plugin| plugin.id == "dsh-file-upload")
+        );
+
+        let profile = config.dsh_home().join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dsh-file-drop":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            installed_replacement_predecessor(&config, "dsh-file-upload"),
+            Some("dsh-file-drop")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1140,7 +1304,7 @@ mod tests {
         let mut installed = HashSet::new();
 
         assert!(reinstallable_builtin_plugins(&config, &installed).is_empty());
-        market_mark_user_removed(&config, "dshmarket");
+        try_mark_user_removed(&config, "dshmarket").unwrap();
 
         let available = reinstallable_builtin_plugins(&config, &installed);
         let market = available
