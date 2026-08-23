@@ -113,14 +113,17 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
 /// 自动落 onboarded 标记并放行，避免永久卡在启动页。
 /// 等待解除条件：用户已保存（onboarding_done）。开发构建每个进程仍展示
 /// 一次，但同一进程内的服务重启不会再次进入引导。
-fn wait_onboarding(state: &AppState) {
+fn wait_onboarding(app: &AppHandle, state: &AppState) {
     if !state.onboarding_pending() {
         return;
     }
     crate::logging::log("boot: 首次使用配置未完成，停留启动页等待确认");
     // 面板已显示：无限等待用户明确完成；
-    // 面板未显示（启动页 IPC 异常等）：60 秒兜底自动放行，避免卡死
+    // 面板未显示（启动页 IPC 异常等）：60 秒后先主动探活一次，确认面板
+    // 确实未渲染才兜底放行，避免把「回报迟到但面板已显示」误判为异常而
+    // 跳过用户正在填写的首次设置。
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut probed = false;
     loop {
         std::thread::sleep(Duration::from_secs(1));
         if crate::app_state::onboarding_done() {
@@ -128,6 +131,17 @@ fn wait_onboarding(state: &AppState) {
             return;
         }
         if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
+            // 到期且尚未收到面板显示回报：先探查主 WebView 里面板是否可见。
+            // Tauri 的 eval 不返回脚本值，探活函数会再次 invoke onboarding_shown
+            // 回报；短等待后重查原子标志即可。探活失败/页面不在启动页时按
+            // 「未显示」处理，保留原有放行兜底，不引入新的卡死路径。
+            if !probed {
+                probed = true;
+                if probe_onboarding_visibility(app) {
+                    crate::logging::log("boot: 首次配置面板探活可见，转为无限等待");
+                    continue;
+                }
+            }
             // 超时兜底：自动落标记并继续，避免启动页卡死
             let config = state.config();
             let _ = crate::app_state::save_state_value(
@@ -149,6 +163,34 @@ fn wait_onboarding(state: &AppState) {
             return;
         }
     }
+}
+
+/// 到期主动探活：仅当主 WebView 当前停在本地启动页、且页内探活函数确认
+/// 面板可见（并回报 onboarding_shown）时返回 true。eval 或查询失败、页面
+/// 已离开启动页等一律返回 false，交回放行兜底处理。
+fn probe_onboarding_visibility(app: &AppHandle) -> bool {
+    let Some(webview) = crate::main_webview(app) else {
+        crate::logging::log("boot: 探活失败（主 WebView 不存在），按未显示放行");
+        return false;
+    };
+    let on_startup_page = webview.url().ok().is_some_and(|url| {
+        let dev = crate::app_dev_origin(app);
+        crate::is_local_app_url(&url, dev.as_ref())
+    });
+    if !on_startup_page {
+        crate::logging::log("boot: 探活跳过（主 WebView 不在本地启动页），按未显示放行");
+        return false;
+    }
+    if webview
+        .eval("window.__dshdOnboardingVisible && window.__dshdOnboardingVisible()")
+        .is_err()
+    {
+        crate::logging::log("boot: 探活 eval 失败，按未显示放行");
+        return false;
+    }
+    // 探活函数会异步 invoke onboarding_shown；给 IPC 一个短窗口后再读标志。
+    std::thread::sleep(Duration::from_millis(500));
+    crate::app_state::onboarding_shown()
 }
 
 /// 首次配置可能触发凭据或插件重启。此时加载页已显示对应忙碌状态，当前
@@ -225,7 +267,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         if state.onboarding_pending() {
             emit_status(app, BootPhase::Ready, ready, "");
         }
-        wait_onboarding(&state);
+        wait_onboarding(app, &state);
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
@@ -258,7 +300,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         if state.onboarding_pending() {
             emit_status(app, BootPhase::Ready, ready, "");
         }
-        wait_onboarding(&state);
+        wait_onboarding(app, &state);
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
@@ -317,7 +359,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     if state.onboarding_pending() {
         emit_status(app, BootPhase::Ready, ready, "");
     }
-    wait_onboarding(&state);
+    wait_onboarding(app, &state);
     if onboarding_handoff_pending(&state) {
         return Ok(());
     }

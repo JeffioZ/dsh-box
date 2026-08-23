@@ -510,6 +510,17 @@ async function initOnboarding() {
   } catch (e) { /* 后端未就绪时忽略 */ }
 }
 
+// Rust 侧 60 秒兜底窗口内主动探活：返回 true 表示首次设置面板当前可见
+// （或已通过正常路径回报过），并再次 invoke onboarding_shown 让 boot 无限等待；
+// false 表示面板确实未显示，允许 Rust 放行兜底。
+window.__dshdOnboardingVisible = () => {
+  const visible = onboardingActive();
+  if (visible) {
+    window.__TAURI__.core.invoke('onboarding_shown').catch(() => {});
+  }
+  return visible;
+};
+
 async function submitOnboarding() {
   if (onboardingSaving || !lastStatusPayload || lastStatusPayload.phase !== 'ready') return;
   const errBox = $('ob-error');
