@@ -68,7 +68,29 @@ pub fn silent_check(app: &AppHandle) {
     }
     let handle = app.clone();
     std::thread::spawn(move || {
-        let result = check(&handle);
+        let mut result = check(&handle);
+        // dev 构建：有可更新的真实数据用它；没有（已最新/查询失败/无数据）
+        // 则注入模拟，便于开发者验证两个提示弹窗及排队逻辑。正式版
+        // dev_build() 恒为 false，不受影响。dev 下模拟 tag（9.9.9-dev）在
+        // GitHub 不存在，点「查看更新内容/重启并更新」预期 404/失败，仅验证 UI。
+        if crate::app_state::dev_build() {
+            if !result.dsh.as_ref().is_some_and(|d| d.update_available) {
+                result.dsh = Some(VersionInfo {
+                    installed: "0.9.8".into(),
+                    latest: "0.9.9-dev".into(),
+                    update_available: true,
+                    latest_error: None,
+                });
+            }
+            if !result.app.as_ref().is_some_and(|a| a.update_available) {
+                result.app = Some(VersionInfo {
+                    installed: env!("CARGO_PKG_VERSION").into(),
+                    latest: "9.9.9-dev".into(),
+                    update_available: true,
+                    latest_error: None,
+                });
+            }
+        }
         match &result.dsh {
             Some(d) => {
                 crate::logging::log(&format!(
@@ -91,6 +113,23 @@ pub fn silent_check(app: &AppHandle) {
                 if let Some(e) = &result.error {
                     crate::logging::log(&format!("updater: 静默检查跳过：{e}"));
                 }
+            }
+        }
+        // dev 模拟：应用更新就绪同样提示（正式版由 periodic 的 prefetch 触发）
+        if crate::app_state::dev_build() {
+            if let Some(app_info) = result.app.as_ref().filter(|info| info.update_available) {
+                crate::control_center::open_update_prompt(
+                    &handle,
+                    crate::control_center::UpdatePrompt {
+                        kind: "app".into(),
+                        version: app_info.latest.clone(),
+                        current: None,
+                        release_url: Some(format!(
+                            "https://github.com/{APP_REPO}/releases/tag/v{}",
+                            app_info.latest
+                        )),
+                    },
+                );
             }
         }
     });
@@ -134,79 +173,77 @@ pub fn start_periodic_check(app: AppHandle) {
     });
 }
 
-/// 有新版时的启动提示（不自动安装，用户确认才更新）。
+/// 有新版时的启动提示（自绘弹窗：立即更新 / 稍后 / 查看更新内容；与应用提示体验一致）。
+/// 「立即更新」由弹窗前端走 app_dialog_update("dsh") → apply_dsh_update。
 fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
-    use tauri_plugin_dialog::MessageDialogKind;
-    let msg = if crate::locale::is_chinese() {
-        format!(
-            "dsh 有新版本可用：\n{}（当前 {}）\n\n是否立即更新？",
-            d.latest, d.installed
-        )
-    } else {
-        format!(
-            "A new dsh version is available:\n{} (current: {})\n\nUpdate now?",
-            d.latest, d.installed
-        )
-    };
-    if crate::native_dialog::ask(
+    // dsh 的 GitHub tag 形如 `dsh-v0.1.1-rc.2`（monorepo，前缀 dsh-v），
+    // 与 DSHBox 应用自身的 `v` 前缀不同；`d.latest` 来自 npm 裸 semver（无 v）。
+    let release_url = format!(
+        "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v{}",
+        d.latest
+    );
+    crate::control_center::open_update_prompt(
         app,
-        msg,
-        crate::locale::text("发现新版本", "Update available"),
-        MessageDialogKind::Info,
-        crate::locale::text("立即更新", "Update now"),
-        crate::locale::text("稍后", "Later"),
-    ) {
-        // 打开弹窗作为进度载体：update-progress / update-result 事件在
-        // check 页实时呈现，用户全程可见（下载→安装→重启服务），
-        // 更新仍在后台线程执行，不阻塞界面
-        crate::control_center::open_update_progress(app);
-        let handle = app.clone();
-        std::thread::spawn(move || match apply(&handle, "dsh") {
-            Ok(()) => {
-                // 成功后重查一次：弹窗显示新版本状态（已是最新）。
-                // 结果同时写入状态（轮询通道）与事件（即时渲染）：
-                // 事件早于弹窗页面就绪时被丢弃，轮询兜底保证不滞留
-                emit_progress(
+        crate::control_center::UpdatePrompt {
+            kind: "dsh".into(),
+            version: d.latest.clone(),
+            current: Some(d.installed.clone()),
+            release_url: Some(release_url),
+        },
+    );
+}
+
+/// 执行 dsh 更新（统一入口：检查更新弹窗的更新按钮 与 更新提示弹窗的立即更新共用）。
+pub(crate) fn apply_dsh_update(app: &AppHandle) {
+    // 打开弹窗作为进度载体：update-progress / update-result 事件在
+    // check 页实时呈现，用户全程可见（下载→安装→重启服务），
+    // 更新仍在后台线程执行，不阻塞界面
+    crate::control_center::open_update_progress(app);
+    let handle = app.clone();
+    std::thread::spawn(move || match apply(&handle, "dsh") {
+        Ok(()) => {
+            // 成功后重查一次：弹窗显示新版本状态（已是最新）。
+            // 结果同时写入状态（轮询通道）与事件（即时渲染）：
+            // 事件早于弹窗页面就绪时被丢弃，轮询兜底保证不滞留
+            emit_progress(
+                &handle,
+                crate::locale::text("正在确认新版本…", "Verifying the new version…"),
+            );
+            let result = check(&handle);
+            let done_msg = crate::locale::text("dsh 更新完成。", "dsh was updated.");
+            handle
+                .state::<AppState>()
+                .set_update_done(true, Some(done_msg.into()));
+            handle
+                .state::<AppState>()
+                .set_last_check(Some(result.clone()));
+            handle.state::<AppState>().set_check_progress(None);
+            let _ = handle.emit("update-result", &result);
+        }
+        Err(e) => {
+            let result = CheckResult {
+                error: Some(e.clone()),
+                ..CheckResult::default()
+            };
+            handle
+                .state::<AppState>()
+                .set_update_done(false, Some(e.clone()));
+            handle
+                .state::<AppState>()
+                .set_last_check(Some(result.clone()));
+            handle.state::<AppState>().set_check_progress(None);
+            let _ = handle.emit("update-result", &result);
+            // 弹窗未显示时才弹原生兜底（弹窗开着已显示失败原因，不再重复打扰）
+            if !crate::control_center::is_check_open(&handle) {
+                crate::native_dialog::show_message(
                     &handle,
-                    crate::locale::text("正在确认新版本…", "Verifying the new version…"),
+                    format!("{}: {e}", crate::locale::text("更新失败", "Update failed")),
+                    crate::locale::text("更新", "Update"),
+                    tauri_plugin_dialog::MessageDialogKind::Warning,
                 );
-                let result = check(&handle);
-                let done_msg = crate::locale::text("dsh 更新完成。", "dsh was updated.");
-                handle
-                    .state::<AppState>()
-                    .set_update_done(true, Some(done_msg.into()));
-                handle
-                    .state::<AppState>()
-                    .set_last_check(Some(result.clone()));
-                handle.state::<AppState>().set_check_progress(None);
-                let _ = handle.emit("update-result", &result);
             }
-            Err(e) => {
-                let result = CheckResult {
-                    error: Some(e.clone()),
-                    ..CheckResult::default()
-                };
-                handle
-                    .state::<AppState>()
-                    .set_update_done(false, Some(e.clone()));
-                handle
-                    .state::<AppState>()
-                    .set_last_check(Some(result.clone()));
-                handle.state::<AppState>().set_check_progress(None);
-                let _ = handle.emit("update-result", &result);
-                // 弹窗未显示时才弹 win32 兜底（弹窗开着已显示失败原因，
-                // 不再重复打扰）
-                if !crate::control_center::is_check_open(&handle) {
-                    crate::native_dialog::show_message(
-                        &handle,
-                        format!("{}: {e}", crate::locale::text("更新失败", "Update failed")),
-                        crate::locale::text("更新", "Update"),
-                        MessageDialogKind::Warning,
-                    );
-                }
-            }
-        });
-    }
+        }
+    });
 }
 
 /// 查询 dsh 与 Node 是否有可用更新。

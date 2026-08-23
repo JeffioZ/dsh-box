@@ -408,3 +408,43 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
   .dshd-head { height: 48px; padding-top: 14px; }
   .center-wrap { margin-top: 0; }
 }
+
+/* —— 更新提示弹窗（dsh 发现新版 / DSHBox 应用更新就绪，共用）——
+   紧凑窗口：内容顶部起、按钮组贴底，文案左对齐。 */
+.update-prompt {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 0;
+  min-height: 100%;
+  overflow-y: auto;
+}
+.up-desc {
+  font-size: 12.5px; line-height: 1.5; color: var(--dshd-text-dim);
+  overflow-wrap: anywhere; margin: 0; text-align: left;
+}
+/* 查看更新内容：纯链接，与描述严格左对齐 */
+.up-link {
+  align-self: flex-start;
+  font-size: 12.5px;
+  color: var(--dshd-accent);
+  text-decoration: none;
+  padding: 0;
+  margin: 0;
+}
+.up-link:hover { text-decoration: underline; color: var(--dshd-accent-hover); }
+.up-link:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; border-radius: 3px; }
+/* 按钮组贴底、右对齐 */
+.up-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: auto; padding-bottom: 0; margin-bottom: 0;
+}
+/* 无导航模式：标题与文案左边距一致（都 18px） */
+body.update-prompt-mode .dshd-head { padding-left: 18px; }
+body.update-prompt-mode .body { padding: 0 18px 14px; }
+@media (prefers-color-scheme: light) {
+  .up-link { color: var(--dshd-accent); }
+  .up-link:hover { color: var(--dshd-accent-hover); }
+}
+
+/* update-prompt 紧凑模式：无左侧导航，主区撑满 420 卡片 */
+body.update-prompt-mode #nav { display: none; }
+body.update-prompt-mode #main { width: 100%; }

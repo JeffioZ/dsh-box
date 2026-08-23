@@ -38,7 +38,6 @@ pub(crate) enum PortAvailability {
 enum BootOutcome {
     Ready,
     Cancelled,
-    RestartWithSource,
     Failed(String),
 }
 
@@ -66,16 +65,6 @@ pub fn boot_loop(app: AppHandle) {
                 state.set_phase(BootPhase::Cancelled, message, "");
                 emit_status(&app, BootPhase::Cancelled, message, "");
                 wait_retry(&app, rx.as_ref());
-            }
-            BootOutcome::RestartWithSource => {
-                let message = crate::locale::text("正在切换下载源…", "Switching download source…");
-                crate::logging::log(&format!(
-                    "boot: 切换下载源为 {}，立即重新引导",
-                    app.state::<AppState>().config().download_source
-                ));
-                app.state::<AppState>()
-                    .set_phase(BootPhase::Starting, message, "");
-                emit_status(&app, BootPhase::Starting, message, "");
             }
             BootOutcome::Failed(msg) => {
                 crate::logging::log(&format!("boot: 失败：{msg}"));
@@ -235,7 +224,6 @@ fn boot_once(app: &AppHandle) -> BootOutcome {
 
 fn classify_boot_result(action: InstallAction, result: Result<(), String>) -> BootOutcome {
     match (action, result) {
-        (InstallAction::SwitchSource, _) => BootOutcome::RestartWithSource,
         (InstallAction::Cancel, _) => BootOutcome::Cancelled,
         (InstallAction::None, Ok(())) => BootOutcome::Ready,
         (InstallAction::None, Err(message)) => BootOutcome::Failed(message),
@@ -938,13 +926,6 @@ mod tests {
     fn cancellation_is_not_reported_as_startup_failure() {
         let result = classify_boot_result(InstallAction::Cancel, Err("internal sentinel".into()));
         assert_eq!(result, BootOutcome::Cancelled);
-    }
-
-    #[test]
-    fn source_switch_restarts_without_error_page() {
-        let result =
-            classify_boot_result(InstallAction::SwitchSource, Err("internal sentinel".into()));
-        assert_eq!(result, BootOutcome::RestartWithSource);
     }
 
     #[test]

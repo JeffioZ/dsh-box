@@ -23,6 +23,7 @@ pub use app::prefetch_app_update;
 use app::update_app_exe;
 #[cfg(test)]
 use app::{parse_app_release_asset, windows_replace_script};
+pub(crate) use check::apply_dsh_update;
 pub use check::{check, check_and_report, silent_check, start_periodic_check, CheckResult};
 use dsh_update::update_dsh;
 use node::update_node;

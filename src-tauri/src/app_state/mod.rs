@@ -112,7 +112,6 @@ pub struct StatusPayload {
 pub(crate) enum InstallAction {
     None,
     Cancel,
-    SwitchSource,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -214,6 +213,11 @@ pub(crate) struct Inner {
     npm_version: Option<String>,
     /// 自绘弹窗最近一次打开载荷（app_dialog_get 拉取用）。
     last_dialog: Option<crate::control_center::AppDialogOpen>,
+    /// 更新提示弹窗队列：dsh 与应用两个更新可能几乎同时触发；单窗无法并排，
+    /// 正在显示时新提示入队，关闭当前后依次弹出，不丢失任何选择。
+    pending_update_prompts: std::collections::VecDeque<crate::control_center::UpdatePrompt>,
+    /// 当前是否正有一个 update-prompt 在显示（覆盖 16ms 延迟 show 的时序盲区）。
+    update_prompt_showing: bool,
     /// 最近一次余额查询结果（余额弹窗轮询拉取；事件通道对该窗口不可靠）。
     last_balance: Option<crate::balance::BalancePayload>,
     /// 最近一次更新检查结果 + 进度文案 + 更新完成结果（检查更新弹窗轮询拉取）。
@@ -300,6 +304,8 @@ impl AppState {
             node_version: None,
             npm_version: None,
             last_dialog: None,
+            pending_update_prompts: std::collections::VecDeque::new(),
+            update_prompt_showing: false,
             last_balance: None,
             last_check: None,
             check_progress: None,
@@ -400,10 +406,8 @@ impl AppState {
         {
             return false;
         }
-        // 切源包含“取消当前下载并立即重启”，优先级高于普通取消。
-        if inner.install_control.action != InstallAction::SwitchSource {
-            inner.install_control.action = action;
-        }
+        // 取消安装：仅登记普通取消即可。
+        inner.install_control.action = action;
         true
     }
 
@@ -523,39 +527,6 @@ impl AppState {
         self.persist_config_change("launch_behavior", serde_json::json!(value), |config| {
             config.launch_behavior = value.to_string()
         })
-    }
-
-    pub(crate) fn request_install_source(
-        &self,
-        generation: u64,
-        value: &str,
-    ) -> Result<bool, String> {
-        if !matches!(value, "auto" | "official" | "mirror") {
-            return Err(crate::locale::text("未知下载源。", "Unknown download source.").into());
-        }
-        let mut inner = self.lock_inner();
-        if inner.install_control.generation != generation {
-            return Ok(false);
-        }
-        let restart_install = matches!(
-            inner.phase,
-            BootPhase::InstallingNode | BootPhase::InstallingDsh
-        );
-        if !restart_install && inner.phase != BootPhase::Cancelled {
-            return Ok(false);
-        }
-        // 校验轮次、落盘和登记切源必须在同一临界区内完成：过期页面不能
-        // 只改配置不重启，落盘失败也不能误取消当前安装。
-        save_config_value(
-            &inner.config.root,
-            "download_source",
-            serde_json::json!(value),
-        )?;
-        inner.config.download_source = value.to_string();
-        if restart_install {
-            inner.install_control.action = InstallAction::SwitchSource;
-        }
-        Ok(restart_install)
     }
 
     /// 首次使用配置是否尚未完成；开发构建每次进程启动展示一次。
@@ -814,6 +785,43 @@ impl AppState {
         self.lock_inner().last_dialog.clone()
     }
 
+    /// 更新提示是否正在显示（供 close 判断是否为 update-prompt 弹窗）。
+    pub fn update_prompt_showing(&self) -> bool {
+        self.lock_inner().update_prompt_showing
+    }
+
+    /// 关闭当前提示后原子地：清除“正在显示”信号并出队下一个待展示提示；
+    /// 若还有下一个则在同一锁内置位 showing=true，消除出队与置位之间
+    /// 被并发出队竞态的窗口。
+    pub fn clear_show_and_dequeue(&self) -> Option<crate::control_center::UpdatePrompt> {
+        let mut inner = self.lock_inner();
+        inner.update_prompt_showing = false;
+        let next = inner.pending_update_prompts.pop_front();
+        inner.update_prompt_showing = next.is_some();
+        next
+    }
+
+    /// 用户在更新提示上已做决策（立即更新/稍后）：清除“正在显示”信号并
+    /// 清空待展示队列，避免滞留或误弹。
+    pub fn discard_update_prompt_queue(&self) {
+        let mut inner = self.lock_inner();
+        inner.update_prompt_showing = false;
+        inner.pending_update_prompts.clear();
+    }
+
+    /// 原子申请 update-prompt 展示权：当前无提示在显示则置位并返回 true
+    /// （调用方应立即 present）；否则把 prompt 入队并返回 false。
+    pub fn acquire_update_prompt_show(&self, prompt: crate::control_center::UpdatePrompt) -> bool {
+        let mut inner = self.lock_inner();
+        if inner.update_prompt_showing {
+            inner.pending_update_prompts.push_back(prompt);
+            false
+        } else {
+            inner.update_prompt_showing = true;
+            true
+        }
+    }
+
     // ---------- 弹窗轮询数据（事件通道对该窗口不可靠，页面轮询拉取） ----------
 
     pub fn set_last_balance(&self, payload: Option<crate::balance::BalancePayload>) {
@@ -903,7 +911,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_section_field, onboarding_required_for};
+    use super::{merge_section_field, onboarding_required_for, AppState};
 
     #[test]
     fn onboarding_gate_distinguishes_dev_processes_from_internal_navigation() {
@@ -946,5 +954,49 @@ mod tests {
         let source = "locale:\n  preference: zh\n  preference: en\n";
         let merged = merge_section_field(source, "locale", "preference", "zh");
         assert_eq!(merged.matches("preference:").count(), 1);
+    }
+
+    fn sample_prompt(kind: &str) -> crate::control_center::UpdatePrompt {
+        crate::control_center::UpdatePrompt {
+            kind: kind.into(),
+            version: "1.0.0".into(),
+            current: None,
+            release_url: None,
+        }
+    }
+
+    #[test]
+    fn update_prompt_acquire_grants_first_show_then_queues() {
+        let state = AppState::new();
+        // 第一个申请成功（占据展示权）。
+        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
+        assert!(state.update_prompt_showing());
+        // 展示期间新提示入队，不再获得展示权。
+        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
+        assert!(state.update_prompt_showing());
+    }
+
+    #[test]
+    fn clear_show_and_dequeue_pops_next_and_keeps_showing() {
+        let state = AppState::new();
+        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
+        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
+        // 关闭当前：出队 dsh 且 showing 仍为 true（锁内原子置位，无竞态窗口）。
+        let next = state.clear_show_and_dequeue();
+        assert_eq!(next.map(|p| p.kind), Some("dsh".to_string()));
+        assert!(state.update_prompt_showing());
+        // 队列空：再关一次 showing 归 false。
+        assert!(state.clear_show_and_dequeue().is_none());
+        assert!(!state.update_prompt_showing());
+    }
+
+    #[test]
+    fn discard_update_prompt_queue_clears_flag_and_pending() {
+        let state = AppState::new();
+        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
+        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
+        state.discard_update_prompt_queue();
+        assert!(!state.update_prompt_showing());
+        assert!(state.clear_show_and_dequeue().is_none());
     }
 }

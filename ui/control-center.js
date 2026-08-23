@@ -315,6 +315,51 @@ function renderAbout(initial) {
   if (checkBtn) checkBtn.addEventListener('click', () => navigateTo('check'));
 }
 
+// —— 更新提示（dsh 发现新版 / DSHBox 应用更新就绪，共用）——
+function renderUpdatePrompt(p) {
+  const isApp = p && p.kind === 'app';
+  const version = (p && p.version) || '';
+  const current = (p && p.current) || '';
+  const headline = isApp
+    ? dshdT('appUpdateReadyDesc', { version })
+    : dshdT('dshUpdatePromptDesc', { version, current });
+  const body = $('body');
+  const viewLink = p && p.release_url
+    ? '<a class="up-link" id="up-view-release" href="' + esc(p.release_url) +
+      '" rel="noopener noreferrer">' + dshdT('viewReleaseNotes') + ' ↗</a>'
+    : '';
+  body.innerHTML =
+    '<div class="update-prompt">' +
+    '<div class="up-desc">' + esc(headline) + '</div>' +
+    viewLink +
+    '<div class="up-actions">' +
+    '<button type="button" class="dshd-btn" id="up-later">' + dshdT('later') + '</button>' +
+    '<button type="button" class="dshd-btn primary" id="up-confirm">' +
+      (isApp ? dshdT('restartAndUpdate') : dshdT('updateNow')) + '</button>' +
+    '</div>' +
+    '</div>';
+  const viewBtn = $('up-view-release');
+  if (viewBtn) {
+    viewBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      invoke('open_external_url', { url: p.release_url }).catch(() => {});
+    });
+  }
+  $('up-later').addEventListener('click', () => close());
+  $('up-confirm').addEventListener('click', () => {
+    const button = $('up-confirm');
+    const which = isApp ? 'app' : 'dsh';
+    // 防双击：更新动作不可并发重复触发（dsh 会起第二条 apply 线程）。
+    if (button.disabled) return;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    invoke('app_dialog_update', { which }).catch(() => {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    });
+  });
+}
+
 // —— 左侧导航（单窗口多功能切换） ——
 const NAV_ITEMS = [
   { kind: 'stats', label: 'navStats', icon: 'chart', capability: 'managed-ready' },
@@ -358,6 +403,14 @@ const NAV_ICONS = {
 function renderNav(activeKind) {
   const nav = $('nav');
   if (!nav) return;
+  // 更新提示是即时弹窗，无左侧功能导航；但头部标题仍要写入 dialog-title
+  // （与 ✕ 同一排，由 Rust 传入的 currentOpen.title 提供）。
+  if (activeKind === 'update-prompt') {
+    nav.innerHTML = '';
+    const pageTitle = $('dialog-title');
+    if (pageTitle) pageTitle.textContent = (currentOpen && currentOpen.title) || '';
+    return;
+  }
   nav.setAttribute('aria-label', dshdT('navLabel'));
   nav.innerHTML = '';
   // 导航顶部标题（对齐 dsh 设置弹窗 navTitle：16px/24px 500）；
@@ -421,6 +474,7 @@ function renderCurrent(opts) {
       if (opts && opts.triggerCheck) invoke('app_dialog_run_check').catch(() => {});
     }
   } else if (k === 'about') renderAbout((currentOpen && currentOpen.initial) || {});
+  else if (k === 'update-prompt') renderUpdatePrompt((currentOpen && currentOpen.initial) || {});
   else if (k === 'plugins') renderPlugins();
   else if (k === 'settings') renderSettings();
 }
@@ -437,6 +491,7 @@ function navigateTo(kind) {
   if (kind !== 'balance') setBalanceRefreshBusy(false);
   openKind = kind;
   currentOpen = { kind, title: '', initial: currentOpen.initial };
+  document.body.classList.toggle('update-prompt-mode', kind === 'update-prompt');
   renderNav(kind);
   // 标题已由 renderNav 写入导航顶部 nav-title（#title 元素已随结构重构移除，
   // 此前此处 $('title') 抛 TypeError 导致 renderCurrent 不执行——导航切换失效的根因）
@@ -509,6 +564,7 @@ function applyOpen(p) {
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   currentOpen = p;
   openKind = p.kind;
+  document.body.classList.toggle('update-prompt-mode', p.kind === 'update-prompt');
   applyTruncationTips(document);
   renderNav(p.kind);
   // Rust 打开时已按 kind 预置状态（open_check 触发检查等），此处只渲染
@@ -538,6 +594,7 @@ window.__dshdReset = () => {
   lastResultKey = '';
   lastProgress = '';
   openKind = '';
+  document.body.classList.remove('update-prompt-mode');
   balanceStamp = '';
   checkStamp = '';
   pendingRefreshData = null;

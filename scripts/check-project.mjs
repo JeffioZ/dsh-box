@@ -286,8 +286,6 @@ for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape']) {
 const startupHtml = read('ui/index.html');
 for (const contract of [
   'id="ob-runtime" class="ob-runtime hidden"',
-  'id="ob-source"',
-  'aria-controls="ob-source-list"',
   'id="ob-runtime-progress"',
   'data-install-cancel',
   'data-install-reinstall',
@@ -296,8 +294,6 @@ for (const contract of [
 }
 for (const contract of [
   'renderOnboardingRuntime',
-  "setupSelect('ob-source'",
-  'changeInstallSource',
   'onboardingPausedByError',
   "document.querySelectorAll('[data-install-cancel]')",
   "document.querySelectorAll('[data-install-reinstall]')",
@@ -310,9 +306,8 @@ for (const stale of ['ob-runtime-toggle', 'onboardingSourceExpanded']) {
   }
 }
 if (!startupJs.includes("generation: installGeneration")
-    || !read('src-tauri/src/dsh.rs').includes('BootOutcome::RestartWithSource')
     || !read('src-tauri/src/app_state/mod.rs').includes('pub install_generation: u64')) {
-  fail('首次安装取消/切源必须使用带引导轮次的显式业务状态');
+  fail('首次安装取消必须使用带引导轮次的显式业务状态');
 }
 for (const contract of [
   'id="service-choice-box"',

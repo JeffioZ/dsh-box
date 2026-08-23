@@ -60,8 +60,6 @@ body.fade-out { opacity: 0; }
   font-variant-numeric: tabular-nums;
 }
 .install-actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 28px; }
-.install-source-label { color: var(--muted); font-size: 11px; }
-.install-source { display: inline-flex; align-items: center; gap: 3px; }
 .bar { height: 4px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
 .bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #679efe); transition: width .45s ease; animation: slide 1.4s linear infinite; }
 .bar-fill.determinate { animation: none; }
@@ -137,23 +135,6 @@ body.fade-out { opacity: 0; }
 .btn:disabled:hover { background: #23232b; border-color: var(--line); }
 .btn.primary:disabled:hover { background: var(--blue-surface); border-color: var(--blue-surface); }
 .btn.small { min-height: 28px; padding: 0 12px; font-size: 12px; }
-.btn.source-choice[aria-pressed="true"] {
-  background: var(--blue-surface); border-color: var(--blue-surface); color: #fff;
-}
-.btn.source-choice[aria-pressed="true"]:hover {
-  background: var(--blue-surface-hover); border-color: var(--blue-surface-hover);
-}
-.btn.source-choice[aria-pressed="true"]:active {
-  background: var(--blue-surface-pressed); border-color: var(--blue-surface-pressed);
-}
-.btn.source-choice {
-  min-width: 72px; text-align: center;
-  background: var(--dshd-hover); border-color: var(--dshd-border-strong); color: var(--text);
-}
-.btn.source-choice:not([aria-pressed="true"]):not(:disabled):hover {
-  background: var(--dshd-pressed); border-color: var(--blue);
-}
-.btn.source-choice:disabled { opacity: .42; }
 .hidden { display: none !important; }
 
 .footer { position: fixed; z-index: 2; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); pointer-events: none; }
@@ -279,33 +260,24 @@ body.fade-out { opacity: 0; }
   min-height: 32px; display: flex; flex-direction: column; justify-content: center; gap: 1px;
 }
 .ob-runtime-heading {
-  min-width: 0; display: flex; align-items: baseline; gap: 7px;
+  min-width: 0; display: flex; align-items: baseline; gap: 8px;
 }
-.ob-runtime-heading .ob-sec-label { flex: none; }
 .ob-runtime-state {
   min-width: 0; color: var(--text); font-size: 12.5px; line-height: 18px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1;
 }
 .ob-runtime-detail {
   min-width: 0;
-  color: var(--muted); font-size: 11px; line-height: 16px;
+  flex: none;
+  color: var(--muted); font-size: 11px; line-height: 18px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 .ob-runtime-progress { height: 3px; opacity: .9; }
 .ob-runtime-actions {
-  padding-top: 9px; border-top: 1px solid var(--dshd-border);
   display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
 }
-.ob-runtime-source-label { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
-.ob-source-select .dshd-select-trigger {
-  width: 112px; height: 28px; padding-left: 10px;
-  border-radius: 8px; font-size: 12px; line-height: 18px;
-}
-.ob-source-select .dshd-select-list {
-  top: auto; bottom: calc(100% + 4px); min-width: 166px;
-}
-.ob-source-select .dshd-select-list li { padding: 4px 8px; font-size: 12px; line-height: 20px; }
 .ob-runtime-actions > [data-install-cancel],
 .ob-runtime-actions > [data-install-reinstall] { margin-left: auto; }
 .ob-actions { width: 100%; margin-top: 0; }
@@ -364,7 +336,6 @@ body.fade-out { opacity: 0; }
 @media (max-width: 560px) {
   .stage { padding-right: 14px; padding-left: 14px; }
   .ob-box { padding-right: 16px; padding-left: 16px; border-radius: 18px; }
-  .install-source-label { flex-basis: 100%; text-align: center; }
 }
 @media (prefers-color-scheme: light) {
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
@@ -393,3 +364,13 @@ body.fade-out { opacity: 0; }
   .bar-fill { animation: none; transition: none; }
   .error-box.reveal { animation: none; }
 }
+
+/* ready 态状态文案：字体字号对齐标题层级，颜色仅用成功色提醒，不改布局 */
+.state-ready {
+  font-size: 16px !important;
+  font-weight: 600;
+  color: var(--green) !important;
+}
+
+/* 占位隐藏：视觉收起但保留布局高度，避免 ready/阶段切换时进度区高度跳动 */
+.dshd-hold { visibility: hidden; }

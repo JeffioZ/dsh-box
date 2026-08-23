@@ -35,8 +35,6 @@ let lastUpdateResult = null;
 // 在安装进行中弹出来纯属噪音
 let updateCheckRequested = false;
 let installCancelRequested = false;
-let installSource = 'auto';
-let sourceSwitchPending = false;
 let installGeneration = 0;
 let installCanCancel = false;
 let readyTransitionSequence = 0;
@@ -69,8 +67,12 @@ function phaseText(phase) {
   return PHASE_KEYS[phase] ? dshdT(PHASE_KEYS[phase]) : phase;
 }
 
-function phaseDisplay(phase, message) {
-  if (phase === 'ready' || phase === 'error' || phase === 'cancelled') return phaseText(phase);
+function phaseDisplay(phase, message, onboarding) {
+  if (phase === 'ready') {
+    // 首次设置就绪后需用户手动点“开始使用”，文案不同于普通 loading 的自动进入。
+    return onboarding ? dshdT('readyOnboarding') : phaseText(phase);
+  }
+  if (phase === 'error' || phase === 'cancelled') return phaseText(phase);
   return (message && message.length) ? message : phaseText(phase);
 }
 
@@ -105,16 +107,18 @@ function renderProgress(payload, progressBar, fill) {
 
 /** 首次设置与普通启动页共用同一套状态文案、明细和进度映射。 */
 function renderRuntimePresentation(payload, view) {
-  const state = phaseDisplay(payload.phase, payload.message);
+  const state = phaseDisplay(payload.phase, payload.message, view.onboarding);
   const detail = statusDetail(payload);
   if (view.state) {
     view.state.textContent = state;
     view.state.title = state;
+    view.state.classList.toggle('state-ready', payload.phase === 'ready');
   }
   if (view.detail) {
     view.detail.textContent = detail;
     view.detail.title = detail;
-    if (view.hideEmptyDetail) view.detail.classList.toggle('hidden', !detail);
+    // 与普通启动的 status-detail 对齐：详情行恒占位（CSS min-height），
+    // 不因内容有无而显示/隐藏，避免进度区高度跳动。
   }
   renderProgress(payload, view.progressBar, view.fill);
   return { state, detail };
@@ -129,17 +133,21 @@ function renderOnboardingRuntime(payload) {
     detail: $('ob-runtime-detail'),
     progressBar: $('ob-runtime-progress'),
     fill: $('ob-runtime-progress-fill'),
-    hideEmptyDetail: true,
+    onboarding: true,
   });
-  const canChange = installCanCancel || payload.phase === 'cancelled';
-  // 从准备安装到启动服务始终保留这一行，切源重启时只禁用控件，不反复
-  // 收起/展开卡片。Ready 后来源不再影响本轮启动，才移除该行。
+  // 从准备安装到启动服务始终保留这一行；Ready 后来源不再影响本轮启动。
   const showSource = !['ready', 'service-choice'].includes(payload.phase);
-  $('ob-runtime-actions').classList.toggle('hidden', !showSource);
-  if (obSourceSel) {
-    obSourceSel.set(installSource);
-    obSourceSel.setDisabled(!canChange || sourceSwitchPending || installCancelRequested);
-  }
+  $('ob-runtime-actions').classList.toggle('dshd-hold', !showSource);
+  // 与普通 loading 一致：下载中显示“取消安装”，取消后显示“重新安装”。
+  const cancellable = installCanCancel
+    && (payload.phase === 'installing-node' || payload.phase === 'installing-dsh');
+  const cancelled = payload.phase === 'cancelled';
+  document.querySelectorAll('[data-install-cancel]').forEach((button) => {
+    button.classList.toggle('hidden', !cancellable);
+  });
+  document.querySelectorAll('[data-install-reinstall]').forEach((button) => {
+    button.classList.toggle('hidden', !cancelled);
+  });
 }
 
 function setStatus(phaseOrPayload, message, detail) {
@@ -160,7 +168,7 @@ function setStatus(phaseOrPayload, message, detail) {
   const installActions = $('install-actions');
   const cancelButtons = document.querySelectorAll('[data-install-cancel]');
   const reinstallButtons = document.querySelectorAll('[data-install-reinstall]');
-  installActions.classList.toggle('hidden', !cancellable && !cancelled);
+  installActions.classList.toggle('dshd-hold', !cancellable && !cancelled);
   cancelButtons.forEach((button) => button.classList.toggle('hidden', !cancellable));
   reinstallButtons.forEach((button) => button.classList.toggle('hidden', !cancelled));
   if (!cancellable) installCancelRequested = false;
@@ -306,18 +314,8 @@ function renderStatus(payload) {
   lastStatusPayload = payload;
   installGeneration = Number(payload.install_generation || 0);
   installCanCancel = payload.can_cancel === true;
-  if (payload.download_source) installSource = payload.download_source;
   if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
     $('update-box').classList.add('hidden');
-  }
-  document.querySelectorAll('.source-choice').forEach((button) => {
-    const selected = button.dataset.source === installSource;
-    button.setAttribute('aria-pressed', String(selected));
-    // 选中态由 aria-pressed 表达，不用 disabled 淡化；重复点击由处理器幂等忽略。
-    button.disabled = sourceSwitchPending || installCancelRequested;
-  });
-  if (sourceSwitchPending && !installCanCancel) {
-    resetInstallPendingControls();
   }
   // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
   // 纯固定文案的 phase 改用当前语言重译；动态消息（下载/安装进度、
@@ -339,7 +337,6 @@ function renderStatus(payload) {
 let onboardingSaving = false;
 let obLangSel = null;
 let obThemeSel = null;
-let obSourceSel = null;
 
 /** 只有服务就绪后才能结束引导并进入可用的 dsh 页面。 */
 function syncOnboardingCompletionAction() {
@@ -468,9 +465,6 @@ function setOnboardingBusy(busy) {
   startButton.textContent = dshdT(startKey);
   startButton.toggleAttribute('aria-busy', busy);
   if (!busy && onboardingActive() && lastStatusPayload) {
-    const installPending = sourceSwitchPending || installCancelRequested;
-    setInstallSourceBusy(installPending);
-    setInstallCancelPending(installPending, sourceSwitchPending);
     renderOnboardingRuntime(lastStatusPayload);
   }
   syncOnboardingCompletionAction();
@@ -483,19 +477,16 @@ async function initOnboarding() {
     // 语言/主题下拉：选中即预览（保存时才持久化）
     obLangSel = setupSelect('ob-lang', (lang) => {
       window.dshdSetLanguage && window.dshdSetLanguage(lang);
-      // 选项文案由 i18n 原地更新；刷新三个 trigger，避免仍显示切换前语言。
+      // 选项文案由 i18n 原地更新；刷新两个 trigger，避免仍显示切换前语言。
       if (obLangSel) obLangSel.refresh();
       if (obThemeSel) obThemeSel.refresh();
-      if (obSourceSel) obSourceSel.refresh();
       window.__TAURI__.core.invoke('preview_language', { language: lang }).catch(() => {});
     });
     obThemeSel = setupSelect('ob-theme', (theme) => {
       window.__TAURI__.core.invoke('preview_theme', { theme }).catch(() => {});
     });
-    obSourceSel = setupSelect('ob-source', (source) => { void changeInstallSource(source); });
     if (obLangSel) obLangSel.set(st.language === 'en' ? 'en' : 'zh-CN');
     if (obThemeSel) obThemeSel.set(st.theme || 'system');
-    if (obSourceSel) obSourceSel.set(installSource);
     $('ob-autostart').checked = !!st.autostart;
     $('ob-builtin-plugins').checked = st.install_builtin_plugins !== false;
     document.body.classList.add('onboarding-mode');
@@ -610,70 +601,18 @@ function renderUpdate(result) {
   }
 }
 
-function setInstallSourceBusy(busy) {
-  document.querySelectorAll('.install-source').forEach((group) => group.toggleAttribute('aria-busy', busy));
-  document.querySelectorAll('.source-choice').forEach((button) => { button.disabled = busy; });
-  const onboardingSource = $('ob-source');
-  if (onboardingSource) onboardingSource.toggleAttribute('aria-busy', busy);
-  if (obSourceSel) obSourceSel.setDisabled(busy);
-}
-
-function setInstallCancelPending(pending, switchingSource) {
+function setInstallCancelPending(pending) {
   document.querySelectorAll('[data-install-cancel]').forEach((button) => {
     button.disabled = pending;
     button.toggleAttribute('aria-busy', pending);
-    button.textContent = pending
-      ? dshdT(switchingSource ? 'installSourceSwitching' : 'cancellingInstall')
-      : dshdT('cancelInstall');
+    button.textContent = pending ? dshdT('cancellingInstall') : dshdT('cancelInstall');
   });
 }
 
 function resetInstallPendingControls() {
-  sourceSwitchPending = false;
   installCancelRequested = false;
-  setInstallSourceBusy(false);
-  setInstallCancelPending(false, false);
+  setInstallCancelPending(false);
   if (lastStatusPayload) renderOnboardingRuntime(lastStatusPayload);
-}
-
-function syncInstallSourceSelection() {
-  document.querySelectorAll('.source-choice').forEach((button) => {
-    button.setAttribute('aria-pressed', String(button.dataset.source === installSource));
-  });
-  if (obSourceSel && obSourceSel.get() !== installSource) obSourceSel.set(installSource);
-}
-
-async function changeInstallSource(source) {
-  if (!source || source === installSource || sourceSwitchPending) {
-    syncInstallSourceSelection();
-    return;
-  }
-  const previousSource = installSource;
-  sourceSwitchPending = true;
-  installCancelRequested = true;
-  setInstallSourceBusy(true);
-  setInstallCancelPending(true, true);
-  try {
-    const restarted = await window.__TAURI__.core.invoke('set_install_source', {
-      source,
-      generation: installGeneration,
-    });
-    if (restarted) {
-      installSource = source;
-      syncInstallSourceSelection();
-    } else {
-      // cancelled 阶段会保存来源但无需重启；过期页面也返回 false。
-      // 重新取权威快照，避免把被拒绝的选择留在界面上。
-      const payload = await window.__TAURI__.core.invoke('get_status');
-      renderStatus(payload);
-      resetInstallPendingControls();
-    }
-  } catch (e) {
-    installSource = previousSource;
-    syncInstallSourceSelection();
-    resetInstallPendingControls();
-    showError(String(e));
-  }
 }
 
 function bind() {
@@ -683,14 +622,10 @@ function bind() {
     const error = $('ob-error');
     if (error.textContent === dshdT('apiKeyFormatHint')) error.classList.add('hidden');
   });
-  document.querySelectorAll('.source-choice').forEach((button) => {
-    button.addEventListener('click', () => { void changeInstallSource(button.dataset.source); });
-  });
   document.querySelectorAll('[data-install-cancel]').forEach((button) => {
     button.addEventListener('click', async () => {
       installCancelRequested = true;
-      setInstallSourceBusy(true);
-      setInstallCancelPending(true, false);
+      setInstallCancelPending(true);
       try {
         const accepted = await window.__TAURI__.core.invoke('cancel_install', {
           generation: installGeneration,
@@ -839,7 +774,6 @@ async function init() {
     // 下拉 trigger 的值不是 data-i18n 节点，语言切换后按当前 option 文案刷新。
     if (obLangSel) obLangSel.set(obLangSel.get());
     if (obThemeSel) obThemeSel.set(obThemeSel.get());
-    if (obSourceSel) obSourceSel.set(obSourceSel.get());
     // 快照的 message/detail 是 Rust 按旧语言生成的文本，重渲染时必须剥离，
     // 由 phaseText/stepLine 按当前语言重译固定文案（进度数字语言无关保留）
     if (lastStatusPayload) renderStatus({ ...lastStatusPayload, message: '', detail: '' });

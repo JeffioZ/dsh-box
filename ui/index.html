@@ -80,28 +80,15 @@
             </span>
           </label>
         </div>
-        <section id="ob-runtime" class="ob-runtime hidden" aria-labelledby="ob-runtime-label">
+        <section id="ob-runtime" class="ob-runtime hidden" data-i18n-aria-label="runtimeEnvironment">
           <div class="ob-runtime-summary">
             <div class="ob-runtime-heading">
-              <span class="ob-sec-label" id="ob-runtime-label" data-i18n="runtimeEnvironment">运行环境</span>
               <span id="ob-runtime-state" class="ob-runtime-state" role="status" aria-live="polite" aria-atomic="true"></span>
+              <span id="ob-runtime-detail" class="ob-runtime-detail"></span>
             </div>
-            <span id="ob-runtime-detail" class="ob-runtime-detail"></span>
           </div>
           <div id="ob-runtime-progress" class="bar ob-runtime-progress" role="progressbar" data-i18n-aria-label="startProgress" aria-valuemin="0" aria-valuemax="100"><div id="ob-runtime-progress-fill" class="bar-fill"></div></div>
-          <div id="ob-runtime-actions" class="ob-runtime-actions hidden">
-            <span class="ob-runtime-source-label" id="ob-source-label" data-i18n="installSource">下载源</span>
-            <div class="dshd-select ob-source-select" id="ob-source">
-              <button type="button" class="dshd-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="ob-source-list" aria-labelledby="ob-source-label ob-source-value">
-                <span class="dshd-select-value" id="ob-source-value" data-i18n="installSourceAutoShort">自动</span>
-                <svg class="dshd-select-arrow" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-              </button>
-              <ul class="dshd-select-list" id="ob-source-list" role="listbox" data-i18n-aria-label="installSource" hidden>
-                <li role="option" data-value="auto" data-trigger-i18n="installSourceAutoShort" aria-selected="true" data-i18n="installSourceAuto">自动（推荐）</li>
-                <li role="option" data-value="official" aria-selected="false" data-i18n="installSourceOfficial">官方源</li>
-                <li role="option" data-value="mirror" aria-selected="false" data-i18n="installSourceMirror">镜像源</li>
-              </ul>
-            </div>
+          <div id="ob-runtime-actions" class="ob-runtime-actions dshd-hold">
             <button type="button" class="btn small install-cancel-control hidden" data-install-cancel data-i18n="cancelInstall">取消安装</button>
             <button type="button" class="btn small primary install-reinstall-control hidden" data-install-reinstall data-i18n="reinstall">重新安装</button>
           </div>
@@ -119,13 +106,7 @@
         </div>
         <div id="progress-bar" class="bar" role="progressbar" data-i18n-aria-label="startProgress" aria-valuemin="0" aria-valuemax="100"><div id="bar-fill" class="bar-fill"></div></div>
         <div id="status-detail" class="status-detail"></div>
-        <div id="install-actions" class="install-actions hidden">
-          <span class="install-source-label" data-i18n="installSource">下载源</span>
-          <div class="install-source" role="group" data-i18n-aria-label="installSource">
-            <button type="button" class="btn small source-choice" data-source="auto" aria-pressed="true" data-i18n="installSourceAuto">自动</button>
-            <button type="button" class="btn small source-choice" data-source="official" aria-pressed="false" data-i18n="installSourceOfficial">官方</button>
-            <button type="button" class="btn small source-choice" data-source="mirror" aria-pressed="false" data-i18n="installSourceMirror">镜像</button>
-          </div>
+        <div id="install-actions" class="install-actions dshd-hold">
           <button type="button" id="btn-cancel-install" class="btn small install-cancel-control" data-install-cancel data-i18n="cancelInstall">取消安装</button>
           <button type="button" id="btn-reinstall" class="btn small primary install-reinstall-control hidden" data-install-reinstall data-i18n="reinstall">重新安装</button>
         </div>

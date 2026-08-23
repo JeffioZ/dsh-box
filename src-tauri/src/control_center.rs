@@ -72,8 +72,19 @@ fn dialog_card_height(app: &AppHandle) -> f64 {
         .unwrap_or(640.0)
 }
 
-/// 弹窗窗口尺寸 = 自适应卡片 + 阴影余量。
-fn dialog_size(app: &AppHandle) -> (f64, f64) {
+/// 弹窗窗口尺寸 = 卡片 + 阴影余量。`update-prompt` 是轻量提示，
+/// 用紧凑尺寸（420×约180），其余 kind 用自适应大卡片。
+fn dialog_size(app: &AppHandle, kind: &str) -> (f64, f64) {
+    if kind == "update-prompt" {
+        // 宽度：仅容纳最长英文文案一行（约 342px @12.5px）+ 左右 padding 40px；
+        // 极长版本号由 overflow-wrap 折行兜底，不为罕见冗余预留大宽度。
+        const PROMPT_CARD_WIDTH: f64 = 400.0;
+        const PROMPT_CARD_HEIGHT: f64 = 150.0;
+        return (
+            PROMPT_CARD_WIDTH + SHADOW_SIDES * 2.0,
+            PROMPT_CARD_HEIGHT + SHADOW_TOP + SHADOW_BOTTOM,
+        );
+    }
     (
         dialog_card_width(app) + SHADOW_SIDES * 2.0,
         dialog_card_height(app) + SHADOW_TOP + SHADOW_BOTTOM,
@@ -100,7 +111,7 @@ pub fn precreate(app: &AppHandle) {
     let navigation_app = app.clone();
     // 弹窗窗口 = 自适应卡片 + 自绘阴影余量；大视口仍严格对齐 dsh 的
     // width 800 / height min(800px, 100vh-48px)。
-    let (dialog_w, dialog_h) = dialog_size(app);
+    let (dialog_w, dialog_h) = dialog_size(app, "default");
     // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
     // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
     let initial_pos = crate::main_window(app).and_then(|w| {
@@ -194,7 +205,7 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
     };
     // 代次 +1：若上次关闭的延迟隐藏尚未执行，令其失效，避免误藏本次弹窗
     let dialog_gen = app.state::<AppState>().bump_dialog_gen();
-    let (ww, wh) = dialog_size(app);
+    let (ww, wh) = dialog_size(app, kind);
     let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(ww, wh)));
     let mut target_pos: Option<(f64, f64)> = None;
     let main = crate::main_window(app);
@@ -373,6 +384,14 @@ pub fn close(app: &AppHandle) {
                     if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
                         let _ = w.hide();
                     }
+                    // 仅当关闭的是 update-prompt 时才出队下一个待展示提示；
+                    // 关其它弹窗（余额/关于等）不清提示信号、不乱弹提示。
+                    if h2.state::<AppState>().update_prompt_showing() {
+                        let pending = h2.state::<AppState>().clear_show_and_dequeue();
+                        if let Some(next) = pending {
+                            present_update_prompt(&h2, next);
+                        }
+                    }
                 }
             });
         });
@@ -429,6 +448,47 @@ pub fn open_update_progress(app: &AppHandle) {
 pub fn is_check_open(app: &AppHandle) -> bool {
     app.get_webview_window(APP_DIALOG_WINDOW)
         .is_some_and(|w| w.is_visible().unwrap_or(false))
+}
+
+/// 更新提示载荷：dsh 与应用自身两个场景共用同一自绘弹窗。
+#[derive(serde::Serialize, Clone)]
+pub struct UpdatePrompt {
+    /// "dsh"（发现新版，立即更新）或 "app"（已下载就绪，重启并更新）。
+    pub kind: String,
+    /// 新版本号。
+    pub version: String,
+    /// 当前版本号（dsh 场景展示；app 场景可省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+    /// 新版本 release 页面（有则显示「查看更新内容」链接）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+}
+
+/// 打开更新提示弹窗（替代原生 msgbox：可点链接、深浅色/reduced-motion 齐全）。
+/// dsh 与应用两个更新可能几乎同时触发；单窗无法并排，正在显示时入队，
+/// 关闭当前后依次出队，避免后弹者覆盖前者导致选择丢失。
+pub fn open_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
+    // 原子申请展示权（单次加锁内判断+置位/入队），规避并发 TOCTOU 与
+    // show() 16ms 延迟显示造成的时序盲区。
+    if app
+        .state::<AppState>()
+        .acquire_update_prompt_show(prompt.clone())
+    {
+        present_update_prompt(app, prompt);
+    }
+}
+
+/// 实际展示单个更新提示。
+fn present_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
+    let title = if prompt.kind == "app" {
+        crate::locale::text("应用更新已就绪", "App update ready")
+    } else {
+        crate::locale::text("发现新版本", "Update available")
+    };
+    let initial =
+        serde_json::to_value(prompt.clone()).unwrap_or(serde_json::json!({ "kind": prompt.kind }));
+    show(app, title, "update-prompt", initial);
 }
 
 /// 打开检查更新弹窗：立即出窗显示进度，检查在后台执行、结果写入状态，
@@ -503,9 +563,17 @@ pub fn run_check(app: &AppHandle) {
 pub fn apply_update(app: &AppHandle, which: &str) {
     let handle = app.clone();
     let which = which.to_string();
+    // 用户已在更新提示上做出决策：清除“正在显示”信号与待展示队列，
+    // 避免后续 new 提示被误判为“正在显示”而滞留。
+    handle.state::<AppState>().discard_update_prompt_queue();
+    if which == "dsh" {
+        // dsh 更新统一走进度载体（内部会 open_update_progress + 结果处理），
+        // 与更新提示弹窗的“立即更新”共用同一入口，体验一致。
+        crate::updater::apply_dsh_update(&handle);
+        return;
+    }
     std::thread::spawn(move || {
         let success_message = match which.as_str() {
-            "dsh" => crate::locale::text("dsh 更新完成。", "dsh was updated."),
             "node" => crate::locale::text("Node.js 更新完成。", "Node.js was updated."),
             "pwsh" => crate::locale::text(
                 "PowerShell 7 安装或更新完成。",

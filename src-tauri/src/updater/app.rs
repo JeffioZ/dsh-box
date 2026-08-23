@@ -505,29 +505,24 @@ pub fn prefetch_app_update(app: &AppHandle) {
                 .state::<AppState>()
                 .set_app_update_ready(Some((release.version.clone(), release.sha256.clone())));
             crate::logging::log("updater: 应用更新已预下载，提示用户重启应用");
-            prompt_apply_prefetched(&handle, &target, &release.version, &release.sha256);
+            prompt_apply_prefetched(&handle, &release.version);
         });
     }
 }
 
-/// 提示用户应用已下载的更新（"重启应用以完成更新"）。
+/// 提示用户应用已下载的更新（自绘弹窗：重启并更新 / 稍后 / 查看更新内容）。
+/// 「重启并更新」由弹窗前端走 app_dialog_update("app")：update_app_exe 会复用
+/// 已预下载且摘要吻合的安装包，不重复下载。
 #[cfg(windows)]
-fn prompt_apply_prefetched(app: &AppHandle, target: &std::path::Path, version: &str, sha256: &str) {
-    use tauri_plugin_dialog::MessageDialogKind;
-    let msg = crate::locale::owned(
-        format!("新版本 {version} 已下载完成。\n是否立即重启应用以完成更新？"),
-        format!("Version {version} has been downloaded.\nRestart DSHBox now to finish the update?"),
-    );
-    if crate::native_dialog::ask(
+fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
+    let release_url = format!("https://github.com/{APP_REPO}/releases/tag/v{version}");
+    crate::control_center::open_update_prompt(
         app,
-        msg,
-        crate::locale::text("应用更新已就绪", "App update ready"),
-        MessageDialogKind::Info,
-        crate::locale::text("重启并更新", "Restart and update"),
-        crate::locale::text("稍后", "Later"),
-    ) {
-        if let Err(e) = apply_downloaded_exe(app, target, sha256) {
-            crate::logging::log(&format!("updater: 应用更新应用失败：{e}"));
-        }
-    }
+        crate::control_center::UpdatePrompt {
+            kind: "app".into(),
+            version: version.to_string(),
+            current: None,
+            release_url: Some(release_url),
+        },
+    );
 }

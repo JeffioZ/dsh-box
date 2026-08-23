@@ -111,18 +111,6 @@ pub fn cancel_install(
 }
 
 #[tauri::command]
-pub fn set_install_source(
-    app: AppHandle,
-    webview: tauri::Webview,
-    source: String,
-    generation: u64,
-) -> Result<bool, String> {
-    ensure_local_origin(&webview)?;
-    app.state::<AppState>()
-        .request_install_source(generation, &source)
-}
-
-#[tauri::command]
 pub fn startup_transition_done(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     app.state::<AppState>().finish_startup_transition();
@@ -145,6 +133,13 @@ pub fn open_logs(app: AppHandle, webview: tauri::Webview) -> Result<(), String> 
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     processes::open_in_file_manager(&dir);
     Ok(())
+}
+
+/// 内置页面用默认浏览器打开外部链接（仅 http/https）。
+#[tauri::command]
+pub fn open_external_url(webview: tauri::Webview, url: String) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::file_actions::open_browser(&url).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -183,10 +178,10 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         choose_service,
         use_local_service,
         cancel_install,
-        set_install_source,
         startup_transition_done,
         quit,
         open_logs,
+        open_external_url,
         check_updates,
         apply_updates,
         onboarding::get_onboarding_state,
