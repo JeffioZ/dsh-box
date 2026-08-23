@@ -14,6 +14,47 @@ struct PresetPlugin {
     spec: String,
 }
 
+/// 推荐插件（社区精选、仅展示不自动维护）。与 PresetPlugin 分离：
+/// 不触发自动安装/升级，卸载后仅重新出现在推荐区、不恢复“内置维护身份”。
+#[derive(serde::Deserialize, Clone, serde::Serialize)]
+pub struct RecommendedPlugin {
+    /// 展示名（非唯一；安装判重按 spec 解析出的实际包名）。
+    pub name: String,
+    /// 传给 `dsh plugin add` 的依赖形式（scoped 包如 @scope/name）。
+    pub spec: String,
+    /// 一句话描述。
+    pub description: String,
+    /// 项目主页（可选）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+}
+
+/// 解析 resources/recommended-plugins.json（编译期嵌入，运行期零 IO）。
+pub(crate) fn recommended_plugins() -> &'static [RecommendedPlugin] {
+    static CACHE: std::sync::OnceLock<Vec<RecommendedPlugin>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        const JSON: &str = include_str!("../../resources/recommended-plugins.json");
+        serde_json::from_str(JSON).unwrap_or_default()
+    })
+}
+
+/// spec 解析出的实际包名（与已安装 dependencies 名比对用）。
+fn spec_package_name(spec: &str) -> &str {
+    // 依赖形式通常是 npm 包名或 git 形式；这里只处理 npm 包名/scoped 包名。
+    spec.split('#').next().map(str::trim).unwrap_or(spec)
+}
+
+/// 推荐清单中仍未安装的项（复用已安装 dependencies 名集合判断）。
+pub(crate) fn recommended_not_installed(
+    installed_names: &std::collections::HashSet<String>,
+) -> Vec<RecommendedPlugin> {
+    recommended_plugins()
+        .iter()
+        .filter(|p| !installed_names.contains(spec_package_name(&p.spec)))
+        .cloned()
+        .collect()
+}
+
 /// 解析 resources/builtin-plugins.json（编译期嵌入，运行期零 IO）。
 /// 文件缺失/损坏时回落到空清单，绝不因清单问题阻断启动。
 /// OnceLock 缓存避免热路径重复反序列化。
@@ -437,10 +478,9 @@ pub fn start_market_bootstrap(app: AppHandle) {
         if bootstrap_market_pkgs(&app, &config) {
             crate::logging::log("market: 内置插件已变更，将在会话空闲时应用");
             mark_plugin_changes(&app, true);
-        }
-        // 版本同步：首次延迟 90s（避开启动期——安全软件弹窗/网络波动，
-        // 不在用户刚打开应用时打扰），此后每 24h 循环（应用常驻期间持续
-        // 生效；应用退出线程随之结束，下次启动重新开始）。
+        } // 版本同步：首次延迟 90s（避开启动期——安全软件弹窗/网络波动，
+          // 不在用户刚打开应用时打扰），此后每 24h 循环（应用常驻期间持续
+          // 生效；应用退出线程随之结束，下次启动重新开始）。
         std::thread::sleep(std::time::Duration::from_secs(90));
         loop {
             if app.state::<AppState>().service_ownership().is_external() {
@@ -457,6 +497,20 @@ pub fn start_market_bootstrap(app: AppHandle) {
             std::thread::sleep(std::time::Duration::from_secs(MARKET_CHECK_INTERVAL));
         }
     });
+}
+
+/// 同步执行一次内置插件引导（不 spawn、不进入 24h 循环）：
+/// 仅在 dsh 服务已就绪、且用户已完成首次选择时可用。
+/// 返回是否有新装/卸载变更，调用方据此决定是否重启服务。
+pub(crate) fn bootstrap_once_blocking(app: &AppHandle, config: &crate::app_state::Config) -> bool {
+    // 用户尚未就内置插件做出明确选择时不做任何事（不把 None 当默认）。
+    if builtin_plugins_consent(config).is_none() {
+        return false;
+    }
+    if app.state::<AppState>().service_ownership().is_external() {
+        return false;
+    }
+    bootstrap_market_pkgs(app, config)
 }
 
 /// 未安装的内置包逐个安装。返回是否有新装包（调用方据此重启服务）。

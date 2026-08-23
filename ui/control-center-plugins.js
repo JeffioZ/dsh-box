@@ -4,6 +4,7 @@
 let pluginsBusy = false;
 let pluginSearchSeq = 0;
 let pluginApplyStamp = '';
+let pluginRecommendedSeq = 0;
 // 当前选中的分类（'' 为「全部」）。分类与搜索框关键词叠加为查询条件，
 // 切换分类不清空已输入的关键词。
 let activeCat = '';
@@ -57,7 +58,10 @@ function renderPlugins() {
     '<ul class="plist" id="p-results"></ul></div>' +
     '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span>' +
     ' <button type="button" class="dshd-btn small" id="p-builtin-check">' + esc(dshdT('pluginCheckUpdates')) + '</button></h3>' +
-    '<ul class="plist" id="p-installed"></ul></div>';
+    '<ul class="plist" id="p-installed"></ul></div>' +
+    '<div class="psection" id="p-recommended-sec"><h3>' + esc(dshdT('pluginRecommendedTitle')) + '</h3>' +
+    '<p class="p-recommended-hint">' + esc(dshdT('pluginRecommendedHint')) + '</p>' +
+    '<ul class="plist" id="p-recommended"></ul></div>';
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
   $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
@@ -91,6 +95,7 @@ function renderPlugins() {
     });
   });
   refreshPlugins();
+  refreshRecommended();
   refreshPluginApplyStatus();
   // 进入页面自动检查：静默（行内状态已表达结果，不刷“检查完成”提示）
   refreshBuiltinStatus(true);
@@ -225,6 +230,67 @@ async function refreshPlugins() {
     renderInstalled(list || []);
   } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
 }
+
+// —— 推荐插件（社区精选，仅手动安装；安装后移入已装、卸载后回归）——
+async function refreshRecommended() {
+  const ul = $('p-recommended');
+  if (!ul) return;
+  const seq = ++pluginRecommendedSeq;
+  try {
+    const list = await invoke('plugin_recommended');
+    if (openKind !== 'plugins' || seq !== pluginRecommendedSeq || !$('p-recommended')) return;
+    ul.textContent = '';
+    if (!list || !list.length) {
+      // 全部推荐都装上了：整块收起，不占空间
+      $('p-recommended-sec').classList.add('hidden');
+      return;
+    }
+    $('p-recommended-sec').classList.remove('hidden');
+    for (const p of list) {
+      const li = document.createElement('li');
+      li.className = 'pitem';
+      const info = document.createElement('div');
+      info.className = 'info';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = p.name;
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = p.description || '';
+      info.append(name, desc);
+      const installBtn = document.createElement('button');
+      installBtn.type = 'button';
+      installBtn.className = 'dshd-btn small plugin-action';
+      installBtn.textContent = dshdT('pluginInstall');
+      installBtn.disabled = pluginsBusy;
+      installBtn.addEventListener('click', async () => {
+        if (pluginsBusy) return;
+        setPluginsBusy(true);
+        pluginStatus(dshdT('pluginInstalling', { name: p.name }));
+        try {
+          await invoke('plugin_install', { name: p.spec });
+          pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
+          await refreshPlugins();
+          await refreshRecommended();
+          await refreshPluginApplyStatus();
+        } catch (e) {
+          pluginStatus(dshdT('pluginFailed', { message: e }), 'err');
+        } finally {
+          setPluginsBusy(false);
+        }
+      });
+      li.append(info, installBtn);
+      ul.append(li);
+    }
+  } catch (e) {
+    $('p-recommended-sec').classList.remove('hidden');
+    const el = document.createElement('li');
+    el.className = 'pempty';
+    el.textContent = dshdT('pluginFailed', { message: e });
+    ul.textContent = '';
+    ul.append(el);
+  }
+}
 async function doPluginSearch(query) {
   const q = (query != null ? query : $('p-query').value).trim();
   if (!q) return;
@@ -346,7 +412,7 @@ function renderInstalled(list) {
         await invoke('plugin_remove', { name: p.name });
         pluginStatus(dshdT('pluginRemoved', { name: p.name }), 'ok');
       } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
-      finally { setPluginsBusy(false); await refreshPlugins(); await refreshPluginApplyStatus(); }
+      finally { setPluginsBusy(false); await refreshPlugins(); await refreshRecommended(); await refreshPluginApplyStatus(); }
     });
     actions.append(btn);
     ul.append(pluginItemRow(p, actions, verText, descText));

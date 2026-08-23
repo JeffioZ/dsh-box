@@ -193,6 +193,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         model_config::apply_model_import,
         model_config::export_model_config,
         plugins::plugin_list,
+        plugins::plugin_recommended,
         plugins::plugin_search,
         plugins::plugin_install,
         plugins::plugin_remove,

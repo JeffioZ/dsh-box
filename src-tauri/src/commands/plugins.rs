@@ -15,6 +15,17 @@ pub fn plugin_list(
     Ok(crate::plugins::list(&app))
 }
 
+/// 推荐插件（社区精选、当前未安装的项，供手动安装）。
+#[tauri::command]
+pub fn plugin_recommended(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::RecommendedPlugin>, String> {
+    ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
+    Ok(crate::plugins::recommended(&app))
+}
+
 /// npm 搜索插件。
 #[tauri::command]
 pub async fn plugin_search(

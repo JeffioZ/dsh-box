@@ -6,7 +6,9 @@
 mod maintenance;
 mod runner;
 
+pub(crate) use maintenance::bootstrap_once_blocking;
 pub use maintenance::start_market_bootstrap;
+pub use maintenance::RecommendedPlugin;
 use maintenance::*;
 use runner::run_dsh_plugin_auto;
 
@@ -231,7 +233,18 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
             });
         }
     }
+    // 排序规则：内置插件靠前（dshmarket/dsh-file-drop 优先），其余按名称
+    // 字典序稳定排序，保证已安装列表展示确定性。
+    out.sort_by(|a, b| b.builtin.cmp(&a.builtin).then_with(|| a.name.cmp(&b.name)));
     out
+}
+
+/// 推荐插件（社区精选、尚未安装的项）。与 builtin 预装完全分离：
+/// 仅展示供用户手动安装，不自动安装、不自动升级、卸载后回推荐区。
+pub fn recommended(app: &AppHandle) -> Vec<maintenance::RecommendedPlugin> {
+    let installed: std::collections::HashSet<String> =
+        list(app).into_iter().map(|p| p.name).collect();
+    maintenance::recommended_not_installed(&installed)
 }
 
 /// npm registry 搜索 dsh 插件。
@@ -291,9 +304,36 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
             crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
         );
     }
-    run_dsh_plugin_auto(app, &["add", name])?;
-    // 手动重装被强制下线的包 = 知情保留：记录标记，下次启动豁免清理
+    // 事务式自愈：dsh plugin add 可能先改 package.json 再失败（如
+    // supply-chain 冷却拒绝），留下"bundles 引用了未落地的包"的半截状态。
+    // 调用前备份 manifest 原文，失败时回滚，避免下次 dsh 启动解析失败。
     let config = app.state::<AppState>().config();
+    let manifest_path = config.dsh_home().join("profiles/web/package.json");
+    let original = std::fs::read_to_string(&manifest_path).ok();
+    let result = run_dsh_plugin_auto(app, &["add", name]);
+    if let Err(e) = &result {
+        if let Some(text) = original {
+            // 回滚写盘与 pnpm/dsh 命令共用锁，避免与并发写交错。
+            let _guard = runner::MARKET_PNPM_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Err(re) = std::fs::write(&manifest_path, text) {
+                crate::logging::log(&format!(
+                    "plugins: 安装 {name} 失败且回滚 manifest 失败：{re}"
+                ));
+            } else {
+                crate::logging::log(&format!(
+                    "plugins: 安装 {name} 失败，已回滚 package.json 原文"
+                ));
+            }
+        } else {
+            crate::logging::log(&format!(
+                "plugins: 安装 {name} 前未读到 package.json，跳过回滚"
+            ));
+        }
+        return Err(e.clone());
+    }
+    // 手动重装被强制下线的包 = 知情保留：记录标记，下次启动豁免清理
     if MARKET_REMOVED.contains(&name) {
         market_mark_user_removed(&config, name);
         crate::logging::log(&format!(
@@ -345,6 +385,60 @@ pub struct UpdateStatus {
     pub cooldown_until: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// 防御点 B：从 manifest 中清除某个残留插件的引用（dependencies + bundles），
+/// 覆盖"安装半截状态导致 bundle 无法解析"的场景。只删除目标包的键/条目，
+/// 其余内容原样保留（serde_json 序列化会规范化但语义不变）。
+pub(crate) fn prune_manifest_package(
+    config: &crate::app_state::Config,
+    name: &str,
+) -> Result<bool, String> {
+    let path = config.dsh_home().join("profiles/web/package.json");
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        crate::locale::owned(
+            format!("读取 package.json 失败：{e}"),
+            format!("Failed to read package.json: {e}"),
+        )
+    })?;
+    let mut json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        crate::locale::owned(
+            format!("解析 package.json 失败：{e}"),
+            format!("Failed to parse package.json: {e}"),
+        )
+    })?;
+    let mut removed = false;
+    if let Some(deps) = json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+        removed |= deps.remove(name).is_some();
+    }
+    if let Some(bundles) = json
+        .get_mut("dsh")
+        .and_then(|d| d.get_mut("profile"))
+        .and_then(|p| p.get_mut("bundles"))
+        .and_then(|b| b.as_array_mut())
+    {
+        let before = bundles.len();
+        bundles.retain(|item| item.as_str() != Some(name));
+        removed |= bundles.len() < before;
+    }
+    if !removed {
+        return Ok(false);
+    }
+    // 写盘与 pnpm/dsh 命令共用锁，避免与并发写交错。
+    let _guard = runner::MARKET_PNPM_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("写回 package.json 失败：{e}"),
+            format!("Failed to write package.json back: {e}"),
+        )
+    })?;
+    Ok(true)
 }
 
 /// 已安装插件名列表（web profile 的 package.json dependencies 全部 key）。

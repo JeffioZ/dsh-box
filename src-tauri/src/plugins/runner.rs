@@ -4,7 +4,7 @@ use super::*;
 
 /// 所有 `dsh plugin`（pnpm）操作的互斥锁：引导、定时升级、手动升级、
 /// 手动安装/卸载都可能并发触发 pnpm，串行化避免 pnpm 锁竞争与状态错乱。
-static MARKET_PNPM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static MARKET_PNPM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 调用 dsh CLI 的 plugin 子命令（阻塞至完成，5 分钟超时）。
 fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
@@ -112,7 +112,19 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     let _ = std::fs::remove_file(&out_path);
     if !status.success() {
         let detail = tail.trim().to_string();
-        let mut err = if detail.is_empty() {
+        let mut err = if super::is_supply_chain_error(&detail) {
+            // 新发布的包仍在 pnpm 供应链冷却期（minimumReleaseAge）内，
+            // 任何针对该包的写操作（含卸载）都会被锁文件校验拒绝。转成
+            // 友好提示，避免把原始堆栈抛给用户。
+            crate::locale::owned(
+                format!(
+                    "该插件版本刚发布，仍在供应链安全冷却期内，请稍候约 24 小时后再试。\n{detail}",
+                ),
+                format!(
+                    "This package version was published recently and is still within the supply-chain cooldown window. Please try again in about 24 hours.\n{detail}",
+                ),
+            )
+        } else if detail.is_empty() {
             crate::locale::text("dsh 插件命令执行失败。", "The dsh plugin command failed.").into()
         } else {
             detail

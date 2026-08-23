@@ -1,0 +1,16 @@
+[
+  {
+    "id": "dsh-pocket",
+    "spec": "dsh-pocket",
+    "name": "DSH Pocket",
+    "description": "手机扫码同步访问电脑上的 DSH（局域网 + 公网，实时同屏）",
+    "homepage": "https://github.com/shaobeichen/dsh-pocket"
+  },
+  {
+    "id": "hindsight-coding-agents",
+    "spec": "@vectorize-io/hindsight-coding-agents",
+    "name": "Hindsight",
+    "description": "会学习的长期项目记忆：自动沉淀上下文，跨会话复用",
+    "homepage": "https://github.com/vectorize-io/hindsight"
+  }
+]

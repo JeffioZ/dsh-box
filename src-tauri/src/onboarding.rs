@@ -173,13 +173,9 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
             });
         }
         ReadyAction::EnterWeb => {
-            let config = app.state::<AppState>().config();
-            let already_on_dsh = crate::main_webview(app)
-                .and_then(|w| w.url().ok())
-                .is_some_and(|url| crate::is_dsh_url(&url, &config));
-            if !already_on_dsh {
-                crate::navigate(app, &config.web_url());
-            }
+            // 不在此直接导航：mark_onboarding_done 之后 boot_inner 的
+            // wait_onboarding 会被唤醒并统一执行 enter_web_app，避免
+            // 两处各 navigate 一次导致 dsh 被重复加载（白屏一下）。
         }
     }
     Ok(())

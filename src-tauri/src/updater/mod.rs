@@ -357,7 +357,7 @@ pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 调用方已持有生命周期锁时使用。
-fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.service_ownership().is_external() {
         return Err(crate::locale::text(

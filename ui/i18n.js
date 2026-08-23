@@ -97,6 +97,8 @@ const DSHD_MESSAGES = {
   pluginInstall: ['安装', 'Install'],
   pluginInstalledTag: ['已安装', 'Installed'],
   pluginInstalledTitle: ['已安装', 'Installed'],
+  pluginRecommendedTitle: ['推荐插件', 'Recommended'],
+  pluginRecommendedHint: ['社区精选，按需手动安装。', 'Community picks — install them manually when needed.'],
   pluginInstalling: ['正在安装 {name}…', 'Installing {name}…'],
   pluginNone: ['尚未安装插件。可搜索 npm，或使用 DSH Market。', 'No plugins installed. Search npm or use DSH Market.'],
   pluginNoResult: ['没有匹配的插件。试试更短的关键词。', 'No matching plugins. Try a shorter keyword.'],

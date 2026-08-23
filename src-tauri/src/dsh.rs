@@ -200,6 +200,16 @@ fn onboarding_handoff_pending(state: &AppState) -> bool {
 
 /// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
 pub(crate) fn enter_web_app(app: &AppHandle, url: &str) {
+    // 幂等防护：已在目标 dsh 页面（scheme/host/port 一致，忽略路径差异）时
+    // 跳过导航，避免重复 navigate 打断已加载的 dsh 造成白屏重载。
+    // 调用方须自行保证 Ready 状态已就绪（本函数跳过后不再 emit）。
+    let config = app.state::<AppState>().config();
+    let already_on_dsh = crate::main_webview(app)
+        .and_then(|webview| webview.url().ok())
+        .is_some_and(|current| crate::is_dsh_url(&current, &config));
+    if already_on_dsh {
+        return;
+    }
     let on_startup_page = crate::main_webview(app)
         .and_then(|webview| webview.url().ok())
         .is_some_and(|current| {
@@ -347,9 +357,27 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     if state.onboarding_pending() {
         emit_status(app, BootPhase::Ready, ready, "");
     }
+    let was_onboarding = state.onboarding_pending();
     wait_onboarding(app, &state);
     if onboarding_handoff_pending(&state) {
         return Ok(());
+    }
+    // 首次引导刚完成（was_onboarding=true 且已保存）时，在进入 dsh 之前同步
+    // 安装并应用内置插件：避免“进 dsh 后插件才装完 → 重启服务 → 又回到启动页
+    // 再进 dsh”造成的白屏重载。仅首次，老用户仍走后端 24h 后台升级。
+    if was_onboarding && !state.onboarding_pending() {
+        let message = crate::locale::text("正在安装推荐插件…", "Installing recommended plugins…");
+        state.set_phase(BootPhase::Starting, message, "");
+        emit_status(app, BootPhase::Starting, message, "");
+        if crate::plugins::bootstrap_once_blocking(app, &config) {
+            crate::logging::log("boot: 首次插件安装完成，应用后进入 dsh");
+            // 已持有 lifecycle_guard：用 _locked 版本重启，避免死锁；
+            // 失败交回 boot_loop 错误页重试，不进入已停机的服务。
+            if let Err(e) = crate::updater::restart_service_locked(app) {
+                crate::logging::log(&format!("boot: 首次插件应用重启失败：{e}"));
+                return Err(e);
+            }
+        }
     }
     enter_web_app(app, &config.web_url());
     // 初始托管启动时后台维护线程已在等待；从外部服务切回本地时，原线程
@@ -621,6 +649,28 @@ fn start_and_wait_managed(
         }
         if let Some(status) = state.managed_process_exit()? {
             let log = read_log_since(&config.dsh_log(), log_offset);
+            // 防御点 B：dsh 启即退且日志标明 "cannot resolve profile bundle"——
+            // 说明插件安装曾留下半截状态（manifest 引用了未落地的包）。清理
+            // 该残留后至多重试启动一次；清理未命中时不再重试，直接报错收敛。
+            if let Some(stale) = unresolved_bundle_package(&log) {
+                crate::logging::log(&format!(
+                    "dsh: 检测到残留插件引用 {stale}，清理 manifest 后重试启动"
+                ));
+                match crate::plugins::prune_manifest_package(config, &stale) {
+                    Ok(true) => {
+                        shutdown(app);
+                        return start_and_wait_managed(app, config, node_exe);
+                    }
+                    Ok(false) => {
+                        crate::logging::log(&format!(
+                            "dsh: 未在 manifest 找到残留 {stale}，按普通启动失败处理"
+                        ));
+                    }
+                    Err(e) => {
+                        crate::logging::log(&format!("dsh: 清理残留插件 {stale} 失败：{e}"));
+                    }
+                }
+            }
             shutdown(app);
             return Err(crate::locale::owned(
                 format!("dsh 服务启动后立即退出（{status}）。{}", log_tail(&log)),
@@ -652,6 +702,23 @@ fn start_and_wait_managed(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// 从 dsh 启动日志解析“无法解析 profile bundle”的包名。
+/// 命中返回待清理的残留包名（如 dsh-pocket），否则 None。
+fn unresolved_bundle_package(log: &str) -> Option<String> {
+    // 日志形如：cannot resolve profile bundle "dsh-pocket" from ...
+    let mut rest = log;
+    while let Some(pos) = rest.find("cannot resolve profile bundle") {
+        let after = &rest[pos + "cannot resolve profile bundle".len()..];
+        let start = after.find('"')? + 1;
+        let end = after[start..].find('"')? + start;
+        if start < end {
+            return Some(after[start..end].to_string());
+        }
+        rest = &after[end..];
+    }
+    None
 }
 
 fn read_log_since(path: &std::path::Path, offset: u64) -> String {

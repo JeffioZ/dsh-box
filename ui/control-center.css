@@ -448,3 +448,7 @@ body.update-prompt-mode .body { padding: 0 18px 14px; }
 /* update-prompt 紧凑模式：无左侧导航，主区撑满 420 卡片 */
 body.update-prompt-mode #nav { display: none; }
 body.update-prompt-mode #main { width: 100%; }
+
+/* 推荐插件区：社区精选、手动安装 */
+.p-recommended-hint { margin: 0 0 6px; font-size: 12px; color: var(--dshd-text-dim); }
+#p-recommended-sec { padding-top: 12px; border-top: 1px solid var(--dshd-border); }
