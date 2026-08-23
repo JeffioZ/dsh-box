@@ -28,7 +28,11 @@ pub struct AccountSnapshot {
     pub status: &'static str,
     pub balance: Option<Balance>,
     pub windows: Vec<QuotaWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// 查询完成时刻（Unix 秒），前端显示「更新于 HH:MM」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -285,6 +289,7 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
                 )
                 .into(),
             ),
+            updated_at: Some(unix_now()),
         };
     };
     let Some(key_env) = route.api_key_env.as_deref() else {
@@ -358,6 +363,7 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
             balance: Some(balance),
             windows: Vec::new(),
             error: None,
+            updated_at: Some(unix_now()),
         },
         Err(e) => snapshot_error(route, "invalid-response", e.to_string()),
     }
@@ -393,7 +399,15 @@ fn snapshot_error(
         balance: None,
         windows: Vec::new(),
         error: Some(error.into()),
+        updated_at: Some(unix_now()),
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 余额查询专用 Agent：短超时、连接复用。

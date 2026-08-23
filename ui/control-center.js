@@ -185,8 +185,8 @@ function renderHeatmap(wrap, report) {
   draw();
 }
 
-const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>';
-const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>';
+const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
 
 function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
   const [year, month0] = monthKey.split('-').map(Number);
@@ -216,9 +216,10 @@ function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
     const tokens = entry ? entry.tokens : 0;
     const hit = entry ? entry.cache_hit_rate : null;
     const lv = tokens <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(Math.sqrt(tokens / max) * 4)));
+    const today = localDayKey(Date.now()) === key;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'usage-day' + (usageSelectedDay === key ? ' selected' : '');
+    btn.className = 'usage-day' + (usageSelectedDay === key ? ' selected' : '') + (today ? ' today' : '');
     btn.dataset.lv = String(lv);
     btn.setAttribute('aria-label', key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : ''));
     btn.innerHTML = '<span>' + d + '</span>' +
@@ -291,7 +292,11 @@ async function renderAccountsSection(wrap) {
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-accounts-heading');
-  section.innerHTML = '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3><div class="usage-accounts" role="status" aria-live="polite"></div>';
+  section.innerHTML =
+    '<div class="usage-acc-head-row">' +
+    '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3>' +
+    '<span class="usage-upd" id="usage-upd"></span>' +
+    '</div><div class="usage-accounts" role="status" aria-live="polite"></div>';
   wrap.appendChild(section);
   const box = section.querySelector('.usage-accounts');
   box.innerHTML = '<span class="usage-empty"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
@@ -300,11 +305,22 @@ async function renderAccountsSection(wrap) {
     if (openKind !== 'usage') return;
     const subs = await invoke('usage_subscriptions_get');
     if (openKind !== 'usage') return;
+    const upd = latestUpdatedAt(accounts || [], subs || []);
+    const updEl = section.querySelector('#usage-upd');
+    if (updEl && upd) {
+      updEl.textContent = dshdT('updatedAt', { time: new Date(upd * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }) });
+    }
     renderAccountCards(box, meaningfulAccounts(accounts, subs));
   } catch (e) {
     if (openKind !== 'usage') return;
     box.innerHTML = '<span class="usage-empty err" role="alert">' + esc(dshdT('usageFailed')) + ': ' + esc(String(e)) + '</span>';
   }
+}
+
+function latestUpdatedAt(accounts, subs) {
+  let latest = 0;
+  for (const a of accounts || []) if (a.updated_at && a.updated_at > latest) latest = a.updated_at;
+  return latest || null;
 }
 
 function renderAccountCards(box, items) {
@@ -704,6 +720,9 @@ function renderNav(activeKind) {
 }
 function renderCurrent(opts) {
   const k = openKind;
+  // 刷新按钮仅用量页显示（旧余额页已合并进用量页）
+  const refresh = $('btn-refresh');
+  if (refresh) refresh.classList.toggle('hidden', k !== 'usage');
   if (k === 'usage') {
     renderUsagePage();
   }
@@ -920,6 +939,25 @@ setInterval(async () => {
 }, 1500);
 
 $('btn-x').addEventListener('click', close);
+// 用量页刷新：重查用量 + 账户（转圈至少 900ms 防抖）
+let usageRefreshBusy = false;
+function setUsageRefreshBusy(busy) {
+  usageRefreshBusy = busy;
+  const button = $('btn-refresh');
+  if (!button) return;
+  button.classList.toggle('refreshing', busy);
+  button.disabled = busy;
+  button.toggleAttribute('aria-busy', busy);
+}
+$('btn-refresh').addEventListener('click', () => {
+  if (usageRefreshBusy) return;
+  setUsageRefreshBusy(true);
+  const start = Date.now();
+  renderUsagePage().finally(() => {
+    const wait = Math.max(0, 900 - (Date.now() - start));
+    setTimeout(() => setUsageRefreshBusy(false), wait);
+  });
+});
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') close();
 });

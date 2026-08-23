@@ -262,6 +262,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .usage-day[data-lv]:not([data-lv="0"]) .usage-day-tok,
 .usage-day[data-lv]:not([data-lv="0"]) .usage-day-hit { color: rgba(255,255,255,0.85); }
 .usage-day.selected { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
+/* 今天：日期数字加粗 + accent 色（不高亮整格，保持热力可读） */
+.usage-day.today > span:first-child { font-weight: 700; color: var(--dshd-accent); }
+.usage-day.today[data-lv]:not([data-lv="0"]) > span:first-child { color: #fff; }
 
 /* 选中日的模型明细 */
 .usage-day-detail { margin-top: 8px; border-top: 1px solid var(--dshd-border); padding-top: 8px; }
@@ -278,6 +281,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 
 /* 账户卡片：余额/订阅窗口统一展示 */
 .usage-accounts { display: flex; flex-direction: column; gap: 8px; }
+.usage-acc-head-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.usage-acc-head-row .usage-h { margin: 0; }
+.usage-upd { font-size: 11px; color: var(--dshd-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .usage-account {
   border: 1px solid var(--dshd-border); border-radius: 8px;
   background: var(--dshd-hover); padding: 8px 10px;
