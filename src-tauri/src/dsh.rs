@@ -121,9 +121,8 @@ fn wait_onboarding(app: &AppHandle, state: &AppState) {
         }
         if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
             // 到期且尚未收到面板显示回报：先探查主 WebView 里面板是否可见。
-            // Tauri 的 eval 不返回脚本值，探活函数会再次 invoke onboarding_shown
-            // 回报；短等待后重查原子标志即可。探活失败/页面不在启动页时按
-            // 「未显示」处理，保留原有放行兜底，不引入新的卡死路径。
+            // Tauri 的 eval 不返回脚本值，探活函数通过带代次的 IPC 显式回报；
+            // 失败或页面不在启动页时按「未显示」处理，不引入新的卡死路径。
             if !probed {
                 probed = true;
                 if probe_onboarding_visibility(app) {
@@ -148,6 +147,7 @@ fn wait_onboarding(app: &AppHandle, state: &AppState) {
                 "onboarded",
                 serde_json::Value::Bool(true),
             );
+            crate::app_state::mark_onboarding_done();
             crate::logging::log("boot: 首次配置面板未显示，60 秒兜底放行");
             return;
         }
@@ -155,7 +155,7 @@ fn wait_onboarding(app: &AppHandle, state: &AppState) {
 }
 
 /// 到期主动探活：仅当主 WebView 当前停在本地启动页、且页内探活函数确认
-/// 面板可见（并回报 onboarding_shown）时返回 true。eval 或查询失败、页面
+/// 面板可见（并返回当前探测代次的 ACK）时返回 true。eval 或查询失败、页面
 /// 已离开启动页等一律返回 false，交回放行兜底处理。
 fn probe_onboarding_visibility(app: &AppHandle) -> bool {
     let Some(webview) = crate::main_webview(app) else {
@@ -170,16 +170,20 @@ fn probe_onboarding_visibility(app: &AppHandle) -> bool {
         crate::logging::log("boot: 探活跳过（主 WebView 不在本地启动页），按未显示放行");
         return false;
     }
-    if webview
-        .eval("window.__dshdOnboardingVisible && window.__dshdOnboardingVisible()")
-        .is_err()
-    {
+    let generation = crate::app_state::begin_onboarding_probe();
+    let script =
+        format!("window.__dshdOnboardingVisible && window.__dshdOnboardingVisible({generation})");
+    if webview.eval(&script).is_err() {
         crate::logging::log("boot: 探活 eval 失败，按未显示放行");
         return false;
     }
-    // 探活函数会异步 invoke onboarding_shown；给 IPC 一个短窗口后再读标志。
-    std::thread::sleep(Duration::from_millis(500));
-    crate::app_state::onboarding_shown()
+    match crate::app_state::wait_onboarding_probe(generation, Duration::from_secs(3)) {
+        Some(visible) => visible,
+        None => {
+            crate::logging::log("boot: 首次配置面板探活 3 秒内未确认，按未显示放行");
+            false
+        }
+    }
 }
 
 /// 首次配置可能触发凭据或插件重启。此时加载页已显示对应忙碌状态，当前
@@ -198,8 +202,53 @@ fn onboarding_handoff_pending(state: &AppState) -> bool {
     false
 }
 
+/// 首次本地配置的统一收尾。无论服务是本轮启动还是由并发重启路径复用，
+/// 都必须在进入 dsh 前完成插件引导，并把设置与插件变更合并为一次重启。
+fn finish_managed_onboarding(
+    app: &AppHandle,
+    state: &AppState,
+    config: &crate::app_state::Config,
+    was_onboarding: bool,
+) -> Result<(), String> {
+    if !was_onboarding || state.onboarding_pending() {
+        return Ok(());
+    }
+    let ready = crate::locale::text("已就绪", "Ready");
+    let plugin_work_pending = crate::plugins::bootstrap_work_pending(config);
+    if plugin_work_pending {
+        let message = crate::locale::text("正在安装内置插件…", "Installing built-in plugins…");
+        state.set_phase(BootPhase::Starting, message, "");
+        emit_status(app, BootPhase::Starting, message, "");
+    }
+    let plugins_changed = crate::plugins::bootstrap_once_blocking(app, config);
+    let settings_restart = state.take_onboarding_restart_required();
+    if plugins_changed || settings_restart {
+        crate::logging::log("boot: 首次设置与插件变更将通过一次服务重启生效");
+        if let Err(e) = crate::updater::restart_service_locked(app) {
+            crate::logging::log(&format!("boot: 首次设置应用重启失败：{e}"));
+            return Err(e);
+        }
+    } else if plugin_work_pending {
+        // 安装尝试可能因退避或环境错误未产生变更；恢复 Ready 后照常进入，
+        // 后台维护会按既有退避策略重试。
+        state.set_phase(BootPhase::Ready, ready, "");
+        emit_status(app, BootPhase::Ready, ready, "");
+    }
+    Ok(())
+}
+
 /// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
 pub(crate) fn enter_web_app(app: &AppHandle, url: &str) {
+    enter_web_app_inner(app, url, false);
+}
+
+/// 服务重启后的页面必须重新导航，即使 WebView 的地址栏仍保留同源旧 URL；
+/// 旧文档可能已经断线或停在浏览器错误状态，不能用 origin 判断其可复用。
+pub(crate) fn reenter_web_app(app: &AppHandle, url: &str) {
+    enter_web_app_inner(app, url, true);
+}
+
+fn enter_web_app_inner(app: &AppHandle, url: &str, force: bool) {
     // 幂等防护：已在目标 dsh 页面（scheme/host/port 一致，忽略路径差异）时
     // 跳过导航，避免重复 navigate 打断已加载的 dsh 造成白屏重载。
     // 调用方须自行保证 Ready 状态已就绪（本函数跳过后不再 emit）。
@@ -207,7 +256,7 @@ pub(crate) fn enter_web_app(app: &AppHandle, url: &str) {
     let already_on_dsh = crate::main_webview(app)
         .and_then(|webview| webview.url().ok())
         .is_some_and(|current| crate::is_dsh_url(&current, &config));
-    if already_on_dsh {
+    if already_on_dsh && !force {
         return;
     }
     let on_startup_page = crate::main_webview(app)
@@ -262,14 +311,17 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         state.set_phase(BootPhase::Ready, ready, "");
         // 首次设置的完成按钮以真实 Ready 为门控；面板可见时前端只更新
         // 卡片而不淡出，保存后 enter_web_app 再完成统一过渡。
-        if state.onboarding_pending() {
+        let was_onboarding = state.onboarding_pending();
+        if was_onboarding {
             emit_status(app, BootPhase::Ready, ready, "");
         }
         wait_onboarding(app, &state);
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
+        finish_managed_onboarding(app, &state, &config, was_onboarding)?;
         enter_web_app(app, &config.web_url());
+        crate::plugins::start_market_bootstrap(app.clone());
         crate::updater::silent_check(app);
         return Ok(());
     }
@@ -362,23 +414,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     if onboarding_handoff_pending(&state) {
         return Ok(());
     }
-    // 首次引导刚完成（was_onboarding=true 且已保存）时，在进入 dsh 之前同步
-    // 安装并应用内置插件：避免“进 dsh 后插件才装完 → 重启服务 → 又回到启动页
-    // 再进 dsh”造成的白屏重载。仅首次，老用户仍走后端 24h 后台升级。
-    if was_onboarding && !state.onboarding_pending() {
-        let message = crate::locale::text("正在安装推荐插件…", "Installing recommended plugins…");
-        state.set_phase(BootPhase::Starting, message, "");
-        emit_status(app, BootPhase::Starting, message, "");
-        if crate::plugins::bootstrap_once_blocking(app, &config) {
-            crate::logging::log("boot: 首次插件安装完成，应用后进入 dsh");
-            // 已持有 lifecycle_guard：用 _locked 版本重启，避免死锁；
-            // 失败交回 boot_loop 错误页重试，不进入已停机的服务。
-            if let Err(e) = crate::updater::restart_service_locked(app) {
-                crate::logging::log(&format!("boot: 首次插件应用重启失败：{e}"));
-                return Err(e);
-            }
-        }
-    }
+    finish_managed_onboarding(app, &state, &config, was_onboarding)?;
     enter_web_app(app, &config.web_url());
     // 初始托管启动时后台维护线程已在等待；从外部服务切回本地时，原线程
     // 已按归属边界退出，这里负责重新启动且内部有单实例门控。
@@ -630,6 +666,15 @@ fn start_and_wait_managed(
     config: &crate::app_state::Config,
     node_exe: &std::path::Path,
 ) -> Result<u16, String> {
+    start_and_wait_managed_inner(app, config, node_exe, true)
+}
+
+fn start_and_wait_managed_inner(
+    app: &AppHandle,
+    config: &crate::app_state::Config,
+    node_exe: &std::path::Path,
+    allow_install_recovery: bool,
+) -> Result<u16, String> {
     let state = app.state::<AppState>();
     let started = start_server(app, config, node_exe)?;
     let log_offset = started.log_offset;
@@ -645,29 +690,36 @@ fn start_and_wait_managed(
             }
         }
         if actual_port.is_some_and(health_check) {
+            crate::plugins::clear_resolved_install_marker(config);
             return Ok(actual_port.expect("checked above"));
         }
         if let Some(status) = state.managed_process_exit()? {
             let log = read_log_since(&config.dsh_log(), log_offset);
-            // 防御点 B：dsh 启即退且日志标明 "cannot resolve profile bundle"——
-            // 说明插件安装曾留下半截状态（manifest 引用了未落地的包）。清理
-            // 该残留后至多重试启动一次；清理未命中时不再重试，直接报错收敛。
-            if let Some(stale) = unresolved_bundle_package(&log) {
-                crate::logging::log(&format!(
-                    "dsh: 检测到残留插件引用 {stale}，清理 manifest 后重试启动"
-                ));
-                match crate::plugins::prune_manifest_package(config, &stale) {
-                    Ok(true) => {
-                        shutdown(app);
-                        return start_and_wait_managed(app, config, node_exe);
-                    }
-                    Ok(false) => {
-                        crate::logging::log(&format!(
-                            "dsh: 未在 manifest 找到残留 {stale}，按普通启动失败处理"
-                        ));
-                    }
-                    Err(e) => {
-                        crate::logging::log(&format!("dsh: 清理残留插件 {stale} 失败：{e}"));
+            // 仅对 DSHBox 记录的中断安装做一次定向恢复。相同上游错误也可能
+            // 来自用户自行维护的 profile，未命中事务标记时绝不修改 manifest。
+            if allow_install_recovery {
+                if let Some(stale) = unresolved_bundle_package(&log) {
+                    crate::logging::log(&format!(
+                        "dsh: 检测到无法解析的插件引用 {stale}，核对中断安装事务"
+                    ));
+                    match crate::plugins::recover_interrupted_plugin_mutation(config, &stale) {
+                        Ok(true) => {
+                            crate::logging::log(&format!(
+                                "dsh: 已恢复 DSHBox 中断的 {stale} 安装，重试启动一次"
+                            ));
+                            shutdown(app);
+                            return start_and_wait_managed_inner(app, config, node_exe, false);
+                        }
+                        Ok(false) => {
+                            crate::logging::log(&format!(
+                                "dsh: {stale} 不属于可恢复的 DSHBox 中断事务，保留用户配置"
+                            ));
+                        }
+                        Err(e) => {
+                            crate::logging::log(&format!(
+                                "dsh: 恢复中断插件安装 {stale} 失败：{e}"
+                            ));
+                        }
                     }
                 }
             }

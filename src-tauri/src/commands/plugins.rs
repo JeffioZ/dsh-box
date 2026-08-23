@@ -15,7 +15,7 @@ pub fn plugin_list(
     Ok(crate::plugins::list(&app))
 }
 
-/// 推荐插件（社区精选、当前未安装的项，供手动安装）。
+/// 社区插件清单（当前未安装的项，供手动安装）。
 #[tauri::command]
 pub fn plugin_recommended(
     app: AppHandle,
@@ -24,6 +24,17 @@ pub fn plugin_recommended(
     ensure_local_origin(&webview)?;
     ensure_managed_service(&app)?;
     Ok(crate::plugins::recommended(&app))
+}
+
+/// 用户主动卸载后仍可手动装回的内置目录项。
+#[tauri::command]
+pub fn plugin_reinstallable_builtins(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::plugins::ReinstallableBuiltinPlugin>, String> {
+    ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
+    Ok(crate::plugins::reinstallable_builtins(&app))
 }
 
 /// npm 搜索插件。

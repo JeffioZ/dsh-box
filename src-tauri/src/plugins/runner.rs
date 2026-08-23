@@ -2,6 +2,12 @@
 
 use super::*;
 
+fn text_tail(text: &str, max_chars: usize) -> String {
+    let mut chars: Vec<char> = text.chars().rev().take(max_chars).collect();
+    chars.reverse();
+    chars.into_iter().collect::<String>().trim().to_string()
+}
+
 /// 所有 `dsh plugin`（pnpm）操作的互斥锁：引导、定时升级、手动升级、
 /// 手动安装/卸载都可能并发触发 pnpm，串行化避免 pnpm 锁竞争与状态错乱。
 pub(super) static MARKET_PNPM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -112,22 +118,24 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     let _ = std::fs::remove_file(&out_path);
     if !status.success() {
         let detail = tail.trim().to_string();
+        if !detail.is_empty() {
+            crate::logging::log(&format!(
+                "plugins: dsh 插件命令失败，输出尾部：{}",
+                text_tail(&detail, 12_000)
+            ));
+        }
         let mut err = if super::is_supply_chain_error(&detail) {
             // 新发布的包仍在 pnpm 供应链冷却期（minimumReleaseAge）内，
             // 任何针对该包的写操作（含卸载）都会被锁文件校验拒绝。转成
             // 友好提示，避免把原始堆栈抛给用户。
             crate::locale::owned(
-                format!(
-                    "该插件版本刚发布，仍在供应链安全冷却期内，请稍候约 24 小时后再试。\n{detail}",
-                ),
-                format!(
-                    "This package version was published recently and is still within the supply-chain cooldown window. Please try again in about 24 hours.\n{detail}",
-                ),
+                "该插件版本仍在供应链安全冷却期内，请在冷却结束后重试。".into(),
+                "This package version is still within the supply-chain safety cooldown. Try again after the cooldown ends.".into(),
             )
         } else if detail.is_empty() {
             crate::locale::text("dsh 插件命令执行失败。", "The dsh plugin command failed.").into()
         } else {
-            detail
+            text_tail(&detail, 2_000)
         };
         // Windows 上被外部进程终止（如安全软件拦截）时取不到退出码；
         // 附注便于识别与诊断（is_environment_block_error 据此分类）
@@ -147,9 +155,115 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
 /// 重建 node_modules 后重试一次。安装/升级/卸载共用，遇错自愈。
 /// 所有 pnpm 操作在此串行化（互斥锁），避免与定时同步/手动操作并发。
 pub(super) fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<String, String> {
+    run_dsh_plugin_auto_with_intent(app, args, false)
+}
+
+pub(super) fn run_dsh_plugin_auto_user_remove(
+    app: &AppHandle,
+    args: &[&str],
+) -> Result<String, String> {
+    run_dsh_plugin_auto_with_intent(app, args, true)
+}
+
+fn run_dsh_plugin_auto_with_intent(
+    app: &AppHandle,
+    args: &[&str],
+    user_removal: bool,
+) -> Result<String, String> {
     let _guard = MARKET_PNPM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let config = app.state::<AppState>().config();
-    restore_interrupted_virtual_store(&config)?;
+    let mutation = args.first().and_then(|command| match *command {
+        "add" => Some(super::PluginMutationKind::Add),
+        "remove" => Some(super::PluginMutationKind::Remove),
+        _ => None,
+    });
+    let mutation_spec = mutation.and_then(|_| args.get(1)).copied();
+    let mutation_package = mutation_spec.and_then(super::spec_package_name);
+    let manifest_path = config.dsh_home().join("profiles/web/package.json");
+    let original_manifest =
+        mutation_spec.and_then(|_| std::fs::read_to_string(&manifest_path).ok());
+    if let (Some(kind), Some(spec)) = (mutation, mutation_spec) {
+        super::save_install_marker(
+            &config,
+            spec,
+            mutation_package,
+            kind,
+            user_removal && matches!(kind, super::PluginMutationKind::Remove),
+            original_manifest.as_deref(),
+        )?;
+    }
+
+    let result = run_dsh_plugin_auto_locked(app, &config, args);
+    if mutation_spec.is_none() {
+        return result;
+    }
+    match result {
+        Ok(output) => {
+            if user_removal && matches!(mutation, Some(super::PluginMutationKind::Remove)) {
+                if let Some(package) =
+                    mutation_package.filter(|package| super::is_market_pkg(package))
+                {
+                    if let Err(e) = super::try_mark_user_removed(&config, package) {
+                        return Err(crate::locale::owned(
+                            format!(
+                                "插件已卸载，但保存用户管理状态失败：{e}。已保留恢复信息，请重启应用后再试。"
+                            ),
+                            format!(
+                                "The plugin was removed, but its user-managed state could not be saved: {e}. Recovery information was kept; restart the app before trying again."
+                            ),
+                        ));
+                    }
+                }
+            }
+            if let Err(e) = super::clear_install_marker(&config) {
+                crate::logging::log(&format!(
+                    "plugins: 命令成功，但清理插件事务标记失败（下次服务就绪后重试）：{e}"
+                ));
+            }
+            Ok(output)
+        }
+        Err(error) => {
+            let rollback = original_manifest.as_deref().map(|text| {
+                crate::app_state::atomic_write(&manifest_path, text).map_err(|e| {
+                    crate::locale::owned(
+                        format!("回滚 package.json 失败：{e}"),
+                        format!("Failed to restore package.json: {e}"),
+                    )
+                })
+            });
+            match rollback {
+                Some(Ok(())) => {
+                    if let Err(e) = super::clear_install_marker(&config) {
+                        crate::logging::log(&format!(
+                            "plugins: manifest 已回滚，但清理插件事务标记失败：{e}"
+                        ));
+                    }
+                    crate::logging::log("plugins: 插件命令失败，已原子恢复 package.json");
+                    Err(error)
+                }
+                Some(Err(rollback_error)) => Err(crate::locale::owned(
+                        format!(
+                            "{error}\n（{rollback_error}；已保留恢复信息，下次启动会自动尝试修复）"
+                        ),
+                        format!(
+                            "{error}\n({rollback_error}; recovery information was kept so the next launch can try to repair it automatically)"
+                        ),
+                    )),
+                None => {
+                    crate::logging::log("plugins: 插件命令前未读到 package.json，无法回滚");
+                    Err(error)
+                }
+            }
+        }
+    }
+}
+
+fn run_dsh_plugin_auto_locked(
+    app: &AppHandle,
+    config: &crate::app_state::Config,
+    args: &[&str],
+) -> Result<String, String> {
+    restore_interrupted_virtual_store(config)?;
     match run_dsh_plugin(app, args) {
         Ok(out) => Ok(out),
         Err(e)
@@ -159,7 +273,7 @@ pub(super) fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<Stri
             crate::logging::log(
                 "plugins: 检测到 pnpm virtual store 错位，备份并重建 node_modules 后重试",
             );
-            if let Err(re) = recover_virtual_store(&config) {
+            if let Err(re) = recover_virtual_store(config) {
                 return Err(crate::locale::owned(
                     format!("{e}\n（自愈失败：{re}）"),
                     format!("{e}\n(Automatic recovery failed: {re})"),
@@ -168,10 +282,10 @@ pub(super) fn run_dsh_plugin_auto(app: &AppHandle, args: &[&str]) -> Result<Stri
             match run_dsh_plugin(app, args) {
                 Ok(out) => {
                     crate::logging::log("plugins: virtual store 自愈成功，node_modules 已重建");
-                    finish_virtual_store_recovery(&config);
+                    finish_virtual_store_recovery(config);
                     Ok(out)
                 }
-                Err(e2) => match rollback_virtual_store(&config) {
+                Err(e2) => match rollback_virtual_store(config) {
                     Ok(()) => Err(crate::locale::owned(
                         format!("{e2}\n（重建 virtual store 仍失败，已恢复原 node_modules）"),
                         format!("{e2}\n(Rebuilding the virtual store failed again; the original node_modules was restored.)"),
@@ -439,8 +553,14 @@ fn rollback_virtual_store(config: &crate::app_state::Config) -> Result<(), Strin
 mod tests {
     use super::{
         finish_virtual_store_recovery, recover_virtual_store, restore_interrupted_virtual_store,
-        rollback_virtual_store,
+        rollback_virtual_store, text_tail,
     };
+
+    #[test]
+    fn user_error_tail_is_bounded_without_splitting_unicode() {
+        assert_eq!(text_tail("前文\n错误甲乙丙", 4), "误甲乙丙");
+        assert_eq!(text_tail("  short  ", 20), "short");
+    }
 
     fn fixture(name: &str) -> (crate::app_state::Config, std::path::PathBuf) {
         use std::time::{SystemTime, UNIX_EPOCH};

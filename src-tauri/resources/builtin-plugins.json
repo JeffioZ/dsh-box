@@ -3,16 +3,16 @@
     "id": "dshmarket",
     "spec": "dshmarket",
     "name": "DSH Market",
-    "description": "可视化插件市场：浏览、搜索、一键安装社区插件",
-    "repoUrl": "https://github.com/dsh-market/dsh-market",
-    "recommended": true
+    "description_zh": "浏览、搜索并安装社区插件",
+    "description_en": "Browse, search, and install community plugins",
+    "homepage": "https://github.com/dsh-market/dsh-market"
   },
   {
     "id": "dsh-file-drop",
     "spec": "dsh-file-drop",
     "name": "DSH File Drop",
-    "description": "拖拽上传非图片文件（PDF/Word/Excel/ZIP 等），路径直入输入框",
-    "repoUrl": "https://github.com/dannyvan/dsh-file-drop",
-    "recommended": true
+    "description_zh": "把 PDF、Word、Excel、ZIP 等非图片文件拖入输入框",
+    "description_en": "Drop PDF, Word, Excel, ZIP, and other non-image files into the prompt",
+    "homepage": "https://github.com/dannyvan/dsh-file-drop"
   }
 ]

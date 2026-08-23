@@ -89,6 +89,24 @@ impl RollbackRecoveryNote {
     }
 }
 
+fn append_rollback_cleanup_note(
+    base: String,
+    name: &str,
+    outcome: &update_txn::RollbackOutcome,
+) -> String {
+    let update_txn::RollbackOutcome::MarkerCleanupPending(error) = outcome else {
+        return base;
+    };
+    crate::locale::owned(
+        format!(
+            "{base}；旧 {name} 已恢复，但更新事务标记仍待清理：{error}。服务可继续使用，请重启应用完成清理。"
+        ),
+        format!(
+            "{base}; the previous {name} version was restored, but its update marker still needs cleanup: {error}. The service can continue running; restart the app to finish cleanup."
+        ),
+    )
+}
+
 /// dsh / Node.js 目录更新的统一事务骨架：
 /// 两阶段钩子——`prepare` 在停服/备份前执行（保证网络/安装器准备失败不产生
 /// 停机窗口），`install` 在目录备份完成后执行。参数化两者的真实差异：
@@ -107,9 +125,7 @@ fn with_directory_transaction<T>(
     prepare: impl FnOnce() -> Result<T, String>,
     install: impl FnOnce(T) -> Result<(), String>,
 ) -> Result<(), String> {
-    // 1) 停服前准备：与目录/服务无关的前置条件全部先检查（含网络与安装器）。
-    let prepared = prepare()?;
-    // 2) 残留与存在性检查。
+    // 1) 先做本地前置检查；不要在明确存在残留事务时仍先联网下载。
     if backup.exists() || marker.exists() {
         return Err(crate::locale::owned(
             format!(
@@ -129,6 +145,9 @@ fn with_directory_transaction<T>(
         ));
     }
 
+    // 2) 停服前准备：网络与安装器等昂贵操作仅在本地状态可进入事务时执行。
+    let prepared = prepare()?;
+
     // 3) 进入事务：停止可用服务、备份当前版本。
     emit_progress(
         app,
@@ -140,31 +159,43 @@ fn with_directory_transaction<T>(
     std::thread::sleep(Duration::from_millis(800));
     if current.exists() {
         if let Err(e) = std::fs::rename(current, backup) {
-            update_txn::remove_marker(marker);
+            let marker_error = update_txn::remove_marker(marker).err();
             let _ = restart_service_locked(app);
             return Err(crate::locale::owned(
-                format!("备份当前 {name} 失败：{e}"),
-                format!("Failed to back up the current {name} installation: {e}"),
+                match marker_error.as_ref() {
+                    Some(cleanup) => format!("备份当前 {name} 失败：{e}；{cleanup}"),
+                    None => format!("备份当前 {name} 失败：{e}"),
+                },
+                match marker_error.as_ref() {
+                    Some(cleanup) => {
+                        format!("Failed to back up the current {name} installation: {e}; {cleanup}")
+                    }
+                    None => format!("Failed to back up the current {name} installation: {e}"),
+                },
             ));
         }
     }
 
     // 4) 安装；失败回滚并重启恢复。
     if let Err(e) = install(prepared) {
-        if let Err(re) = update_txn::rollback_directory(current, backup, marker) {
-            dsh::shutdown(app);
-            return Err(restore_note.after_install_failure(name, &e, &re));
-        }
-        return match restart_service_locked(app) {
-            Ok(()) => Err(crate::locale::owned(
+        let rollback = match update_txn::rollback_directory(current, backup, marker) {
+            Ok(outcome) => outcome,
+            Err(re) => {
+                dsh::shutdown(app);
+                return Err(restore_note.after_install_failure(name, &e, &re));
+            }
+        };
+        let result = match restart_service_locked(app) {
+            Ok(()) => crate::locale::owned(
                 format!("{e}；已恢复旧版本"),
                 format!("{e}; the previous version was restored"),
-            )),
-            Err(re) => Err(crate::locale::owned(
+            ),
+            Err(re) => crate::locale::owned(
                 format!("{e}；旧版本恢复后未能启动：{re}"),
                 format!("{e}; the restored version did not start: {re}"),
-            )),
+            ),
         };
+        return Err(append_rollback_cleanup_note(result, name, &rollback));
     }
 
     // 5) 重启成功提交：清除标记与备份。
@@ -177,37 +208,50 @@ fn with_directory_transaction<T>(
     );
     if let Err(e) = restart_service_locked(app) {
         dsh::shutdown(app);
-        if let Err(re) = update_txn::rollback_directory(current, backup, marker) {
-            return Err(crate::locale::owned(
-                format!(
-                    "新 {name} 启动失败：{e}；旧版本自动恢复也失败：{re}。\n\
-                     服务已停止，下次启动将自动还原旧版本。"
-                ),
-                format!(
-                    "The new {name} version did not start: {e}; automatic rollback also failed: {re}.\n\
-                     The service is stopped; the previous version will be restored on the next launch."
-                ),
-            ));
-        }
+        let rollback = match update_txn::rollback_directory(current, backup, marker) {
+            Ok(outcome) => outcome,
+            Err(re) => {
+                return Err(crate::locale::owned(
+                    format!(
+                        "新 {name} 启动失败：{e}；旧版本自动恢复也失败：{re}。\n\
+                         服务已停止，下次启动将自动还原旧版本。"
+                    ),
+                    format!(
+                        "The new {name} version did not start: {e}; automatic rollback also failed: {re}.\n\
+                         The service is stopped; the previous version will be restored on the next launch."
+                    ),
+                ));
+            }
+        };
         let restore_result = restart_service_locked(app);
-        return match restore_result {
-            Ok(()) => Err(crate::locale::owned(
+        let result = match restore_result {
+            Ok(()) => crate::locale::owned(
                 format!("新 {name} 启动失败，已恢复旧版本：{e}"),
                 format!(
                     "The new {name} version did not start; the previous version was restored: {e}"
                 ),
-            )),
-            Err(re) => Err(crate::locale::owned(
+            ),
+            Err(re) => crate::locale::owned(
                 format!("新 {name} 启动失败：{e}；旧版本恢复后也未能启动：{re}"),
                 format!(
                     "The new {name} version did not start: {e}; the restored version also failed to start: {re}"
                 ),
-            )),
+            ),
         };
+        return Err(append_rollback_cleanup_note(result, name, &rollback));
     }
-    // 提交成功：清除事务标记（幂等；删除失败仅日志——更新已成功，不应
-    // 因清理标记失败而向用户报“更新失败”，下次启动 recover 自愈）。
-    update_txn::remove_marker(marker);
+    // 提交成功：必须先确认标记已清除，再删除备份。标记删除失败时保留
+    // 完整备份，避免下次启动把残缺备份当成未提交事务恢复。
+    if let Err(error) = update_txn::remove_marker(marker) {
+        return Err(crate::locale::owned(
+            format!(
+                "{name} 新版本已启动，但更新事务未能提交：{error}。已保留旧版本备份；请重启应用完成自动恢复后再试。"
+            ),
+            format!(
+                "The new {name} version started, but the update transaction could not be committed: {error}. The previous version backup was kept; restart the app to recover automatically before trying again."
+            ),
+        ));
+    }
     if backup.exists() {
         if let Err(e) = std::fs::remove_dir_all(backup) {
             crate::logging::log(&format!(
@@ -395,7 +439,7 @@ pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
             let target = resume_url
                 .and_then(|url| remap_service_url(&url, config.port))
                 .unwrap_or_else(|| config.web_url());
-            dsh::enter_web_app(app, &target);
+            dsh::reenter_web_app(app, &target);
         }
         Err(msg) => {
             state.set_phase(BootPhase::Error, msg, "");

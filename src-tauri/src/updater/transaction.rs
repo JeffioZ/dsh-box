@@ -44,15 +44,26 @@ pub(crate) fn restore_directory(
     })
 }
 
-/// 回滚目录并在成功后结束事务；失败时必须保留 marker 与备份供下次启动恢复。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RollbackOutcome {
+    Complete,
+    /// 旧目录已经恢复，只有事务标记尚未清理。此时 backup 已被移动，
+    /// 调用方可以重启旧版本，但必须准确提示下次启动继续清理 marker。
+    MarkerCleanupPending(String),
+}
+
+/// 回滚目录并在成功后结束事务。目录恢复失败时保留 marker 与备份；
+/// 仅 marker 删除失败时返回部分成功，不能误报备份仍在。
 pub(crate) fn rollback_directory(
     current: &std::path::Path,
     backup: &std::path::Path,
     marker: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<RollbackOutcome, String> {
     restore_directory(current, backup)?;
-    remove_marker(marker);
-    Ok(())
+    match remove_marker(marker) {
+        Ok(()) => Ok(RollbackOutcome::Complete),
+        Err(error) => Ok(RollbackOutcome::MarkerCleanupPending(error)),
+    }
 }
 
 /// 创建更新事务标记（create_new 保证互斥；写入并 fsync 后才生效）。
@@ -82,12 +93,16 @@ pub(crate) fn create_marker(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 移除更新事务标记（不存在视为成功）。
-pub(crate) fn remove_marker(path: &std::path::Path) {
-    if let Err(e) = std::fs::remove_file(path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            crate::logging::log(&format!("update: 清理事务标记失败：{e}"));
-        }
+/// 移除更新事务标记（不存在视为成功）。调用方必须确认移除成功后，
+/// 才能清理备份；否则残留标记会让下次启动把备份当作未提交事务恢复。
+pub(crate) fn remove_marker(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(crate::locale::owned(
+            format!("清理更新事务标记失败：{e}"),
+            format!("Failed to remove the update transaction marker: {e}"),
+        )),
     }
 }
 
@@ -125,7 +140,7 @@ fn recover_directory(
                 ),
             ));
         }
-        remove_marker(marker);
+        remove_marker(marker)?;
     } else if backup.exists() {
         if current.exists() {
             if let Err(e) = std::fs::remove_dir_all(backup) {
@@ -219,6 +234,38 @@ mod tests {
         assert!(backup.exists());
 
         std::fs::remove_file(current).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removing_a_missing_marker_is_idempotent() {
+        let root = temp_dir("missing-marker");
+        remove_marker(&root.join("missing")).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restored_directory_is_reported_when_only_marker_cleanup_fails() {
+        let root = temp_dir("rollback-marker-pending");
+        let current = root.join("current");
+        let backup = root.join("backup");
+        let marker = root.join("marker");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("version"), "partial").unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("version"), "old").unwrap();
+        // remove_file 对目录必然失败，可稳定模拟 marker 单独清理失败。
+        std::fs::create_dir_all(&marker).unwrap();
+
+        let outcome = rollback_directory(&current, &backup, &marker).unwrap();
+
+        assert!(matches!(outcome, RollbackOutcome::MarkerCleanupPending(_)));
+        assert_eq!(
+            std::fs::read_to_string(current.join("version")).unwrap(),
+            "old"
+        );
+        assert!(!backup.exists());
+        assert!(marker.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

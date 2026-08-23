@@ -330,8 +330,10 @@ function renderUpdatePrompt(p) {
     : '';
   body.innerHTML =
     '<div class="update-prompt">' +
+    '<div class="up-copy dshd-scroll">' +
     '<div class="up-desc">' + esc(headline) + '</div>' +
     viewLink +
+    '</div>' +
     '<div class="up-actions">' +
     '<button type="button" class="dshd-btn" id="up-later">' + dshdT('later') + '</button>' +
     '<button type="button" class="dshd-btn primary" id="up-confirm">' +
@@ -569,6 +571,13 @@ function applyOpen(p) {
   renderNav(p.kind);
   // Rust 打开时已按 kind 预置状态（open_check 触发检查等），此处只渲染
   renderCurrent();
+  // 独立 WebView 模态窗没有可继承的页面焦点。把焦点放到标题，让键盘和
+  // 读屏用户立即进入当前对话语境，随后 Tab 按自然 DOM 顺序到达控件。
+  requestAnimationFrame(() => {
+    if (currentOpen !== p) return;
+    const title = $('dialog-title');
+    if (title) title.focus({ preventScroll: true });
+  });
   // 整窗入场仅打开时播一次；导航切换只播放右侧内容区的轻量提示。
   // 透明窗口创建即定位，纯 opacity 淡入不会再闪烁。
   document.body.classList.remove('dshd-pop-in');

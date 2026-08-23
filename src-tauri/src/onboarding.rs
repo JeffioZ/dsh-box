@@ -45,27 +45,6 @@ pub struct OnboardingPayload {
     pub install_builtin_plugins: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReadyAction {
-    AwaitPluginRestart,
-    RestartForCredentials,
-    EnterWeb,
-}
-
-fn ready_action(
-    credentials_changed: bool,
-    managed_service: bool,
-    plugin_restart_pending: bool,
-) -> ReadyAction {
-    if plugin_restart_pending {
-        ReadyAction::AwaitPluginRestart
-    } else if credentials_changed && managed_service {
-        ReadyAction::RestartForCredentials
-    } else {
-        ReadyAction::EnterWeb
-    }
-}
-
 /// 读取首次配置状态（启动页拉取用）。
 pub fn state(app: &AppHandle) -> OnboardingState {
     let config = app.state::<AppState>().config();
@@ -151,33 +130,14 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     persist_onboarding_completion(&config)?;
     let managed_service =
         app.state::<AppState>().service_ownership() == app_state::ServiceOwnership::Managed;
-    let plugin_restart_pending = managed_service && crate::plugins::prepare_deferred_restart(app);
-    let action = ready_action(credentials_changed, managed_service, plugin_restart_pending);
-    if action == ReadyAction::RestartForCredentials {
-        let message = crate::locale::text("正在应用设置…", "Applying settings…");
-        crate::emit_status(app, BootPhase::Starting, message, "");
+    if credentials_changed && managed_service {
+        // 由正在等待 onboarding 的 boot 线程在内置插件处理结束后统一重启，
+        // 避免凭据与插件各自触发一次服务中断。
+        app.state::<AppState>().require_onboarding_restart();
     }
     app_state::mark_onboarding_done();
-
-    // 插件重启同样会重新读取凭据；两者合并时不能连续重启两次。外部服务
-    // 不由 DSHBox 重启，本地凭据留到以后切换回本地服务时生效。
-    match action {
-        ReadyAction::AwaitPluginRestart => {
-            crate::logging::log("onboarding: 等待预置插件统一重启后进入 dsh");
-        }
-        ReadyAction::RestartForCredentials => {
-            let handle = app.clone();
-            std::thread::spawn(move || {
-                crate::logging::log("onboarding: API Key 已保存，重启服务生效");
-                let _ = crate::updater::restart_service(&handle);
-            });
-        }
-        ReadyAction::EnterWeb => {
-            // 不在此直接导航：mark_onboarding_done 之后 boot_inner 的
-            // wait_onboarding 会被唤醒并统一执行 enter_web_app，避免
-            // 两处各 navigate 一次导致 dsh 被重复加载（白屏一下）。
-        }
-    }
+    // 不在此直接导航或重启：mark_onboarding_done 会唤醒 boot_inner，后者
+    // 统一处理内置插件、凭据重启和 enter_web_app。
     Ok(())
 }
 
@@ -208,27 +168,9 @@ fn save_credentials_api_key(config: &app_state::Config, key: &str) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{
-        can_finish_onboarding, needs_onboarding, persist_onboarding_completion, ready_action,
-        save_credentials_api_key, ReadyAction, DEEPSEEK_API_KEY_NAME,
+        can_finish_onboarding, needs_onboarding, persist_onboarding_completion,
+        save_credentials_api_key, DEEPSEEK_API_KEY_NAME,
     };
-
-    #[test]
-    fn plugin_restart_absorbs_the_onboarding_credentials_restart() {
-        assert_eq!(
-            ready_action(true, true, true),
-            ReadyAction::AwaitPluginRestart
-        );
-        assert_eq!(
-            ready_action(false, true, true),
-            ReadyAction::AwaitPluginRestart
-        );
-        assert_eq!(
-            ready_action(true, true, false),
-            ReadyAction::RestartForCredentials
-        );
-        assert_eq!(ready_action(true, false, false), ReadyAction::EnterWeb);
-        assert_eq!(ready_action(false, true, false), ReadyAction::EnterWeb);
-    }
     use crate::app_state::Config;
     use std::path::PathBuf;
 

@@ -97,10 +97,9 @@ pub struct StatusPayload {
     /// 实际监听端口。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
-    pub download_source: String,
     /// 当前引导轮次。安装操作必须携带该值，过期页面不能影响新一轮安装。
     pub install_generation: u64,
-    /// 当前阶段是否仍接受取消或切换下载源。
+    /// 当前阶段是否仍接受取消安装。
     pub can_cancel: bool,
     /// 服务归属决定哪些操作可由 DSHBox 执行（外部服务绝不停止或更新）。
     pub service_mode: String,
@@ -159,6 +158,10 @@ pub(crate) fn onboarding_done() -> bool {
 /// boot 等待据此区分：面板已显示则无限等待用户完成配置；未显示
 /// （启动页异常）60 秒后自动放行防卡死。
 static ONBOARDING_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ONBOARDING_PROBE_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static ONBOARDING_PROBE_RESULT: std::sync::Mutex<Option<(u64, bool)>> = std::sync::Mutex::new(None);
+static ONBOARDING_PROBE_READY: std::sync::Condvar = std::sync::Condvar::new();
 
 pub(crate) fn mark_onboarding_shown() {
     ONBOARDING_SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -166,6 +169,56 @@ pub(crate) fn mark_onboarding_shown() {
 
 pub(crate) fn onboarding_shown() -> bool {
     ONBOARDING_SHOWN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn begin_onboarding_probe() -> u64 {
+    let mut result = ONBOARDING_PROBE_RESULT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let generation = ONBOARDING_PROBE_SEQUENCE
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    *result = None;
+    generation
+}
+
+pub(crate) fn complete_onboarding_probe(generation: u64, visible: bool) -> bool {
+    let mut result = ONBOARDING_PROBE_RESULT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if ONBOARDING_PROBE_SEQUENCE.load(std::sync::atomic::Ordering::Relaxed) != generation {
+        return false;
+    }
+    if visible {
+        mark_onboarding_shown();
+    }
+    *result = Some((generation, visible));
+    drop(result);
+    ONBOARDING_PROBE_READY.notify_all();
+    true
+}
+
+pub(crate) fn wait_onboarding_probe(generation: u64, timeout: std::time::Duration) -> Option<bool> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut result = ONBOARDING_PROBE_RESULT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    loop {
+        if let Some((ack_generation, visible)) = *result {
+            if ack_generation == generation {
+                return Some(visible);
+            }
+        }
+        let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
+        let waited = ONBOARDING_PROBE_READY
+            .wait_timeout(result, remaining)
+            .unwrap_or_else(|e| e.into_inner());
+        result = waited.0;
+        if waited.1.timed_out() {
+            return None;
+        }
+    }
 }
 
 fn onboarding_required_for(
@@ -213,11 +266,15 @@ pub(crate) struct Inner {
     npm_version: Option<String>,
     /// 自绘弹窗最近一次打开载荷（app_dialog_get 拉取用）。
     last_dialog: Option<crate::control_center::AppDialogOpen>,
+    /// 当前共享弹窗页面类型；与窗口可见性分开记录，覆盖 show 前一帧和关闭动画。
+    current_dialog_kind: Option<String>,
     /// 更新提示弹窗队列：dsh 与应用两个更新可能几乎同时触发；单窗无法并排，
     /// 正在显示时新提示入队，关闭当前后依次弹出，不丢失任何选择。
     pending_update_prompts: std::collections::VecDeque<crate::control_center::UpdatePrompt>,
-    /// 当前是否正有一个 update-prompt 在显示（覆盖 16ms 延迟 show 的时序盲区）。
-    update_prompt_showing: bool,
+    /// 当前占用共享窗口展示权的更新提示；token 让展示提交能够识别已经
+    /// 被普通页面抢占的旧预留。
+    active_update_prompt: Option<(u64, crate::control_center::UpdatePrompt)>,
+    update_prompt_sequence: u64,
     /// 最近一次余额查询结果（余额弹窗轮询拉取；事件通道对该窗口不可靠）。
     last_balance: Option<crate::balance::BalancePayload>,
     /// 最近一次更新检查结果 + 进度文案 + 更新完成结果（检查更新弹窗轮询拉取）。
@@ -229,6 +286,9 @@ pub(crate) struct Inner {
     main_disabled: bool,
     /// 弹窗生命周期代次：打开/关闭时 +1，挂起的延迟动作据此判断是否过期。
     dialog_gen: u64,
+    /// 首次配置写入了需要重启本地 dsh 才能生效的内容；由 boot 在内置插件
+    /// 安装结束后一次性取走，合并成一次服务重启。
+    onboarding_restart_required: bool,
     /// PowerShell 更新的 UAC 预告在弹窗内等待确认；点击“继续”后置位。
     pwsh_pending: bool,
     pwsh_confirmed: bool,
@@ -304,8 +364,10 @@ impl AppState {
             node_version: None,
             npm_version: None,
             last_dialog: None,
+            current_dialog_kind: None,
             pending_update_prompts: std::collections::VecDeque::new(),
-            update_prompt_showing: false,
+            active_update_prompt: None,
+            update_prompt_sequence: 0,
             last_balance: None,
             last_check: None,
             check_progress: None,
@@ -313,6 +375,7 @@ impl AppState {
             update_done: None,
             main_disabled: false,
             dialog_gen: 0,
+            onboarding_restart_required: false,
             pwsh_pending: false,
             pwsh_confirmed: false,
             last_heartbeat: None,
@@ -601,7 +664,6 @@ impl AppState {
             node_version,
             npm_version,
             port: Some(port),
-            download_source: config.download_source,
             install_generation,
             can_cancel: matches!(phase, BootPhase::InstallingNode | BootPhase::InstallingDsh)
                 && install_action == InstallAction::None,
@@ -777,7 +839,14 @@ impl AppState {
 
     /// 自绘弹窗：记录最近一次打开载荷。
     pub fn set_last_dialog(&self, payload: crate::control_center::AppDialogOpen) {
-        self.lock_inner().last_dialog = Some(payload);
+        let mut inner = self.lock_inner();
+        if payload.kind != "update-prompt" {
+            if let Some((_, prompt)) = inner.active_update_prompt.take() {
+                inner.pending_update_prompts.push_front(prompt);
+            }
+        }
+        inner.current_dialog_kind = Some(payload.kind.clone());
+        inner.last_dialog = Some(payload);
     }
 
     /// 自绘弹窗：读取最近一次打开载荷。
@@ -785,40 +854,83 @@ impl AppState {
         self.lock_inner().last_dialog.clone()
     }
 
-    /// 更新提示是否正在显示（供 close 判断是否为 update-prompt 弹窗）。
-    pub fn update_prompt_showing(&self) -> bool {
-        self.lock_inner().update_prompt_showing
+    pub fn dialog_kind(&self) -> Option<String> {
+        self.lock_inner().current_dialog_kind.clone()
     }
 
-    /// 关闭当前提示后原子地：清除“正在显示”信号并出队下一个待展示提示；
-    /// 若还有下一个则在同一锁内置位 showing=true，消除出队与置位之间
-    /// 被并发出队竞态的窗口。
-    pub fn clear_show_and_dequeue(&self) -> Option<crate::control_center::UpdatePrompt> {
+    /// 把已预留的更新提示提交为当前页面。普通页面若已抢占，token 会失效，
+    /// 旧展示调用必须立即放弃，不能再覆盖共享窗口内容。
+    pub fn commit_update_prompt_show(
+        &self,
+        token: u64,
+        payload: crate::control_center::AppDialogOpen,
+    ) -> bool {
         let mut inner = self.lock_inner();
-        inner.update_prompt_showing = false;
-        let next = inner.pending_update_prompts.pop_front();
-        inner.update_prompt_showing = next.is_some();
-        next
+        if inner.current_dialog_kind.is_some()
+            || inner
+                .active_update_prompt
+                .as_ref()
+                .map(|(active_token, _)| *active_token)
+                != Some(token)
+        {
+            return false;
+        }
+        inner.current_dialog_kind = Some(payload.kind.clone());
+        inner.last_dialog = Some(payload);
+        true
     }
 
-    /// 用户在更新提示上已做决策（立即更新/稍后）：清除“正在显示”信号并
-    /// 清空待展示队列，避免滞留或误弹。
-    pub fn discard_update_prompt_queue(&self) {
+    /// 当前页面关闭后释放其身份，并原子地为下一条更新提示预留展示权。
+    pub fn finish_dialog_close(
+        &self,
+        closed_kind: &str,
+    ) -> Option<(crate::control_center::UpdatePrompt, u64)> {
         let mut inner = self.lock_inner();
-        inner.update_prompt_showing = false;
-        inner.pending_update_prompts.clear();
+        if inner.current_dialog_kind.as_deref() != Some(closed_kind) {
+            return None;
+        }
+        inner.current_dialog_kind = None;
+        inner.last_dialog = None;
+        if closed_kind == "update-prompt" {
+            inner.active_update_prompt = None;
+        }
+        let next = inner.pending_update_prompts.pop_front()?;
+        inner.update_prompt_sequence = inner.update_prompt_sequence.wrapping_add(1).max(1);
+        let token = inner.update_prompt_sequence;
+        inner.active_update_prompt = Some((token, next.clone()));
+        Some((next, token))
     }
 
-    /// 原子申请 update-prompt 展示权：当前无提示在显示则置位并返回 true
-    /// （调用方应立即 present）；否则把 prompt 入队并返回 false。
-    pub fn acquire_update_prompt_show(&self, prompt: crate::control_center::UpdatePrompt) -> bool {
+    /// 用户接受当前更新提示时只消费这一条；其他已排队提示保持独立。
+    pub fn consume_active_update_prompt(&self, kind: &str) -> bool {
         let mut inner = self.lock_inner();
-        if inner.update_prompt_showing {
+        if inner.current_dialog_kind.as_deref() != Some("update-prompt")
+            || inner
+                .active_update_prompt
+                .as_ref()
+                .map(|(_, prompt)| prompt.kind.as_str())
+                != Some(kind)
+        {
+            return false;
+        }
+        inner.active_update_prompt = None;
+        true
+    }
+
+    /// 原子申请 update-prompt 展示权：共享窗口空闲时立即预留，否则排队。
+    pub fn acquire_update_prompt_show(
+        &self,
+        prompt: crate::control_center::UpdatePrompt,
+    ) -> Option<u64> {
+        let mut inner = self.lock_inner();
+        if inner.current_dialog_kind.is_some() || inner.active_update_prompt.is_some() {
             inner.pending_update_prompts.push_back(prompt);
-            false
+            None
         } else {
-            inner.update_prompt_showing = true;
-            true
+            inner.update_prompt_sequence = inner.update_prompt_sequence.wrapping_add(1).max(1);
+            let token = inner.update_prompt_sequence;
+            inner.active_update_prompt = Some((token, prompt));
+            Some(token)
         }
     }
 
@@ -871,6 +983,15 @@ impl AppState {
         self.lock_inner().dialog_gen
     }
 
+    pub(crate) fn require_onboarding_restart(&self) {
+        self.lock_inner().onboarding_restart_required = true;
+    }
+
+    pub(crate) fn take_onboarding_restart_required(&self) -> bool {
+        let mut inner = self.lock_inner();
+        std::mem::take(&mut inner.onboarding_restart_required)
+    }
+
     /// PowerShell 更新的弹窗内确认状态（UAC 预告）。
     pub fn set_pwsh_pending(&self, v: bool) {
         self.lock_inner().pwsh_pending = v;
@@ -911,7 +1032,10 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_section_field, onboarding_required_for, AppState};
+    use super::{
+        begin_onboarding_probe, complete_onboarding_probe, merge_section_field,
+        onboarding_required_for, wait_onboarding_probe, AppState,
+    };
 
     #[test]
     fn onboarding_gate_distinguishes_dev_processes_from_internal_navigation() {
@@ -925,6 +1049,15 @@ mod tests {
     fn onboarding_gate_keeps_production_persistence_semantics() {
         assert!(onboarding_required_for(false, false, false));
         assert!(!onboarding_required_for(false, false, true));
+    }
+
+    #[test]
+    fn onboarding_restart_requirement_is_consumed_once() {
+        let state = AppState::new();
+        assert!(!state.take_onboarding_restart_required());
+        state.require_onboarding_restart();
+        assert!(state.take_onboarding_restart_required());
+        assert!(!state.take_onboarding_restart_required());
     }
 
     #[test]
@@ -965,38 +1098,94 @@ mod tests {
         }
     }
 
+    fn sample_dialog(kind: &str) -> crate::control_center::AppDialogOpen {
+        crate::control_center::AppDialogOpen {
+            title: kind.into(),
+            kind: kind.into(),
+            initial: serde_json::json!({}),
+        }
+    }
+
     #[test]
     fn update_prompt_acquire_grants_first_show_then_queues() {
         let state = AppState::new();
-        // 第一个申请成功（占据展示权）。
-        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
-        assert!(state.update_prompt_showing());
-        // 展示期间新提示入队，不再获得展示权。
-        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
-        assert!(state.update_prompt_showing());
+        let token = state
+            .acquire_update_prompt_show(sample_prompt("app"))
+            .unwrap();
+        assert!(state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        assert!(state
+            .acquire_update_prompt_show(sample_prompt("dsh"))
+            .is_none());
+        assert_eq!(state.dialog_kind().as_deref(), Some("update-prompt"));
     }
 
     #[test]
-    fn clear_show_and_dequeue_pops_next_and_keeps_showing() {
+    fn closing_dialog_reserves_the_next_update_prompt() {
         let state = AppState::new();
-        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
-        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
-        // 关闭当前：出队 dsh 且 showing 仍为 true（锁内原子置位，无竞态窗口）。
-        let next = state.clear_show_and_dequeue();
-        assert_eq!(next.map(|p| p.kind), Some("dsh".to_string()));
-        assert!(state.update_prompt_showing());
-        // 队列空：再关一次 showing 归 false。
-        assert!(state.clear_show_and_dequeue().is_none());
-        assert!(!state.update_prompt_showing());
+        let token = state
+            .acquire_update_prompt_show(sample_prompt("app"))
+            .unwrap();
+        assert!(state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        assert!(state
+            .acquire_update_prompt_show(sample_prompt("dsh"))
+            .is_none());
+        let next = state.finish_dialog_close("update-prompt");
+        let (next, token) = next.unwrap();
+        assert_eq!(next.kind, "dsh");
+        assert!(state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        assert!(state.finish_dialog_close("update-prompt").is_none());
+        assert!(state.dialog_kind().is_none());
     }
 
     #[test]
-    fn discard_update_prompt_queue_clears_flag_and_pending() {
+    fn normal_dialog_preempts_prompt_without_losing_it() {
         let state = AppState::new();
-        assert!(state.acquire_update_prompt_show(sample_prompt("app")));
-        assert!(!state.acquire_update_prompt_show(sample_prompt("dsh")));
-        state.discard_update_prompt_queue();
-        assert!(!state.update_prompt_showing());
-        assert!(state.clear_show_and_dequeue().is_none());
+        let token = state
+            .acquire_update_prompt_show(sample_prompt("app"))
+            .unwrap();
+        assert!(state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        state.set_last_dialog(sample_dialog("balance"));
+        let next = state.finish_dialog_close("balance");
+        assert_eq!(next.map(|(p, _)| p.kind), Some("app".to_string()));
+    }
+
+    #[test]
+    fn normal_dialog_preempts_a_reserved_prompt_before_show() {
+        let state = AppState::new();
+        let token = state
+            .acquire_update_prompt_show(sample_prompt("app"))
+            .unwrap();
+        state.set_last_dialog(sample_dialog("balance"));
+        assert!(!state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        let next = state.finish_dialog_close("balance");
+        assert_eq!(next.map(|(p, _)| p.kind), Some("app".to_string()));
+    }
+
+    #[test]
+    fn accepting_one_prompt_keeps_the_other_queued() {
+        let state = AppState::new();
+        let token = state
+            .acquire_update_prompt_show(sample_prompt("app"))
+            .unwrap();
+        assert!(state.commit_update_prompt_show(token, sample_dialog("update-prompt")));
+        assert!(state
+            .acquire_update_prompt_show(sample_prompt("dsh"))
+            .is_none());
+        assert!(state.consume_active_update_prompt("app"));
+        state.set_last_dialog(sample_dialog("check"));
+        let next = state.finish_dialog_close("check");
+        assert_eq!(next.map(|(p, _)| p.kind), Some("dsh".to_string()));
+    }
+
+    #[test]
+    fn onboarding_probe_ignores_a_stale_generation() {
+        let stale = begin_onboarding_probe();
+        let current = begin_onboarding_probe();
+        assert!(!complete_onboarding_probe(stale, true));
+        assert!(complete_onboarding_probe(current, false));
+        assert_eq!(
+            wait_onboarding_probe(current, std::time::Duration::from_millis(10)),
+            Some(false)
+        );
     }
 }

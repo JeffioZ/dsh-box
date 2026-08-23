@@ -6,27 +6,47 @@ use super::*;
 
 /// 单个内置插件的静态信息（对应 resources/builtin-plugins.json 条目）。
 #[derive(serde::Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 struct PresetPlugin {
     /// 主键 / 存储标记键 / UI builtin 判定键（即实际包名）
     id: String,
     /// 传给 `dsh plugin add` 的依赖形式（npm 包名或 git 依赖形式）；
     /// 与 id 可不一致（如 scoped 包 `@scope/name`）
     spec: String,
+    name: String,
+    description_zh: String,
+    description_en: String,
+    homepage: String,
 }
 
-/// 推荐插件（社区精选、仅展示不自动维护）。与 PresetPlugin 分离：
+/// 用户主动卸载后仍可手动装回的内置目录项。它只表示来源，不恢复内置
+/// 维护身份；卸载标记会继续阻止自动安装和自动更新。
+#[derive(Clone, serde::Serialize)]
+pub struct ReinstallableBuiltinPlugin {
+    pub id: String,
+    pub spec: String,
+    pub name: String,
+    pub description_zh: String,
+    pub description_en: String,
+    pub homepage: String,
+}
+
+/// 社区插件清单（仅展示不自动维护）。与 PresetPlugin 分离：
 /// 不触发自动安装/升级，卸载后仅重新出现在推荐区、不恢复“内置维护身份”。
 #[derive(serde::Deserialize, Clone, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecommendedPlugin {
-    /// 展示名（非唯一；安装判重按 spec 解析出的实际包名）。
+    /// 实际 dependency 名，也是安装判重用的稳定标识。
+    pub id: String,
+    /// 展示名（非唯一）。
     pub name: String,
     /// 传给 `dsh plugin add` 的依赖形式（scoped 包如 @scope/name）。
     pub spec: String,
-    /// 一句话描述。
-    pub description: String,
-    /// 项目主页（可选）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
+    /// 中英文一句话描述。
+    pub description_zh: String,
+    pub description_en: String,
+    /// 安装前供用户核对来源的项目主页。
+    pub homepage: String,
 }
 
 /// 解析 resources/recommended-plugins.json（编译期嵌入，运行期零 IO）。
@@ -34,14 +54,20 @@ pub(crate) fn recommended_plugins() -> &'static [RecommendedPlugin] {
     static CACHE: std::sync::OnceLock<Vec<RecommendedPlugin>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         const JSON: &str = include_str!("../../resources/recommended-plugins.json");
-        serde_json::from_str(JSON).unwrap_or_default()
+        match parse_recommended_plugins(JSON) {
+            Ok(plugins) => plugins,
+            Err(error) => {
+                crate::logging::log(&format!("plugins: 推荐清单解析失败：{error}"));
+                Vec::new()
+            }
+        }
     })
 }
 
-/// spec 解析出的实际包名（与已安装 dependencies 名比对用）。
-fn spec_package_name(spec: &str) -> &str {
-    // 依赖形式通常是 npm 包名或 git 形式；这里只处理 npm 包名/scoped 包名。
-    spec.split('#').next().map(str::trim).unwrap_or(spec)
+pub(super) fn parse_recommended_plugins(
+    text: &str,
+) -> Result<Vec<RecommendedPlugin>, serde_json::Error> {
+    serde_json::from_str(text)
 }
 
 /// 推荐清单中仍未安装的项（复用已安装 dependencies 名集合判断）。
@@ -50,7 +76,7 @@ pub(crate) fn recommended_not_installed(
 ) -> Vec<RecommendedPlugin> {
     recommended_plugins()
         .iter()
-        .filter(|p| !installed_names.contains(spec_package_name(&p.spec)))
+        .filter(|p| !installed_names.contains(&p.id))
         .cloned()
         .collect()
 }
@@ -83,6 +109,26 @@ pub(super) fn market_spec(id: &str) -> String {
         .find(|p| p.id == id)
         .map(|p| p.spec.clone())
         .unwrap_or_else(|| id.to_string())
+}
+
+pub(crate) fn reinstallable_builtin_plugins(
+    config: &crate::app_state::Config,
+    installed_names: &std::collections::HashSet<String>,
+) -> Vec<ReinstallableBuiltinPlugin> {
+    preset_plugins()
+        .iter()
+        .filter(|plugin| {
+            market_user_removed(config, &plugin.id) && !installed_names.contains(&plugin.id)
+        })
+        .map(|plugin| ReinstallableBuiltinPlugin {
+            id: plugin.id.clone(),
+            spec: plugin.spec.clone(),
+            name: plugin.name.clone(),
+            description_zh: plugin.description_zh.clone(),
+            description_en: plugin.description_en.clone(),
+            homepage: plugin.homepage.clone(),
+        })
+        .collect()
 }
 
 /// 更新必须绑定版本检查得到的精确版本，不能再次使用 latest/spec 范围；否则
@@ -373,16 +419,22 @@ pub(super) fn market_mark_user_removed(config: &crate::app_state::Config, pkg: &
     );
 }
 
-/// 内置身份判定：包在当前维护清单中，且用户未曾主动卸载过。
+/// 内置身份判定：用户明确授权、包在当前维护清单中，且未曾主动卸载。
 /// （不含 bootstrapped 条件——引导从未成功的包仍需显示重装入口。）
-pub(super) fn builtin_identity(in_market: bool, user_removed: bool) -> bool {
-    in_market && !user_removed
+pub(super) fn builtin_identity(consented: bool, in_market: bool, user_removed: bool) -> bool {
+    consented && in_market && !user_removed
 }
 
-/// 强制下线清理条件：在下线清单、已安装、且仍为内置身份。
+/// 强制下线清理条件：用户曾授权内置维护、包在下线清单、已安装，且
+/// 没有被用户主动卸载过。
 /// 用户卸载过又手动重装的包豁免——尊重用户对已装插件的所有权。
-pub(super) fn should_retire(in_removed: bool, installed: bool, user_removed: bool) -> bool {
-    in_removed && installed && !user_removed
+pub(super) fn should_retire(
+    consented: bool,
+    in_removed: bool,
+    installed: bool,
+    user_removed: bool,
+) -> bool {
+    consented && in_removed && installed && !user_removed
 }
 
 /// 引导失败退避时间戳：上次引导失败时写入 `now + MARKET_BOOTSTRAP_RETRY`，
@@ -433,12 +485,16 @@ pub(super) fn builtin_plugins_enabled(config: &crate::app_state::Config) -> bool
 /// 全部失败静默：安装/升级失败退避后重试，不阻塞主流程。
 static MARKET_MAINTENANCE_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static MARKET_BOOTSTRAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static FIRST_ONBOARDING_BOOTSTRAP_DONE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn start_market_bootstrap(app: AppHandle) {
     use std::sync::atomic::Ordering;
     if MARKET_MAINTENANCE_RUNNING.swap(true, Ordering::AcqRel) {
         return;
     }
+    let wait_for_first_onboarding = app.state::<AppState>().onboarding_pending();
     std::thread::spawn(move || {
         struct RunningReset;
         impl Drop for RunningReset {
@@ -472,10 +528,16 @@ pub fn start_market_bootstrap(app: AppHandle) {
         while builtin_plugins_consent(&config).is_none() {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        // 未安装或不完整的包逐个安装；明确由 DSHBox 卸载过的包不再自动
-        // 重装。上次引导失败后的退避期内直接跳过：上游
-        // supply-chain 策略拦截是持续性的，短期反复重试必然失败，只会刷日志。
-        if bootstrap_market_pkgs(&app, &config) {
+        if wait_for_first_onboarding {
+            // 首次配置由 boot 线程同步安装并与凭据合并为一次重启。后台线程
+            // 只等待其完成，不能抢先安装或另起重启协调器。
+            while !FIRST_ONBOARDING_BOOTSTRAP_DONE.load(Ordering::Acquire) {
+                if app.state::<AppState>().is_quitting() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        } else if run_bootstrap_serialized(&app, &config) {
             crate::logging::log("market: 内置插件已变更，将在会话空闲时应用");
             mark_plugin_changes(&app, true);
         } // 版本同步：首次延迟 90s（避开启动期——安全软件弹窗/网络波动，
@@ -503,14 +565,50 @@ pub fn start_market_bootstrap(app: AppHandle) {
 /// 仅在 dsh 服务已就绪、且用户已完成首次选择时可用。
 /// 返回是否有新装/卸载变更，调用方据此决定是否重启服务。
 pub(crate) fn bootstrap_once_blocking(app: &AppHandle, config: &crate::app_state::Config) -> bool {
-    // 用户尚未就内置插件做出明确选择时不做任何事（不把 None 当默认）。
-    if builtin_plugins_consent(config).is_none() {
-        return false;
-    }
-    if app.state::<AppState>().service_ownership().is_external() {
-        return false;
-    }
+    use std::sync::atomic::Ordering;
+    let changed = if builtin_plugins_consent(config).is_none()
+        || app.state::<AppState>().service_ownership().is_external()
+    {
+        false
+    } else {
+        run_bootstrap_serialized(app, config)
+    };
+    FIRST_ONBOARDING_BOOTSTRAP_DONE.store(true, Ordering::Release);
+    changed
+}
+
+fn run_bootstrap_serialized(app: &AppHandle, config: &crate::app_state::Config) -> bool {
+    let _guard = MARKET_BOOTSTRAP_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     bootstrap_market_pkgs(app, config)
+}
+
+/// 当前是否真的有内置插件安装或下线工作。启动页只在该值为 true 时显示
+/// 安装进度，避免把用户的“不安装”选择说成正在执行。
+pub(crate) fn bootstrap_work_pending(config: &crate::app_state::Config) -> bool {
+    if !market_bootstrap_retry_due(config) {
+        return false;
+    }
+    let consented = builtin_plugins_enabled(config);
+    let retired_pending = consented
+        && MARKET_REMOVED.iter().any(|pkg| {
+            !is_market_pkg(pkg)
+                && should_retire(
+                    consented,
+                    true,
+                    market_installed_version(config, pkg).is_some(),
+                    market_user_removed(config, pkg),
+                )
+        });
+    if retired_pending {
+        return true;
+    }
+    builtin_plugins_enabled(config)
+        && market_pkg_ids().any(|pkg| {
+            !market_user_removed(config, pkg)
+                && market_install_state(config, pkg) != MarketInstallState::Ready
+        })
 }
 
 /// 未安装的内置包逐个安装。返回是否有新装包（调用方据此重启服务）。
@@ -580,7 +678,8 @@ pub(super) fn remove_retired_market_pkgs(
     app: &AppHandle,
     config: &crate::app_state::Config,
 ) -> (bool, bool) {
-    if MARKET_REMOVED.is_empty() {
+    let consented = builtin_plugins_enabled(config);
+    if !consented || MARKET_REMOVED.is_empty() {
         return (false, false);
     }
     let mut removed_any = false;
@@ -596,7 +695,7 @@ pub(super) fn remove_retired_market_pkgs(
         }
         let installed = market_installed_version(config, pkg).is_some();
         let user_removed = market_user_removed(config, pkg);
-        if !should_retire(true, installed, user_removed) {
+        if !should_retire(consented, true, installed, user_removed) {
             if installed && user_removed {
                 crate::logging::log(&format!(
                     "market: {pkg} 已下线但用户主动重装过，尊重用户选择，跳过清理"
@@ -626,8 +725,9 @@ pub(super) fn remove_retired_market_pkgs(
 /// 其他包的升级检查——未装包直接 continue，不会计入失败。
 /// 返回是否有包升级成功。
 pub(super) fn sync_market_versions(app: &AppHandle, config: &crate::app_state::Config) -> bool {
-    // 用户关闭自动升级后静默跳过（首次预装引导不受此开关影响）
-    if !config.auto_update_plugins {
+    // 未授权内置插件或关闭自动升级时静默跳过。用户通过搜索手动安装的
+    // 同名包不因此获得内置维护身份。
+    if !builtin_plugins_enabled(config) || !config.auto_update_plugins {
         return false;
     }
     // 升级失败退避期内跳过（不落检查门控，退避到期后自动恢复）

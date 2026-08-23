@@ -59,6 +59,7 @@ body {
 .nav-sep { height: 1px; margin: 4px 12px; background: var(--dshd-border); }
 .nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: 11px; color: var(--dshd-text-dim); opacity: .6; }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#dialog-title:focus { outline: none; }
 /* 内容居中容器：余额/关于等轻内容不撑满右侧，避免空旷 */
 .center-wrap { max-width: 420px; margin: 6px auto 0; width: 100%; }
 @media (prefers-reduced-motion: reduce) { .nav-item { transition: none; } }
@@ -352,8 +353,14 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .pitem .info { flex: 1; min-width: 0; }
 .pitem .name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pitem .desc { font-size: 12px; color: var(--dshd-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitem-status { margin-top: 2px; font-size: 11px; line-height: 16px; color: var(--dshd-text-dim); overflow-wrap: anywhere; }
+.pitem-status:empty { display: none; }
+.pitem-status.err { color: var(--dshd-error-text); }
 .pitem .ver { font-size: 11px; color: var(--dshd-text-dim); flex: none; }
 .pitem .pactions { display: flex; gap: 6px; flex: none; }
+.plugin-home { display: inline-flex; align-items: center; gap: 4px; }
+.plugin-home svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.plugin-action .spin, .recommended-loading .spin { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; }
 /* 内置插件标签：中性低调，单行不换行（紧凑标签不折行规则） */
 .pitem .pbadge {
   display: inline-block; margin-left: 6px; padding: 1px 6px;
@@ -415,8 +422,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
   display: flex; flex-direction: column; gap: 4px;
   padding: 0;
   min-height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
+.up-copy { flex: 1; min-height: 0; overflow-y: auto; padding-right: 2px; }
 .up-desc {
   font-size: 12.5px; line-height: 1.5; color: var(--dshd-text-dim);
   overflow-wrap: anywhere; margin: 0; text-align: left;
@@ -434,7 +442,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .up-link:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; border-radius: 3px; }
 /* 按钮组贴底、右对齐 */
 .up-actions {
-  display: flex; justify-content: flex-end; gap: 8px;
+  display: flex; flex: none; justify-content: flex-end; gap: 8px;
   margin-top: auto; padding-bottom: 0; margin-bottom: 0;
 }
 /* 无导航模式：标题与文案左边距一致（都 18px） */
@@ -449,6 +457,8 @@ body.update-prompt-mode .body { padding: 0 18px 14px; }
 body.update-prompt-mode #nav { display: none; }
 body.update-prompt-mode #main { width: 100%; }
 
-/* 推荐插件区：社区精选、手动安装 */
-.p-recommended-hint { margin: 0 0 6px; font-size: 12px; color: var(--dshd-text-dim); }
-#p-recommended-sec { padding-top: 12px; border-top: 1px solid var(--dshd-border); }
+/* 手动安装目录：用户卸载的内置插件与社区插件保持独立语义。 */
+.p-section-hint { margin: 0 0 6px; font-size: 12px; color: var(--dshd-text-dim); }
+#p-reinstall-sec, #p-recommended-sec { padding-top: 12px; border-top: 1px solid var(--dshd-border); }
+#p-recommended-sec[aria-busy="true"] { min-height: 92px; }
+.recommended-loading { min-height: 28px; justify-content: center; }

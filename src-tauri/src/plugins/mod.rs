@@ -6,17 +6,163 @@
 mod maintenance;
 mod runner;
 
-pub(crate) use maintenance::bootstrap_once_blocking;
 pub use maintenance::start_market_bootstrap;
-pub use maintenance::RecommendedPlugin;
 use maintenance::*;
-use runner::run_dsh_plugin_auto;
+pub(crate) use maintenance::{bootstrap_once_blocking, bootstrap_work_pending};
+pub use maintenance::{RecommendedPlugin, ReinstallableBuiltinPlugin};
+use runner::{run_dsh_plugin_auto, run_dsh_plugin_auto_user_remove};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri::Manager;
 
 use crate::app_state::AppState;
+
+const PLUGIN_INSTALL_MARKER_KEY: &str = "plugin_install_in_progress";
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum PluginMutationKind {
+    #[default]
+    Add,
+    Remove,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct PluginInstallMarker {
+    #[serde(default)]
+    package: Option<String>,
+    spec: String,
+    #[serde(default)]
+    kind: PluginMutationKind,
+    #[serde(default)]
+    user_removal: bool,
+    #[serde(default)]
+    original_manifest: Option<String>,
+}
+
+/// 从 npm 依赖规格中提取 package.json dependency 名。无法可靠识别的 git、
+/// URL 或本地路径规格返回 None，崩溃恢复不会据此删除 manifest 内容。
+fn spec_package_name(spec: &str) -> Option<&str> {
+    let spec = spec.trim().split('#').next()?.trim();
+    if spec.is_empty() || spec.contains("://") || spec.starts_with("git+") || spec.starts_with('.')
+    {
+        return None;
+    }
+    let end = if spec.starts_with('@') {
+        let slash = spec.find('/')?;
+        spec[slash + 1..]
+            .rfind('@')
+            .map(|at| slash + 1 + at)
+            .unwrap_or(spec.len())
+    } else {
+        spec.rfind('@').filter(|at| *at > 0).unwrap_or(spec.len())
+    };
+    let name = &spec[..end];
+    let valid_shape = if let Some(scoped) = name.strip_prefix('@') {
+        scoped.split_once('/').is_some_and(|(scope, package)| {
+            !scope.is_empty() && !package.is_empty() && !package.contains('/')
+        })
+    } else {
+        !name.contains('/')
+    };
+    (valid_shape
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '/' | '-' | '_' | '.')))
+    .then_some(name)
+}
+
+fn install_marker(config: &crate::app_state::Config) -> Option<PluginInstallMarker> {
+    crate::app_state::load_state_value(&config.root, PLUGIN_INSTALL_MARKER_KEY)
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn save_install_marker(
+    config: &crate::app_state::Config,
+    spec: &str,
+    package: Option<&str>,
+    kind: PluginMutationKind,
+    user_removal: bool,
+    original_manifest: Option<&str>,
+) -> Result<(), String> {
+    if let Some(marker) = install_marker(config) {
+        return Err(crate::locale::owned(
+            format!(
+                "上次插件操作尚未完成（{}），请先重启应用完成恢复后再试。",
+                marker.spec
+            ),
+            format!(
+                "The previous plugin operation ({}) is still unfinished. Restart the app to complete recovery before trying again.",
+                marker.spec
+            ),
+        ));
+    }
+    crate::app_state::save_state_value(
+        &config.root,
+        PLUGIN_INSTALL_MARKER_KEY,
+        serde_json::to_value(PluginInstallMarker {
+            package: package.map(str::to_string),
+            spec: spec.to_string(),
+            kind,
+            user_removal,
+            original_manifest: original_manifest.map(str::to_string),
+        })
+        .map_err(|e| e.to_string())?,
+    )
+}
+
+fn clear_install_marker(config: &crate::app_state::Config) -> Result<(), String> {
+    crate::app_state::save_state_value(
+        &config.root,
+        PLUGIN_INSTALL_MARKER_KEY,
+        serde_json::Value::Null,
+    )
+}
+
+fn try_mark_user_removed(config: &crate::app_state::Config, package: &str) -> Result<(), String> {
+    crate::app_state::save_state_value(
+        &config.root,
+        &format!("market_user_removed_{package}"),
+        serde_json::json!(true),
+    )
+}
+
+fn dependency_installed(config: &crate::app_state::Config, package: &str) -> bool {
+    let path = config.dsh_home().join("profiles/web/package.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| {
+            json.get("dependencies")
+                .and_then(|deps| deps.get(package))
+                .cloned()
+        })
+        .is_some()
+}
+
+/// 服务能够启动说明 profile 已完整解析；完成可能在命令提交后、事务标记
+/// 清理前被中断的附属状态，再清除旧事务记录。
+pub(crate) fn clear_resolved_install_marker(config: &crate::app_state::Config) {
+    let Some(marker) = install_marker(config) else {
+        return;
+    };
+    if matches!(marker.kind, PluginMutationKind::Remove) && marker.user_removal {
+        if let Some(package) = marker.package.as_deref() {
+            if !dependency_installed(config, package) {
+                if let Err(e) = try_mark_user_removed(config, package) {
+                    crate::logging::log(&format!(
+                        "plugins: 完成中断卸载的用户状态记录失败，保留事务标记：{e}"
+                    ));
+                    return;
+                }
+            }
+        }
+    }
+    if let Err(e) = clear_install_marker(config) {
+        crate::logging::log(&format!("plugins: 清理已完成的插件事务标记失败：{e}"));
+    }
+}
 
 #[derive(Default)]
 struct RestartState {
@@ -60,27 +206,6 @@ fn apply_status() -> PluginApplyStatus {
 
 pub fn plugin_apply_status() -> PluginApplyStatus {
     apply_status()
-}
-
-/// 首次引导仍停留在内置页时，若后台预置插件已经待应用，就让启动流程
-/// 把页面交给统一重启协调器；避免先进入 dsh 再立即断开。返回 false 时
-/// 调用方按普通 Ready 流程进入 dsh。
-pub(crate) fn prepare_deferred_restart(app: &AppHandle) -> bool {
-    if app.state::<AppState>().service_ownership() != crate::app_state::ServiceOwnership::Managed {
-        return false;
-    }
-    let pending = {
-        let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-        state.pending && state.deferred
-    };
-    if !pending {
-        return false;
-    }
-    let message = crate::locale::text("正在应用插件…", "Applying plugins…");
-    app.state::<AppState>()
-        .set_phase(crate::app_state::BootPhase::Starting, message, "");
-    crate::emit_status(app, crate::app_state::BootPhase::Starting, message, "");
-    true
 }
 
 pub(crate) fn deferred_restart_pending() -> bool {
@@ -196,6 +321,7 @@ pub struct PluginInfo {
 /// 描述从本地 node_modules/<pkg>/package.json 读取（零网络）。
 pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
     let config = app.state::<AppState>().config();
+    let builtin_consent = builtin_plugins_enabled(&config);
     let pkg = config.dsh_home().join("profiles/web/package.json");
     let Ok(text) = std::fs::read_to_string(&pkg) else {
         return vec![];
@@ -227,9 +353,13 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
                 version: version.clone(),
                 description,
                 installed: Some(version),
-                // 内置身份 = 在维护清单且用户未主动卸载过（卸载重装后
-                // 不再显示内置标签）
-                builtin: builtin_identity(is_market_pkg(name), market_user_removed(&config, name)),
+                // 只有首次引导明确授权的清单项才具有内置身份；卸载重装后
+                // 不再显示内置标签，也不参与自动维护。
+                builtin: builtin_identity(
+                    builtin_consent,
+                    is_market_pkg(name),
+                    market_user_removed(&config, name),
+                ),
             });
         }
     }
@@ -239,12 +369,21 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
     out
 }
 
-/// 推荐插件（社区精选、尚未安装的项）。与 builtin 预装完全分离：
+/// 社区插件清单（尚未安装的项）。与 builtin 预装完全分离：
 /// 仅展示供用户手动安装，不自动安装、不自动升级、卸载后回推荐区。
 pub fn recommended(app: &AppHandle) -> Vec<maintenance::RecommendedPlugin> {
     let installed: std::collections::HashSet<String> =
         list(app).into_iter().map(|p| p.name).collect();
     maintenance::recommended_not_installed(&installed)
+}
+
+/// 用户主动卸载且当前仍未安装的内置目录项。仅提供手动重装入口，既有
+/// user_removed 标记保持不变，因此重装后仍由用户自行维护。
+pub fn reinstallable_builtins(app: &AppHandle) -> Vec<maintenance::ReinstallableBuiltinPlugin> {
+    let config = app.state::<AppState>().config();
+    let installed: std::collections::HashSet<String> =
+        list(app).into_iter().map(|plugin| plugin.name).collect();
+    maintenance::reinstallable_builtin_plugins(&config, &installed)
 }
 
 /// npm registry 搜索 dsh 插件。
@@ -304,35 +443,8 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
             crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
         );
     }
-    // 事务式自愈：dsh plugin add 可能先改 package.json 再失败（如
-    // supply-chain 冷却拒绝），留下"bundles 引用了未落地的包"的半截状态。
-    // 调用前备份 manifest 原文，失败时回滚，避免下次 dsh 启动解析失败。
     let config = app.state::<AppState>().config();
-    let manifest_path = config.dsh_home().join("profiles/web/package.json");
-    let original = std::fs::read_to_string(&manifest_path).ok();
-    let result = run_dsh_plugin_auto(app, &["add", name]);
-    if let Err(e) = &result {
-        if let Some(text) = original {
-            // 回滚写盘与 pnpm/dsh 命令共用锁，避免与并发写交错。
-            let _guard = runner::MARKET_PNPM_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Err(re) = std::fs::write(&manifest_path, text) {
-                crate::logging::log(&format!(
-                    "plugins: 安装 {name} 失败且回滚 manifest 失败：{re}"
-                ));
-            } else {
-                crate::logging::log(&format!(
-                    "plugins: 安装 {name} 失败，已回滚 package.json 原文"
-                ));
-            }
-        } else {
-            crate::logging::log(&format!(
-                "plugins: 安装 {name} 前未读到 package.json，跳过回滚"
-            ));
-        }
-        return Err(e.clone());
-    }
+    run_dsh_plugin_auto(app, &["add", name])?;
     // 手动重装被强制下线的包 = 知情保留：记录标记，下次启动豁免清理
     if MARKET_REMOVED.contains(&name) {
         market_mark_user_removed(&config, name);
@@ -355,11 +467,10 @@ pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
             crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
         );
     }
-    run_dsh_plugin_auto(app, &["remove", name])?;
-    // 仅用户主动卸载（本函数）写标记；强制下线清理走引导路径不经过这里
-    let config = app.state::<AppState>().config();
+    run_dsh_plugin_auto_user_remove(app, &["remove", name])?;
+    // 用户管理状态由卸载事务在提交前写入；强制下线清理走普通 runner，
+    // 不会写用户主动卸载标记。
     if is_market_pkg(name) {
-        market_mark_user_removed(&config, name);
         crate::logging::log(&format!(
             "plugins: 已记录 {name} 被用户卸载（重装后不再视为内置）"
         ));
@@ -369,7 +480,7 @@ pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-// —— 手动检查/升级插件（插件管理页入口：覆盖全部已安装插件 + 未装内置包） ——
+// —— 手动检查/升级插件（插件管理页入口：覆盖已安装插件与待修复内置包） ——
 
 /// 单个插件的更新状态（手动“检查更新/立即更新”用）。
 #[derive(serde::Serialize)]
@@ -387,10 +498,101 @@ pub struct UpdateStatus {
     pub error: Option<String>,
 }
 
-/// 防御点 B：从 manifest 中清除某个残留插件的引用（dependencies + bundles），
-/// 覆盖"安装半截状态导致 bundle 无法解析"的场景。只删除目标包的键/条目，
-/// 其余内容原样保留（serde_json 序列化会规范化但语义不变）。
-pub(crate) fn prune_manifest_package(
+fn manifest_package_names(
+    text: &str,
+) -> Option<(
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+)> {
+    let json: serde_json::Value = serde_json::from_str(text).ok()?;
+    let dependencies = json
+        .get("dependencies")
+        .and_then(|value| value.as_object())
+        .map(|values| values.keys().cloned().collect())
+        .unwrap_or_default();
+    let bundles = json
+        .get("dsh")
+        .and_then(|value| value.get("profile"))
+        .and_then(|value| value.get("bundles"))
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((dependencies, bundles))
+}
+
+fn marker_targets_package(
+    marker: &PluginInstallMarker,
+    current_manifest: &str,
+    package: &str,
+) -> bool {
+    if let Some(recorded) = marker.package.as_deref() {
+        return recorded == package;
+    }
+    let Some(original) = marker.original_manifest.as_deref() else {
+        return false;
+    };
+    let Some((before_dependencies, before_bundles)) = manifest_package_names(original) else {
+        return false;
+    };
+    let Some((after_dependencies, after_bundles)) = manifest_package_names(current_manifest) else {
+        return false;
+    };
+    match marker.kind {
+        PluginMutationKind::Add => {
+            (!before_dependencies.contains(package) && after_dependencies.contains(package))
+                || (!before_bundles.contains(package) && after_bundles.contains(package))
+        }
+        PluginMutationKind::Remove => {
+            (before_dependencies.contains(package) && !after_dependencies.contains(package))
+                || (before_bundles.contains(package) && !after_bundles.contains(package))
+        }
+    }
+}
+
+/// 仅修复由 DSHBox 记录、且包名与启动错误完全一致的中断插件写操作。
+/// add 的半成品会回退，remove 的半成品会完成卸载，二者都以可启动的
+/// manifest 为收敛目标；没有事务记录或目标不匹配时保持用户配置不动。
+pub(crate) fn recover_interrupted_plugin_mutation(
+    config: &crate::app_state::Config,
+    name: &str,
+) -> Result<bool, String> {
+    let Some(marker) = install_marker(config) else {
+        return Ok(false);
+    };
+    let path = config.dsh_home().join("profiles/web/package.json");
+    let current_manifest = std::fs::read_to_string(&path).map_err(|e| {
+        crate::locale::owned(
+            format!("读取 package.json 失败：{e}"),
+            format!("Failed to read package.json: {e}"),
+        )
+    })?;
+    if !marker_targets_package(&marker, &current_manifest, name) {
+        crate::logging::log(&format!(
+            "plugins: 启动错误指向 {name}，但中断事务记录的是 {}，不自动修改 manifest",
+            marker.package.as_deref().unwrap_or(marker.spec.as_str())
+        ));
+        return Ok(false);
+    }
+    let _guard = runner::MARKET_PNPM_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let removed = prune_manifest_package_locked(config, name)?;
+    if matches!(marker.kind, PluginMutationKind::Remove)
+        && marker.user_removal
+        && is_market_pkg(name)
+    {
+        try_mark_user_removed(config, name)?;
+    }
+    clear_install_marker(config)?;
+    Ok(removed)
+}
+
+fn prune_manifest_package_locked(
     config: &crate::app_state::Config,
     name: &str,
 ) -> Result<bool, String> {
@@ -424,13 +626,9 @@ pub(crate) fn prune_manifest_package(
     if !removed {
         return Ok(false);
     }
-    // 写盘与 pnpm/dsh 命令共用锁，避免与并发写交错。
-    let _guard = runner::MARKET_PNPM_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::fs::write(
+    crate::app_state::atomic_write(
         &path,
-        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+        &serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
     )
     .map_err(|e| {
         crate::locale::owned(
@@ -456,14 +654,18 @@ fn installed_pkgs(config: &crate::app_state::Config) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 只读检查全部已安装插件（含未安装的内置包，保持重装入口）是否有新版
-/// （不执行安装）。
+/// 只读检查全部已安装插件，并为已授权但安装缺失的内置包保留修复入口
+/// （不执行安装）。用户主动卸载的内置包由独立目录提供手动重装入口。
 pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
     let config = app.state::<AppState>().config();
-    // 已安装插件 + 未安装的内置包（重装入口可见）
+    let builtin_consent = builtin_plugins_enabled(&config);
+    // 已安装插件 + 已授权但缺失的内置包（修复入口可见）。用户主动
+    // 卸载或从未授权的目录项不参与查询，避免无意义的网络请求与身份混淆。
     let mut pkgs = installed_pkgs(&config);
     for p in market_pkg_ids() {
-        if !pkgs.iter().any(|x| x == p) {
+        if builtin_identity(builtin_consent, true, market_user_removed(&config, p))
+            && !pkgs.iter().any(|x| x == p)
+        {
             pkgs.push((*p).to_string());
         }
     }
@@ -480,6 +682,7 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
                     latest: String::new(),
                     update_available: false,
                     builtin: builtin_identity(
+                        builtin_consent,
                         is_market_pkg(&pkg),
                         market_user_removed(&config, &pkg),
                     ),
@@ -507,7 +710,11 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
             installed,
             latest,
             update_available: needs_update && cooldown_until.is_none(),
-            builtin: builtin_identity(is_market_pkg(&pkg), market_user_removed(&config, &pkg)),
+            builtin: builtin_identity(
+                builtin_consent,
+                is_market_pkg(&pkg),
+                market_user_removed(&config, &pkg),
+            ),
             cooldown_until,
             error: None,
         });
@@ -528,7 +735,11 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
         )
         .into());
     };
-    let builtin = builtin_identity(is_market_pkg(pkg), market_user_removed(&config, pkg));
+    let builtin = builtin_identity(
+        builtin_plugins_enabled(&config),
+        is_market_pkg(pkg),
+        market_user_removed(&config, pkg),
+    );
     let (latest, published) = market_latest_info(pkg).ok_or_else(|| {
         crate::locale::text("版本查询失败。", "Failed to query the latest version.")
     })?;
@@ -635,6 +846,168 @@ mod tests {
     }
 
     #[test]
+    fn package_name_parser_handles_versions_scopes_and_rejects_urls() {
+        assert_eq!(spec_package_name("plugin@1.2.3"), Some("plugin"));
+        assert_eq!(
+            spec_package_name("@scope/plugin@2.0.0-beta.1"),
+            Some("@scope/plugin")
+        );
+        assert_eq!(spec_package_name("plugin#next"), Some("plugin"));
+        assert_eq!(spec_package_name("https://example.com/plugin.tgz"), None);
+        assert_eq!(
+            spec_package_name("git+https://example.com/plugin.git"),
+            None
+        );
+        assert_eq!(spec_package_name("./plugin"), None);
+    }
+
+    #[test]
+    fn recommended_manifest_is_localized_and_uses_real_dependency_ids() {
+        let plugins = recommended_plugins();
+        assert!(!plugins.is_empty());
+        for plugin in plugins {
+            assert_eq!(spec_package_name(&plugin.spec), Some(plugin.id.as_str()));
+            assert!(!plugin.description_zh.is_empty());
+            assert!(!plugin.description_en.is_empty());
+            assert!(plugin.homepage.starts_with("https://github.com/"));
+        }
+        assert!(parse_recommended_plugins("[{\"id\":\"missing-fields\"}]").is_err());
+    }
+
+    #[test]
+    fn interrupted_install_recovery_requires_the_recorded_package() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-recovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home().join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+        let manifest = profile.join("package.json");
+        std::fs::write(
+            &manifest,
+            r#"{
+  "dependencies": { "broken-plugin": "1.0.0", "keep-plugin": "2.0.0" },
+  "dsh": { "profile": { "bundles": ["broken-plugin", "keep-plugin"] } }
+}"#,
+        )
+        .unwrap();
+        save_install_marker(
+            &config,
+            "broken-plugin@1.0.0",
+            Some("broken-plugin"),
+            PluginMutationKind::Add,
+            false,
+            Some(
+                r#"{
+  "dependencies": { "keep-plugin": "2.0.0" },
+  "dsh": { "profile": { "bundles": ["keep-plugin"] } }
+}"#,
+            ),
+        )
+        .unwrap();
+
+        assert!(!recover_interrupted_plugin_mutation(&config, "keep-plugin").unwrap());
+        let unchanged = std::fs::read_to_string(&manifest).unwrap();
+        assert!(unchanged.contains("broken-plugin"));
+        assert!(unchanged.contains("keep-plugin"));
+
+        assert!(recover_interrupted_plugin_mutation(&config, "broken-plugin").unwrap());
+        let repaired = std::fs::read_to_string(&manifest).unwrap();
+        assert!(!repaired.contains("broken-plugin"));
+        assert!(repaired.contains("keep-plugin"));
+        assert!(install_marker(&config).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_user_removal_finishes_without_restoring_builtin_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-remove-recovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home().join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+        let manifest = profile.join("package.json");
+        let original = r#"{
+  "dependencies": { "dshmarket": "1.0.0", "keep-plugin": "2.0.0" },
+  "dsh": { "profile": { "bundles": ["dshmarket", "keep-plugin"] } }
+}"#;
+        std::fs::write(
+            &manifest,
+            r#"{
+  "dependencies": { "keep-plugin": "2.0.0" },
+  "dsh": { "profile": { "bundles": ["dshmarket", "keep-plugin"] } }
+}"#,
+        )
+        .unwrap();
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Remove,
+            true,
+            Some(original),
+        )
+        .unwrap();
+
+        assert!(recover_interrupted_plugin_mutation(&config, "dshmarket").unwrap());
+        let repaired = std::fs::read_to_string(&manifest).unwrap();
+        assert!(!repaired.contains("dshmarket"));
+        assert!(repaired.contains("keep-plugin"));
+        assert!(market_user_removed(&config, "dshmarket"));
+        assert!(install_marker(&config).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unfinished_plugin_marker_cannot_be_overwritten() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.clone();
+        save_install_marker(
+            &config,
+            "first-plugin",
+            Some("first-plugin"),
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(save_install_marker(
+            &config,
+            "second-plugin",
+            Some("second-plugin"),
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .is_err());
+        assert_eq!(install_marker(&config).unwrap().spec, "first-plugin");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn detect_virtual_store_error() {
         // 真实报错（DSH_HOME 迁移后 pnpm 拒绝写操作）
         assert!(is_virtual_store_error(
@@ -731,14 +1104,14 @@ mod tests {
     }
 
     #[test]
-    fn builtin_identity_requires_no_user_removal() {
-        // 内置身份 = 在维护清单 && 用户未主动卸载过
-        assert!(builtin_identity(true, false));
+    fn builtin_identity_requires_consent_and_no_user_removal() {
+        assert!(builtin_identity(true, true, false));
+        // 未授权时，手动安装同名包也由用户自行维护
+        assert!(!builtin_identity(false, true, false));
         // 用户卸载过（重装与否）→ 非内置
-        assert!(!builtin_identity(true, true));
+        assert!(!builtin_identity(true, true, true));
         // 不在维护清单 → 非内置
-        assert!(!builtin_identity(false, false));
-        assert!(!builtin_identity(false, true));
+        assert!(!builtin_identity(true, false, false));
     }
 
     #[test]
@@ -747,6 +1120,49 @@ mod tests {
         assert!(ids.contains(&"dshmarket"));
         assert!(ids.contains(&"dsh-file-drop"));
         assert!(!ids.is_empty());
+    }
+
+    #[test]
+    fn removed_builtin_is_reinstallable_only_while_missing() {
+        use std::collections::HashSet;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-reinstallable-builtin-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.clone();
+        let mut installed = HashSet::new();
+
+        assert!(reinstallable_builtin_plugins(&config, &installed).is_empty());
+        market_mark_user_removed(&config, "dshmarket");
+
+        let available = reinstallable_builtin_plugins(&config, &installed);
+        let market = available
+            .iter()
+            .find(|plugin| plugin.id == "dshmarket")
+            .expect("removed built-in should remain available for manual reinstall");
+        assert_eq!(market.spec, "dshmarket");
+        assert!(!market.description_zh.is_empty());
+        assert!(!market.description_en.is_empty());
+        assert!(market.homepage.starts_with("https://github.com/"));
+        // 卸载标记仍在，因此手动装回后不会重新获得内置身份。
+        assert!(!builtin_identity(
+            true,
+            true,
+            market_user_removed(&config, "dshmarket")
+        ));
+
+        installed.insert("dshmarket".to_string());
+        assert!(reinstallable_builtin_plugins(&config, &installed)
+            .iter()
+            .all(|plugin| plugin.id != "dshmarket"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -844,15 +1260,17 @@ mod tests {
 
     #[test]
     fn retired_cleanup_condition() {
-        // 强制下线清理 = 在下线清单 && 已装 && 仍为内置身份
-        assert!(should_retire(true, true, false));
+        // 强制下线清理 = 曾授权 && 在下线清单 && 已装 && 仍为内置身份
+        assert!(should_retire(true, true, true, false));
+        // 从未授权时，手动安装的同名包归用户所有
+        assert!(!should_retire(false, true, true, false));
         // 用户卸载过又重装 → 豁免（尊重用户选择）
-        assert!(!should_retire(true, true, true));
+        assert!(!should_retire(true, true, true, true));
         // 未装（含卸载未重装）→ 无操作
-        assert!(!should_retire(true, false, false));
-        assert!(!should_retire(true, false, true));
+        assert!(!should_retire(true, true, false, false));
+        assert!(!should_retire(true, true, false, true));
         // 不在下线清单 → 不动
-        assert!(!should_retire(false, true, false));
+        assert!(!should_retire(true, false, true, false));
     }
 
     #[test]

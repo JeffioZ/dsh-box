@@ -172,6 +172,18 @@ try {
 } catch (error) {
   fail(`控制中心分拆脚本存在跨文件声明/语法冲突: ${error.message}`);
 }
+const pluginUi = read('ui/control-center-plugins.js');
+const pluginCommands = read('src-tauri/src/commands/mod.rs');
+for (const contract of [
+  "invoke('plugin_reinstallable_builtins')",
+  "catalogPluginRow(plugin, 'pluginReinstall')",
+  'refreshReinstallableBuiltins()',
+]) {
+  if (!pluginUi.includes(contract)) fail(`插件页缺少卸载后手动重装契约: ${contract}`);
+}
+if (!pluginCommands.includes('plugins::plugin_reinstallable_builtins')) {
+  fail('Rust IPC 未注册卸载内置插件的手动重装目录');
+}
 
 const sharedMenu = read('ui/menu.js');
 try {
@@ -298,12 +310,7 @@ for (const contract of [
   "document.querySelectorAll('[data-install-cancel]')",
   "document.querySelectorAll('[data-install-reinstall]')",
 ]) {
-  if (!startupJs.includes(contract)) fail(`ui/startup.js: 首次配置下载源流程缺少契约 ${contract}`);
-}
-for (const stale of ['ob-runtime-toggle', 'onboardingSourceExpanded']) {
-  if (startupHtml.includes(stale) || startupJs.includes(stale)) {
-    fail(`首次配置下载源不应恢复会撑高布局的展开控件：${stale}`);
-  }
+  if (!startupJs.includes(contract)) fail(`ui/startup.js: 首次安装取消/重试流程缺少契约 ${contract}`);
 }
 if (!startupJs.includes("generation: installGeneration")
     || !read('src-tauri/src/app_state/mod.rs').includes('pub install_generation: u64')) {
@@ -415,15 +422,50 @@ if (read('dev-run.ps1').includes('<title>DeepSeek Harness Box</title>')) {
   fail('dev-run.ps1: 开发服务器健康检查仍引用旧产品标题');
 }
 
+function packageNameFromSpec(spec) {
+  const plain = String(spec || '').split('#')[0].trim();
+  if (!plain || plain.includes('://') || plain.startsWith('git+') || plain.startsWith('.')) return '';
+  if (plain.startsWith('@')) {
+    const slash = plain.indexOf('/');
+    if (slash < 2) return '';
+    const versionAt = plain.lastIndexOf('@');
+    return versionAt > slash ? plain.slice(0, versionAt) : plain;
+  }
+  const versionAt = plain.lastIndexOf('@');
+  return versionAt > 0 ? plain.slice(0, versionAt) : plain;
+}
+
 const presets = JSON.parse(read('src-tauri/resources/builtin-plugins.json'));
 const presetIds = new Set();
 for (const preset of presets) {
-  if (!preset.id || !preset.spec || !preset.name || !preset.description || !preset.repoUrl) {
+  if (!preset.id || !preset.spec || !preset.name || !preset.description_zh || !preset.description_en || !preset.homepage) {
     fail(`builtin-plugins.json: 条目字段不完整: ${JSON.stringify(preset)}`);
   }
   if (presetIds.has(preset.id)) fail(`builtin-plugins.json: 重复 id=${preset.id}`);
   presetIds.add(preset.id);
-  if (!/^https:\/\/github\.com\//.test(preset.repoUrl || '')) fail(`builtin-plugins.json: 非 GitHub HTTPS 地址: ${preset.repoUrl}`);
+  if (packageNameFromSpec(preset.spec) !== preset.id) {
+    fail(`builtin-plugins.json: id 与安装 spec 的包名不一致: ${preset.id} / ${preset.spec}`);
+  }
+  if (!/^https:\/\/github\.com\//.test(preset.homepage || '')) fail(`builtin-plugins.json: 非 GitHub HTTPS 地址: ${preset.homepage}`);
+}
+
+const recommended = JSON.parse(read('src-tauri/resources/recommended-plugins.json'));
+const recommendedIds = new Set();
+for (const plugin of recommended) {
+  if (!plugin.id || !plugin.spec || !plugin.name || !plugin.description_zh || !plugin.description_en || !plugin.homepage) {
+    fail(`recommended-plugins.json: 条目字段不完整: ${JSON.stringify(plugin)}`);
+  }
+  if (recommendedIds.has(plugin.id)) fail(`recommended-plugins.json: 重复 id=${plugin.id}`);
+  recommendedIds.add(plugin.id);
+  if (presetIds.has(plugin.id)) {
+    fail(`插件不能同时出现在内置与社区清单: ${plugin.id}`);
+  }
+  if (packageNameFromSpec(plugin.spec) !== plugin.id) {
+    fail(`recommended-plugins.json: id 与安装 spec 的包名不一致: ${plugin.id} / ${plugin.spec}`);
+  }
+  if (!/^https:\/\/github\.com\//.test(plugin.homepage)) {
+    fail(`recommended-plugins.json: 非 GitHub HTTPS 地址: ${plugin.homepage}`);
+  }
 }
 
 for (const file of tracked.filter((file) => file.endsWith('.ps1'))) {

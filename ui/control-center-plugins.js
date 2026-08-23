@@ -5,6 +5,7 @@ let pluginsBusy = false;
 let pluginSearchSeq = 0;
 let pluginApplyStamp = '';
 let pluginRecommendedSeq = 0;
+let pluginReinstallSeq = 0;
 // 当前选中的分类（'' 为「全部」）。分类与搜索框关键词叠加为查询条件，
 // 切换分类不清空已输入的关键词。
 let activeCat = '';
@@ -59,9 +60,13 @@ function renderPlugins() {
     '<div class="psection" id="p-installed-sec"><h3>' + esc(dshdT('pluginInstalledTitle')) + ' <span class="pcount" id="p-installed-count"></span>' +
     ' <button type="button" class="dshd-btn small" id="p-builtin-check">' + esc(dshdT('pluginCheckUpdates')) + '</button></h3>' +
     '<ul class="plist" id="p-installed"></ul></div>' +
-    '<div class="psection" id="p-recommended-sec"><h3>' + esc(dshdT('pluginRecommendedTitle')) + '</h3>' +
-    '<p class="p-recommended-hint">' + esc(dshdT('pluginRecommendedHint')) + '</p>' +
-    '<ul class="plist" id="p-recommended"></ul></div>';
+    '<div class="psection hidden" id="p-reinstall-sec"><h3>' + esc(dshdT('pluginReinstallTitle')) + '</h3>' +
+    '<p class="p-section-hint">' + esc(dshdT('pluginReinstallHint')) + '</p>' +
+    '<ul class="plist" id="p-reinstall"></ul></div>' +
+    '<div class="psection" id="p-recommended-sec" aria-busy="true"><h3>' + esc(dshdT('pluginRecommendedTitle')) + '</h3>' +
+    '<p class="p-section-hint">' + esc(dshdT('pluginRecommendedHint')) + '</p>' +
+    '<ul class="plist recommended-loading" id="p-recommended"><li class="pempty" role="status">' +
+    '<span class="spin" aria-hidden="true"></span>' + esc(dshdT('pluginRecommendedLoading')) + '</li></ul></div>';
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
   $('p-search').addEventListener('click', () => doPluginSearch(buildQuery($('p-query').value, activeCat)));
@@ -95,6 +100,7 @@ function renderPlugins() {
     });
   });
   refreshPlugins();
+  refreshReinstallableBuiltins();
   refreshRecommended();
   refreshPluginApplyStatus();
   // 进入页面自动检查：静默（行内状态已表达结果，不刷“检查完成”提示）
@@ -231,64 +237,130 @@ async function refreshPlugins() {
   } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
 }
 
-// —— 推荐插件（社区精选，仅手动安装；安装后移入已装、卸载后回归）——
+function catalogPluginRow(p, actionKey) {
+  const actions = document.createElement('div');
+  actions.className = 'pactions';
+  const homepageBtn = document.createElement('button');
+  homepageBtn.type = 'button';
+  homepageBtn.className = 'dshd-btn small plugin-home';
+  homepageBtn.title = dshdT('pluginHomepage');
+  homepageBtn.setAttribute('aria-label', dshdT('pluginHomepage') + ': ' + p.name);
+  homepageBtn.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M15 3h6v6"></path><path d="m10 14 11-11"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg><span>' + esc(dshdT('pluginHomepage')) + '</span>';
+  const installBtn = document.createElement('button');
+  installBtn.type = 'button';
+  installBtn.className = 'dshd-btn small plugin-action';
+  installBtn.textContent = dshdT(actionKey);
+  installBtn.disabled = pluginsBusy;
+  actions.append(homepageBtn, installBtn);
+  const description = dshdLocale() === 'zh-CN' ? p.description_zh : p.description_en;
+  const li = pluginItemRow(p, actions, null, description || '');
+  const rowStatus = document.createElement('div');
+  rowStatus.className = 'pitem-status';
+  rowStatus.setAttribute('role', 'status');
+  rowStatus.setAttribute('aria-live', 'polite');
+  li.querySelector('.info').append(rowStatus);
+  homepageBtn.addEventListener('click', () => {
+    rowStatus.textContent = '';
+    rowStatus.className = 'pitem-status';
+    invoke('open_external_url', { url: p.homepage }).catch(() => {
+      rowStatus.textContent = dshdT('pluginHomepageFailed');
+      rowStatus.className = 'pitem-status err';
+    });
+  });
+  installBtn.addEventListener('click', async () => {
+    if (pluginsBusy) return;
+    setPluginsBusy(true);
+    const installing = dshdT('pluginInstalling', { name: p.name });
+    li.setAttribute('aria-busy', 'true');
+    rowStatus.textContent = installing;
+    rowStatus.className = 'pitem-status';
+    installBtn.innerHTML = '<span class="spin" aria-hidden="true"></span>' + esc(dshdT('processing'));
+    try {
+      await invoke('plugin_install', { name: p.spec });
+      updateStatus.delete(p.id);
+      pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
+      await refreshPlugins();
+      await refreshReinstallableBuiltins();
+      await refreshRecommended();
+      await refreshPluginApplyStatus();
+    } catch (e) {
+      const message = dshdT('pluginFailed', { message: e });
+      rowStatus.textContent = message;
+      rowStatus.className = 'pitem-status err';
+    } finally {
+      li.removeAttribute('aria-busy');
+      installBtn.textContent = dshdT(actionKey);
+      setPluginsBusy(false);
+    }
+  });
+  return li;
+}
+
+// —— 社区插件（仅手动安装；安装后移入已装、卸载后回归）——
 async function refreshRecommended() {
   const ul = $('p-recommended');
   if (!ul) return;
+  const section = $('p-recommended-sec');
   const seq = ++pluginRecommendedSeq;
+  section.setAttribute('aria-busy', 'true');
   try {
     const list = await invoke('plugin_recommended');
     if (openKind !== 'plugins' || seq !== pluginRecommendedSeq || !$('p-recommended')) return;
+    section.setAttribute('aria-busy', 'false');
+    ul.classList.remove('recommended-loading');
     ul.textContent = '';
     if (!list || !list.length) {
       // 全部推荐都装上了：整块收起，不占空间
-      $('p-recommended-sec').classList.add('hidden');
+      section.classList.add('hidden');
       return;
     }
-    $('p-recommended-sec').classList.remove('hidden');
+    section.classList.remove('hidden');
     for (const p of list) {
-      const li = document.createElement('li');
-      li.className = 'pitem';
-      const info = document.createElement('div');
-      info.className = 'info';
-      const name = document.createElement('div');
-      name.className = 'name';
-      name.textContent = p.name;
-      const desc = document.createElement('div');
-      desc.className = 'desc';
-      desc.textContent = p.description || '';
-      info.append(name, desc);
-      const installBtn = document.createElement('button');
-      installBtn.type = 'button';
-      installBtn.className = 'dshd-btn small plugin-action';
-      installBtn.textContent = dshdT('pluginInstall');
-      installBtn.disabled = pluginsBusy;
-      installBtn.addEventListener('click', async () => {
-        if (pluginsBusy) return;
-        setPluginsBusy(true);
-        pluginStatus(dshdT('pluginInstalling', { name: p.name }));
-        try {
-          await invoke('plugin_install', { name: p.spec });
-          pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
-          await refreshPlugins();
-          await refreshRecommended();
-          await refreshPluginApplyStatus();
-        } catch (e) {
-          pluginStatus(dshdT('pluginFailed', { message: e }), 'err');
-        } finally {
-          setPluginsBusy(false);
-        }
-      });
-      li.append(info, installBtn);
-      ul.append(li);
+      ul.append(catalogPluginRow(p, 'pluginInstall'));
     }
+    applyTruncationTips(ul);
   } catch (e) {
-    $('p-recommended-sec').classList.remove('hidden');
+    section.setAttribute('aria-busy', 'false');
+    section.classList.remove('hidden');
+    ul.classList.remove('recommended-loading');
     const el = document.createElement('li');
     el.className = 'pempty';
+    el.setAttribute('role', 'alert');
     el.textContent = dshdT('pluginFailed', { message: e });
     ul.textContent = '';
     ul.append(el);
+  }
+}
+
+// —— 用户卸载过的内置插件：保留手动重装入口，但不恢复自动维护身份 ——
+async function refreshReinstallableBuiltins() {
+  const section = $('p-reinstall-sec');
+  const ul = $('p-reinstall');
+  if (!section || !ul) return;
+  const seq = ++pluginReinstallSeq;
+  section.setAttribute('aria-busy', 'true');
+  try {
+    const list = await invoke('plugin_reinstallable_builtins');
+    if (openKind !== 'plugins' || seq !== pluginReinstallSeq || !$('p-reinstall')) return;
+    section.setAttribute('aria-busy', 'false');
+    ul.textContent = '';
+    if (!list || !list.length) {
+      section.classList.add('hidden');
+      return;
+    }
+    section.classList.remove('hidden');
+    for (const plugin of list) ul.append(catalogPluginRow(plugin, 'pluginReinstall'));
+    applyTruncationTips(ul);
+  } catch (e) {
+    if (openKind !== 'plugins' || seq !== pluginReinstallSeq) return;
+    section.setAttribute('aria-busy', 'false');
+    section.classList.remove('hidden');
+    const error = document.createElement('li');
+    error.className = 'pempty';
+    error.setAttribute('role', 'alert');
+    error.textContent = dshdT('pluginFailed', { message: e });
+    ul.textContent = '';
+    ul.append(error);
   }
 }
 async function doPluginSearch(query) {
@@ -369,14 +441,6 @@ function renderInstalled(list) {
   const countEl = $('p-installed-count');
   if (countEl) countEl.textContent = list.length ? '(' + list.length + ')' : '';
   ul.textContent = '';
-  if (!list.length) {
-    const e = document.createElement('li');
-    e.className = 'pempty';
-    e.textContent = dshdT('pluginNone');
-    ul.append(e);
-    applyTruncationTips($('body'));
-    return;
-  }
   for (const p of list) {
     const actions = document.createElement('div');
     actions.className = 'pactions';
@@ -410,14 +474,23 @@ function renderInstalled(list) {
       pluginStatus(dshdT('pluginRemoving', { name: p.name }));
       try {
         await invoke('plugin_remove', { name: p.name });
+        updateStatus.delete(p.name);
         pluginStatus(dshdT('pluginRemoved', { name: p.name }), 'ok');
       } catch (e) { pluginStatus(dshdT('pluginFailed', { message: e }), 'err'); }
-      finally { setPluginsBusy(false); await refreshPlugins(); await refreshRecommended(); await refreshPluginApplyStatus(); }
+      finally {
+        await refreshPlugins();
+        await refreshReinstallableBuiltins();
+        await refreshRecommended();
+        await refreshPluginApplyStatus();
+        setPluginsBusy(false);
+      }
     });
     actions.append(btn);
     ul.append(pluginItemRow(p, actions, verText, descText));
   }
-  // 已卸载的内置包：保持可见（未安装 + 安装按钮），避免失去重装入口
+  // 已授权但安装缺失的内置包：保持可见，供用户立即修复。主动卸载的
+  // 项目由下方独立目录展示，避免把手动重装误解为恢复自动维护。
+  let repairCount = 0;
   for (const [name, st] of updateStatus) {
     if (!st || !st.builtin) continue;
     if (list.some((p) => p.name === name)) continue;
@@ -444,12 +517,19 @@ function renderInstalled(list) {
       }
     });
     actions.append(btn);
+    repairCount += 1;
     ul.append(pluginItemRow(
       { name, version: (st && st.latest) || '', description: '', builtin: true },
       actions,
       null,
       (st && st.error) || dshdT('pluginNotInstalled')
     ));
+  }
+  if (!list.length && repairCount === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'pempty';
+    empty.textContent = dshdT('pluginNone');
+    ul.append(empty);
   }
   applyTruncationTips($('body'));
 }
@@ -500,11 +580,14 @@ function renderResults(list) {
         finally {
           setPluginsBusy(false);
           if (installed) {
+            updateStatus.delete(p.name);
             btn.classList.remove('plugin-action');
             btn.textContent = dshdT('pluginInstalledTag');
             btn.disabled = true;
           }
           await refreshPlugins();
+          await refreshReinstallableBuiltins();
+          await refreshRecommended();
           await refreshPluginApplyStatus();
         }
       });

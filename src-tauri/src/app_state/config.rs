@@ -44,7 +44,7 @@ pub struct Config {
     pub close_behavior: String,
     /// 普通启动后的呈现方式：window（显示窗口）或 tray（仅驻留托盘）。
     pub launch_behavior: String,
-    /// 首次安装下载源：auto（官方失败切镜像）/ official / mirror。
+    /// 托管运行时下载策略：auto（官方失败切镜像）/ official / mirror。
     pub download_source: String,
 }
 

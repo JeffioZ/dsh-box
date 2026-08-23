@@ -35,6 +35,20 @@ pub fn onboarding_shown(_app: AppHandle, webview: tauri::Webview) -> Result<(), 
     Ok(())
 }
 
+/// Rust 主动探活后的显式 ACK。generation 防止旧页面或迟到 IPC 回包替新一轮
+/// 探测作答；visible=true 同时完成正常的“面板已显示”回报。
+#[tauri::command]
+pub fn onboarding_probe_result(
+    _app: AppHandle,
+    webview: tauri::Webview,
+    generation: u64,
+    visible: bool,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    let _ = crate::app_state::complete_onboarding_probe(generation, visible);
+    Ok(())
+}
+
 /// 首次配置界面的主题实时预览：只切换窗口主题（不写 settings，
 /// 不持久化）——保存时由 onboarding::save 正式应用。
 #[tauri::command]

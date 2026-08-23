@@ -345,7 +345,7 @@ function syncOnboardingCompletionAction() {
   if (button) button.disabled = onboardingSaving || !ready;
 }
 
-// dsh 风格下拉（语言/主题/下载源）：trigger + 浮层列表，选中态 ghost-active-fill
+// dsh 风格下拉（语言/主题）：trigger + 浮层列表，选中态 ghost-active-fill
 function setupSelect(selId, onChange) {
   const root = $(selId);
   if (!root) return null;
@@ -501,14 +501,11 @@ async function initOnboarding() {
   } catch (e) { /* 后端未就绪时忽略 */ }
 }
 
-// Rust 侧 60 秒兜底窗口内主动探活：返回 true 表示首次设置面板当前可见
-// （或已通过正常路径回报过），并再次 invoke onboarding_shown 让 boot 无限等待；
-// false 表示面板确实未显示，允许 Rust 放行兜底。
-window.__dshdOnboardingVisible = () => {
+// Rust 侧 60 秒兜底窗口内主动探活；通过带代次的结果回报确认本次面板
+// 是否仍可见，避免固定等待后误判页面已经显示。
+window.__dshdOnboardingVisible = (generation) => {
   const visible = onboardingActive();
-  if (visible) {
-    window.__TAURI__.core.invoke('onboarding_shown').catch(() => {});
-  }
+  window.__TAURI__.core.invoke('onboarding_probe_result', { generation, visible }).catch(() => {});
   return visible;
 };
 

@@ -130,7 +130,6 @@ pub fn emit_status_progress(
         node_version: snapshot.node_version,
         npm_version: snapshot.npm_version,
         port: snapshot.port,
-        download_source: snapshot.download_source,
         install_generation: snapshot.install_generation,
         can_cancel: snapshot.can_cancel,
         service_mode: snapshot.service_mode,

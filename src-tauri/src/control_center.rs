@@ -13,6 +13,7 @@ use crate::app_state::AppState;
 
 static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CHECK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static APP_DIALOG_SHOW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 弹窗窗口 label。
 pub const APP_DIALOG_WINDOW: &str = "app-dialog";
@@ -79,7 +80,7 @@ fn dialog_size(app: &AppHandle, kind: &str) -> (f64, f64) {
         // 宽度：仅容纳最长英文文案一行（约 342px @12.5px）+ 左右 padding 40px；
         // 极长版本号由 overflow-wrap 折行兜底，不为罕见冗余预留大宽度。
         const PROMPT_CARD_WIDTH: f64 = 400.0;
-        const PROMPT_CARD_HEIGHT: f64 = 150.0;
+        const PROMPT_CARD_HEIGHT: f64 = 176.0;
         return (
             PROMPT_CARD_WIDTH + SHADOW_SIDES * 2.0,
             PROMPT_CARD_HEIGHT + SHADOW_TOP + SHADOW_BOTTOM,
@@ -189,6 +190,21 @@ pub fn precreate(app: &AppHandle) {
 
 /// 定位并显示（调用方已在主线程）。
 fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
+    show_with_update_token(app, title, kind, initial, None);
+}
+
+fn show_with_update_token(
+    app: &AppHandle,
+    title: &str,
+    kind: &str,
+    initial: serde_json::Value,
+    update_prompt_token: Option<u64>,
+) {
+    // 尺寸、状态提交与隐藏窗口内容注入必须保持同一顺序；否则一个刚被
+    // 普通页面抢占的更新提示仍可能晚到并覆盖新页面。
+    let _show_guard = APP_DIALOG_SHOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let win = match app.get_webview_window(APP_DIALOG_WINDOW) {
         Some(w) => w,
         None => {
@@ -310,7 +326,17 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
         initial,
     };
     // 存入状态供页面拉取（隐藏窗口收不到 emit，Rust eval 直呼页面刷新兜底）
-    app.state::<AppState>().set_last_dialog(payload.clone());
+    let state = app.state::<AppState>();
+    let committed = if let Some(token) = update_prompt_token {
+        state.commit_update_prompt_show(token, payload.clone())
+    } else {
+        state.set_last_dialog(payload.clone());
+        true
+    };
+    if !committed {
+        crate::logging::log("app-dialog: 更新提示展示权已失效，取消旧展示");
+        return;
+    }
     // 先把本次内容同步渲染进隐藏窗口，再显示：show 的第一帧就是正确内容，
     // 不会先把上一弹窗的残影亮出一帧。载荷内联进 eval（无 IPC 往返），
     // 事件通道对隐藏窗口不可靠，下方 emit 仅作兜底（页面按载荷印章去重）
@@ -362,16 +388,11 @@ fn show(app: &AppHandle, title: &str, kind: &str, initial: serde_json::Value) {
 /// 淡出+清空后的中性表面会成为下次 show 的第一帧，
 /// 否则下次打开会先闪出上一弹窗的残影。
 pub fn close(app: &AppHandle) {
+    let closed_kind = app.state::<AppState>().dialog_kind().unwrap_or_default();
     // 代次 +1：令挂起的延迟隐藏失效（关闭后立刻重开不会被误藏）
     let gen = app.state::<AppState>().bump_dialog_gen();
     // 关闭弹窗视为取消待确认的 UAC 预告
     app.state::<AppState>().set_pwsh_pending(false);
-    if app.state::<AppState>().main_disabled() {
-        app.state::<AppState>().set_main_disabled(false);
-        if let Some(main) = crate::main_window(app) {
-            let _ = main.set_enabled(true);
-        }
-    }
     if let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) {
         let _ = w.eval("window.__dshdReset && window.__dshdReset()");
         let handle = app.clone();
@@ -384,17 +405,33 @@ pub fn close(app: &AppHandle) {
                     if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
                         let _ = w.hide();
                     }
-                    // 仅当关闭的是 update-prompt 时才出队下一个待展示提示；
-                    // 关其它弹窗（余额/关于等）不清提示信号、不乱弹提示。
-                    if h2.state::<AppState>().update_prompt_showing() {
-                        let pending = h2.state::<AppState>().clear_show_and_dequeue();
-                        if let Some(next) = pending {
-                            present_update_prompt(&h2, next);
-                        }
+                    let pending = h2.state::<AppState>().finish_dialog_close(&closed_kind);
+                    if let Some((next, token)) = pending {
+                        present_update_prompt(&h2, next, token);
+                    } else {
+                        restore_main_after_dialog(&h2);
                     }
                 }
             });
         });
+    } else {
+        let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
+        if let Some((next, token)) = pending {
+            present_update_prompt(app, next, token);
+        } else {
+            restore_main_after_dialog(app);
+        }
+    }
+}
+
+fn restore_main_after_dialog(app: &AppHandle) {
+    if !app.state::<AppState>().main_disabled() {
+        return;
+    }
+    app.state::<AppState>().set_main_disabled(false);
+    if let Some(main) = crate::main_window(app) {
+        let _ = main.set_enabled(true);
+        let _ = main.set_focus();
     }
 }
 
@@ -446,8 +483,7 @@ pub fn open_update_progress(app: &AppHandle) {
 /// 检查更新弹窗当前是否可见（更新失败时决定是否弹 win32 兜底提示，
 /// 避免弹窗内已显示失败原因时重复打扰）。
 pub fn is_check_open(app: &AppHandle) -> bool {
-    app.get_webview_window(APP_DIALOG_WINDOW)
-        .is_some_and(|w| w.is_visible().unwrap_or(false))
+    app.state::<AppState>().dialog_kind().as_deref() == Some("check")
 }
 
 /// 更新提示载荷：dsh 与应用自身两个场景共用同一自绘弹窗。
@@ -471,16 +507,16 @@ pub struct UpdatePrompt {
 pub fn open_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
     // 原子申请展示权（单次加锁内判断+置位/入队），规避并发 TOCTOU 与
     // show() 16ms 延迟显示造成的时序盲区。
-    if app
+    if let Some(token) = app
         .state::<AppState>()
         .acquire_update_prompt_show(prompt.clone())
     {
-        present_update_prompt(app, prompt);
+        present_update_prompt(app, prompt, token);
     }
 }
 
 /// 实际展示单个更新提示。
-fn present_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
+fn present_update_prompt(app: &AppHandle, prompt: UpdatePrompt, token: u64) {
     let title = if prompt.kind == "app" {
         crate::locale::text("应用更新已就绪", "App update ready")
     } else {
@@ -488,7 +524,7 @@ fn present_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
     };
     let initial =
         serde_json::to_value(prompt.clone()).unwrap_or(serde_json::json!({ "kind": prompt.kind }));
-    show(app, title, "update-prompt", initial);
+    show_with_update_token(app, title, "update-prompt", initial, Some(token));
 }
 
 /// 打开检查更新弹窗：立即出窗显示进度，检查在后台执行、结果写入状态，
@@ -563,14 +599,23 @@ pub fn run_check(app: &AppHandle) {
 pub fn apply_update(app: &AppHandle, which: &str) {
     let handle = app.clone();
     let which = which.to_string();
-    // 用户已在更新提示上做出决策：清除“正在显示”信号与待展示队列，
-    // 避免后续 new 提示被误判为“正在显示”而滞留。
-    handle.state::<AppState>().discard_update_prompt_queue();
+    // 只消费用户正在确认的这一条提示；dsh 与应用更新各自排队，互不丢弃。
+    let state = handle.state::<AppState>();
+    if state.dialog_kind().as_deref() == Some("update-prompt")
+        && !state.consume_active_update_prompt(&which)
+    {
+        crate::logging::log(&format!("app-dialog: 忽略已过期或重复的更新确认：{which}"));
+        return;
+    }
     if which == "dsh" {
         // dsh 更新统一走进度载体（内部会 open_update_progress + 结果处理），
         // 与更新提示弹窗的“立即更新”共用同一入口，体验一致。
         crate::updater::apply_dsh_update(&handle);
         return;
+    }
+    if which == "app" {
+        // 应用更新也是异步操作；切入统一进度页后由轮询呈现真实失败和重试信息。
+        open_update_progress(&handle);
     }
     std::thread::spawn(move || {
         let success_message = match which.as_str() {
