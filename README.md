@@ -34,7 +34,7 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 | 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、深浅色和中英双语 |
 | 安全更新 | dsh/Node 事务化更新和中断恢复；Windows 应用附件按精确 tag 与 SHA-256 校验 |
 | 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
-| 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次推荐插件可明确取消 |
+| 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次内置插件可明确取消 |
 | 模型配置 | 类型化校验并导入/导出 `llm-pi-ai` 自定义路由，凭据与设置分开保存 |
 | 便携模式 | Windows exe 同级放置 `portable.txt`，运行时与配置改存相邻 `data/` |
 
@@ -61,7 +61,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 1. API Key 写入 dsh 的 `$DSH_HOME/.credentials.yaml`，不会再复制到 DSHBox 的 `config.json`。
 2. 语言与主题写入 dsh 的 `settings.yaml`，与官方 CLI/Web 界面共享。
 3. 开机自启动使用各平台系统机制。
-4. “安装推荐插件”默认勾选，但可取消；未勾选时不会自动安装。
+4. “安装内置插件”默认勾选，但可取消；未勾选时不会自动安装。
 
 之后可在“设置 → 服务管理 → DeepSeek API Key”中替换或清除密钥；若环境变量已提供密钥，该区域只读并显示由外部管理。
 
@@ -129,9 +129,11 @@ API Key 解析顺序为：`DSH_BOX_API_KEY` → `DEEPSEEK_API_KEY` → `$DSH_HOM
 - [DSH Market](https://github.com/dsh-market/dsh-market)（`dshmarket`）
 - [DSH File Drop](https://github.com/dannyvan/dsh-file-drop)（`dsh-file-drop`）
 
-同意后，未安装的推荐插件会在 dsh 就绪后安装；仍保持内置身份的已安装插件每 24 小时检查一次更新。用户主动卸载后不会自动重装。安装、更新和卸载都走 `dsh plugin` CLI；多个手动变更会合并为一次重启，自动维护只在会话空闲后应用。
+同意后，未安装的内置插件会在 dsh 就绪后安装；仍保持内置身份的已安装插件每 24 小时检查一次更新。用户主动卸载后不会自动重装，插件页会保留手动重装入口；装回后按普通用户插件管理，不再恢复内置标签或自动更新。安装、更新和卸载都走 `dsh plugin` CLI；多个手动变更会合并为一次重启，自动维护只在会话空闲后应用。
 
-插件是与 dsh 同环境执行的第三方代码。推荐、内置或市场收录都不构成安全背书；安装前应核实来源。清单维护规则见 [resources/README.md](src-tauri/resources/README.md)。
+插件管理页另有“社区插件”列表，仅提供来源和手动安装入口，不会自动安装或更新；卸载后会重新出现在该列表中。
+
+插件是与 dsh 同环境执行的第三方代码。社区清单、内置或市场收录都不构成安全背书；安装前应核实来源。清单维护规则见 [resources/README.md](src-tauri/resources/README.md)。
 
 ## 开发
 

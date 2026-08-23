@@ -32,7 +32,7 @@ The executable is written to `dist\DSHBox.exe`. See the [development guide](docs
 - Provides custom title/status bars, tray, notifications, window-state persistence, light/dark themes, and Chinese/English UI.
 - Uses transactional dsh/Node updates; Windows app updates require an exact release tag and SHA-256 digest.
 - Keeps the full local-file context menu: default open, editor open, reveal, copy path, and copy UTF-8 contents.
-- Manages plugins only through the official `dsh plugin` CLI. Recommended first-run plugins are disclosed and optional.
+- Manages plugins only through the official `dsh plugin` CLI. Built-in first-run plugins are disclosed and optional.
 - Validates `llm-pi-ai` imports with a typed YAML parser and stores credentials separately from settings.
 
 ## Platforms
@@ -47,7 +47,7 @@ Once the first public version is available, download the appropriate artifact fr
 
 ## First run and data
 
-The first-run page is optional. API keys are written to dsh's `$DSH_HOME/.credentials.yaml`, while language and theme preferences are merged into `$DSH_HOME/settings.yaml`. The recommended-plugin switch is enabled by default but can be turned off; skipping setup does not consent to automatic plugin installation.
+The first-run page is optional. API keys are written to dsh's `$DSH_HOME/.credentials.yaml`, while language and theme preferences are merged into `$DSH_HOME/settings.yaml`. The built-in-plugin switch is enabled by default but can be turned off; skipping setup does not consent to automatic plugin installation.
 
 The key can later be replaced or cleared under **Settings → Service → DeepSeek API key**. When an environment variable supplies the key, that section is read-only and identifies the external owner.
 
@@ -61,7 +61,11 @@ Environment overrides: `DSH_BOX_ROOT`, `DSH_BOX_PORT`, `DSH_BOX_API_KEY`, `DSH_B
 
 If a verified dsh service is found on the preferred port or dsh's official default port `3080`, DSHBox asks before connecting and remembers that service fingerprint. On first run, this choice comes before local setup; choosing the external service defers credential and plugin onboarding that only applies to the local runtime. That setup appears if the user later switches to the local service for the first time. An external service is display-only from DSHBox's perspective: the app never stops, restarts, updates, or rewrites its credentials, models, or plugins. If it disappears, the app offers retry or a deliberate switch to the local service.
 
-The settings page also controls whether closing hides to the tray or quits and whether a normal launch opens the window or stays in the tray. On the first-install screen, downloads can use automatic fallback, official sources only, or mirrors only; the source can be switched and installation cancelled without terminating the app.
+The settings page also controls whether closing hides to the tray or quits and whether a normal launch opens the window or stays in the tray. Installation can be cancelled without terminating the app. Managed-runtime downloads use the `download_source` policy in `config.json`: automatic fallback, official sources only, or mirrors only.
+
+Removing a built-in plugin stops DSHBox from reinstalling or updating it automatically. The plugin page keeps a manual reinstall entry; once restored, the plugin remains user-managed and does not regain its built-in badge or automatic updates.
+
+The plugin page also lists community plugins with project links and manual install actions. DSHBox never installs or updates these entries automatically, and uninstalling one makes it available in the list again. Every plugin runs as third-party code inside dsh, whether it comes from the built-in list, community list, or market. Listing a plugin is not a security endorsement.
 
 ## Development
 
