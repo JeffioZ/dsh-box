@@ -185,8 +185,8 @@ function renderHeatmap(wrap, report) {
   draw();
 }
 
-const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>';
-const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>';
+const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
 
 function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
   const [year, month0] = monthKey.split('-').map(Number);
