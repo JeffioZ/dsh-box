@@ -395,6 +395,15 @@ pub fn close(app: &AppHandle) {
     app.state::<AppState>().set_pwsh_pending(false);
     if let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) {
         let _ = w.eval("window.__dshdReset && window.__dshdReset()");
+        let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
+        if let Some((next, token)) = pending {
+            // 连续提示在当前前台窗口内直接换页，不产生 hide/show 层级断档。
+            present_update_prompt(app, next, token);
+            return;
+        }
+        // 先恢复主窗口，让 WebView2 在弹窗仍占据前台时完成一帧合成；
+        // 下一帧再隐藏弹窗，避免露出主窗口后面的内容。
+        restore_main_after_dialog(app);
         let handle = app.clone();
         std::thread::spawn(move || {
             // 仅等一帧确保清空已提交；此前等待 50ms 会让空卡片明显停顿。
@@ -404,12 +413,6 @@ pub fn close(app: &AppHandle) {
                 if h2.state::<AppState>().dialog_gen() == gen {
                     if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
                         let _ = w.hide();
-                    }
-                    let pending = h2.state::<AppState>().finish_dialog_close(&closed_kind);
-                    if let Some((next, token)) = pending {
-                        present_update_prompt(&h2, next, token);
-                    } else {
-                        restore_main_after_dialog(&h2);
                     }
                 }
             });
