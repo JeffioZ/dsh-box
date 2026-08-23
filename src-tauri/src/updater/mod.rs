@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_state::{AppState, BootPhase};
+#[cfg(windows)]
 use crate::processes;
 use crate::runtime;
 mod app;
@@ -34,6 +35,7 @@ use powershell::update_pwsh;
 use powershell::{latest_pwsh_version, pwsh_version};
 use transaction as update_txn;
 
+#[cfg(windows)]
 fn truncate(text: &str, max_chars: usize) -> String {
     let mut truncated: String = text.chars().take(max_chars).collect();
     if text.chars().count() > max_chars {
