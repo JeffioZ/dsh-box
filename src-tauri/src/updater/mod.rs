@@ -49,6 +49,175 @@ const APP_REPO: &str = "JeffioZ/dsh-box";
 #[cfg(any(windows, test))]
 const APP_WINDOWS_ASSET: &str = "DSHBox-windows-x64.exe";
 
+/// 回滚失败后，报错文案承诺的恢复方式差异：
+/// - `Restore`：下次启动自动还原旧版本（dsh，目录被整体替换）；
+/// - `KeepMarker`：已保留备份与事务标记，下次启动再次恢复（Node）。
+enum RollbackRecoveryNote {
+    Restore,
+    KeepMarker,
+}
+
+impl RollbackRecoveryNote {
+    fn after_install_failure(
+        self,
+        name: &str,
+        installed_error: &str,
+        rollback_error: &str,
+    ) -> String {
+        match self {
+            RollbackRecoveryNote::Restore => crate::locale::owned(
+                format!(
+                    "{installed_error}；旧版本自动恢复失败：{rollback_error}。\n\
+                     下次启动将自动还原旧版本。"
+                ),
+                format!(
+                    "{installed_error}; automatic rollback failed: {rollback_error}.\n\
+                     The previous version will be restored on the next launch."
+                ),
+            ),
+            RollbackRecoveryNote::KeepMarker => crate::locale::owned(
+                format!(
+                    "{installed_error}；旧 {name} 自动恢复失败：{rollback_error}。\n\
+                     已保留备份和事务标记，下次启动将再次恢复。"
+                ),
+                format!(
+                    "{installed_error}; automatic {name} rollback failed: {rollback_error}.\n\
+                     The backup and transaction marker were kept for recovery on the next launch."
+                ),
+            ),
+        }
+    }
+}
+
+/// dsh / Node.js 目录更新的统一事务骨架：
+/// 两阶段钩子——`prepare` 在停服/备份前执行（保证网络/安装器准备失败不产生
+/// 停机窗口），`install` 在目录备份完成后执行。参数化两者的真实差异：
+/// - `name`：错误文案里的展示名（dsh / Node.js）；
+/// - `require_current`：current 目录是否必须存在（dsh true；Node false）；
+/// - `restore_note`：回滚失败后的恢复承诺差异。
+#[allow(clippy::too_many_arguments)]
+fn with_directory_transaction<T>(
+    app: &AppHandle,
+    current: &std::path::Path,
+    backup: &std::path::Path,
+    marker: &std::path::Path,
+    name: &str,
+    require_current: bool,
+    restore_note: RollbackRecoveryNote,
+    prepare: impl FnOnce() -> Result<T, String>,
+    install: impl FnOnce(T) -> Result<(), String>,
+) -> Result<(), String> {
+    // 1) 停服前准备：与目录/服务无关的前置条件全部先检查（含网络与安装器）。
+    let prepared = prepare()?;
+    // 2) 残留与存在性检查。
+    if backup.exists() || marker.exists() {
+        return Err(crate::locale::owned(
+            format!(
+                "检测到未完成的 {name} 更新，请重启应用后重试：{}",
+                backup.display()
+            ),
+            format!(
+                "An unfinished {name} update was found. Restart the app before trying again: {}",
+                backup.display()
+            ),
+        ));
+    }
+    if require_current && !current.exists() {
+        return Err(crate::locale::owned(
+            format!("未找到当前 {name} 安装目录"),
+            format!("The current {name} installation directory was not found"),
+        ));
+    }
+
+    // 3) 进入事务：停止可用服务、备份当前版本。
+    emit_progress(
+        app,
+        crate::locale::text("正在停止 dsh 服务…", "Stopping the dsh service…"),
+    );
+    update_txn::create_marker(marker)?;
+    dsh::shutdown(app);
+    navigate_to_splash(app);
+    std::thread::sleep(Duration::from_millis(800));
+    if current.exists() {
+        if let Err(e) = std::fs::rename(current, backup) {
+            update_txn::remove_marker(marker);
+            let _ = restart_service_locked(app);
+            return Err(crate::locale::owned(
+                format!("备份当前 {name} 失败：{e}"),
+                format!("Failed to back up the current {name} installation: {e}"),
+            ));
+        }
+    }
+
+    // 4) 安装；失败回滚并重启恢复。
+    if let Err(e) = install(prepared) {
+        if let Err(re) = update_txn::rollback_directory(current, backup, marker) {
+            dsh::shutdown(app);
+            return Err(restore_note.after_install_failure(name, &e, &re));
+        }
+        return match restart_service_locked(app) {
+            Ok(()) => Err(crate::locale::owned(
+                format!("{e}；已恢复旧版本"),
+                format!("{e}; the previous version was restored"),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("{e}；旧版本恢复后未能启动：{re}"),
+                format!("{e}; the restored version did not start: {re}"),
+            )),
+        };
+    }
+
+    // 5) 重启成功提交：清除标记与备份。
+    emit_progress(
+        app,
+        crate::locale::text(
+            format!("{name} 更新完成，正在重启服务…").as_str(),
+            format!("{name} update complete. Restarting the service…").as_str(),
+        ),
+    );
+    if let Err(e) = restart_service_locked(app) {
+        dsh::shutdown(app);
+        if let Err(re) = update_txn::rollback_directory(current, backup, marker) {
+            return Err(crate::locale::owned(
+                format!(
+                    "新 {name} 启动失败：{e}；旧版本自动恢复也失败：{re}。\n\
+                     服务已停止，下次启动将自动还原旧版本。"
+                ),
+                format!(
+                    "The new {name} version did not start: {e}; automatic rollback also failed: {re}.\n\
+                     The service is stopped; the previous version will be restored on the next launch."
+                ),
+            ));
+        }
+        let restore_result = restart_service_locked(app);
+        return match restore_result {
+            Ok(()) => Err(crate::locale::owned(
+                format!("新 {name} 启动失败，已恢复旧版本：{e}"),
+                format!(
+                    "The new {name} version did not start; the previous version was restored: {e}"
+                ),
+            )),
+            Err(re) => Err(crate::locale::owned(
+                format!("新 {name} 启动失败：{e}；旧版本恢复后也未能启动：{re}"),
+                format!(
+                    "The new {name} version did not start: {e}; the restored version also failed to start: {re}"
+                ),
+            )),
+        };
+    }
+    // 提交成功：清除事务标记（幂等；删除失败仅日志——更新已成功，不应
+    // 因清理标记失败而向用户报“更新失败”，下次启动 recover 自愈）。
+    update_txn::remove_marker(marker);
+    if backup.exists() {
+        if let Err(e) = std::fs::remove_dir_all(backup) {
+            crate::logging::log(&format!(
+                "updater: 清理 {name} 备份失败（不影响当前版本）：{e}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// 确保更新函数无论如何返回都会恢复更新标记。
 struct UpdatingReset<'a>(&'a AppState);
 
@@ -250,8 +419,24 @@ fn remap_service_url(url: &str, port: u16) -> Option<String> {
 mod tests {
     use super::{
         parse_app_release_asset, parse_pwsh_metadata, parse_releases_atom, remap_service_url,
-        windows_replace_script,
+        windows_replace_script, RollbackRecoveryNote,
     };
+
+    #[test]
+    fn rollback_recovery_notes_preserve_distinct_promises() {
+        // 两种恢复承诺必须不同：dsh 说“还原”，Node 说“保留标记”。
+        // 不依赖具体语言，只验证两分支确实产生不同文案、避免被抹平成同一句。
+        let restore =
+            RollbackRecoveryNote::Restore.after_install_failure("dsh", "安装失败", "回滚失败");
+        let keep = RollbackRecoveryNote::KeepMarker.after_install_failure(
+            "Node.js",
+            "安装失败",
+            "回滚失败",
+        );
+        assert_ne!(restore, keep);
+        assert!(!restore.is_empty());
+        assert!(!keep.is_empty());
+    }
 
     #[test]
     fn parses_official_powershell_stable_tag() {
