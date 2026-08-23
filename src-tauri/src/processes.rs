@@ -248,7 +248,7 @@ pub fn spawn_process(
     cmd.spawn()
 }
 
-/// 捕获子进程 stdout/stderr 并等待结束（用于 npm 等短命令）。
+/// 捕获子进程 stdout/stderr 并等待结束（用于 winget 等短命令）。
 #[cfg(windows)]
 pub fn run_capture(
     program: &Path,

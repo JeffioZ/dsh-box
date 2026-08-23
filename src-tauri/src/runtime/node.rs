@@ -269,6 +269,18 @@ fn download_node_archive(
 /// 便携运行时损坏或版本不满足要求时自动清理，再选择合格的系统 Node 或重新安装。
 /// 返回探测时已经取得的版本，启动链路无需再次创建 node 子进程。
 pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<NodeRuntime, String> {
+    let runtime = ensure_node_inner(app, config)?;
+    // 对「任何拿到 Node 的路径」统一升级便携 npm 到 12：Node v24 官方自带
+    // npm 11，其 idealTree 在解析 dsh 数百包依赖树时会卡死。此调用必须保留
+    // 在 wrapper（而非 inner）末尾——inner 的多个早退点会跳过升级，使已装好
+    // 便携 Node 的机器永远停留在 npm 11（历史回归）。非 strict：失败静默沿用
+    // 自带版，不阻断启动；系统 Node 由升级函数内部跳过（归系统管理）。
+    upgrade_portable_npm(app, config, false)?;
+    Ok(runtime)
+}
+
+/// 选择或安装一个满足版本要求的 Node 运行时（不涉及 npm 升级，见 `ensure_node`）。
+fn ensure_node_inner(app: &AppHandle, config: &Config) -> Result<NodeRuntime, String> {
     let managed = config.node_exe();
     if managed.exists() {
         if let Some(runtime) = inspect_runtime(managed) {
