@@ -14,7 +14,7 @@ DSHBox（`dsh-box`，v1.x）是 [DeepSeek Harness](https://github.com/deepseek-a
 ## 目录与职责
 
 - `ui/`：内置页面（启动页 `index.html`+`startup.*`、标题栏 `titlebar.*`、托盘菜单 `tray-menu.html`、控制中心 `control-center.*`、共享 `common.*`/`i18n.js`）。无打包器，`<script src>` 直接引用。
-- `src-tauri/src/`：Rust 外壳，按职责分层（见 README「项目结构」）。`commands/` 只做 IPC 校验与转发。
+- `src-tauri/src/`：Rust 外壳，按职责分层（见 README「项目结构」）。`commands/` 只做 IPC 校验与转发。`usage/` 是「用量与余额」模块（聚合/日志解码/缓存/供应商/余额/订阅/状态栏实时统计）；第三方许可见 `THIRD_PARTY_NOTICES.md`。
 - `scripts/`：构建与图标脚本。`build.ps1` / `dev-build.ps1` / `dev-run.ps1` 在仓库根。
 - `.github/workflows/`：三平台 CI（格式检查、单测、Clippy、release 构建）。
 

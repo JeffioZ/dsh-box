@@ -18,3 +18,34 @@ DSHBox 自身采用 MIT License。仓库、构建工具、编译产物和运行�
 ## 品牌资源
 
 `assets/brand/deepseek-mark.svg` 是生成应用与托盘图标的品牌源。DeepSeek 名称、标志及相关商标归其权利人所有；本项目的 MIT License 不授予第三方商标权。再分发或改名发行前，应自行确认品牌使用授权与政策。
+
+## dsh-usage-stats
+
+「用量与余额」功能的聚合模块（`src-tauri/src/usage/aggregate.rs`）衍生自此项目，按 MIT 条款保留版权声明：
+
+- 项目：https://github.com/Ychris12138/dsh-usage-stats
+- 许可证：MIT
+
+```
+MIT License
+
+Copyright (c) 2026 dsh-usage-stats contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

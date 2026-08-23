@@ -676,6 +676,19 @@ pub fn open_stats(app: &AppHandle, group: Option<&str>) {
     );
 }
 
+/// 打开统一的「用量与余额」弹窗。
+pub fn open_usage(app: &AppHandle) {
+    if !crate::tray_menu::managed_service_ready(app) {
+        return;
+    }
+    show(
+        app,
+        crate::locale::text("用量与余额", "Usage & balance"),
+        "usage",
+        serde_json::json!({}),
+    );
+}
+
 /// 设置（统一弹窗内）：桌面行为、界面显示、本地凭据、dsh/插件与模型配置。
 /// 状态与切换由前端经各领域命令完成。
 pub fn open_settings(app: &AppHandle) {

@@ -36,6 +36,7 @@ serde-saphyr = { version = "1.1.0", default-features = false, features = ["deser
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Globalization",
+  "Win32_System_Time",
   "Win32_Graphics_Gdi",
   # 供 windows-sys 内部门控：CreateJobObjectW 需要该 feature 才会编译
   "Win32_Security",

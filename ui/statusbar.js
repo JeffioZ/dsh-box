@@ -255,13 +255,12 @@ function init() {
   const statsEl = $('stats');
   const chip = $('balance-chip');
   chip.addEventListener('click', () => {
-    // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开余额详情
-    const cmd = chip.dataset.credentialIssue ? 'app_dialog_open_settings' : 'app_dialog_open_balance';
+    // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开用量与余额
+    const cmd = chip.dataset.credentialIssue ? 'app_dialog_open_settings' : 'app_dialog_open_usage';
     invoke(cmd).catch(() => {});
   });
-  statsEl.addEventListener('click', (event) => {
-    const group = event.target.closest('.g');
-    invoke('app_dialog_open_stats', { group: group ? group.dataset.key : null }).catch(() => {});
+  statsEl.addEventListener('click', () => {
+    invoke('app_dialog_open_usage').catch(() => {});
   });
   // 宽度变化重排分组并重判截断（fitGroups 内未截断时自动收起 tooltip）
   if (typeof ResizeObserver !== 'undefined') {

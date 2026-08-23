@@ -32,10 +32,17 @@ pub fn app_dialog_open_stats(
 }
 
 #[tauri::command]
+pub fn app_dialog_open_usage(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::control_center::open_usage(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn session_stats_get(
     app: AppHandle,
     webview: tauri::Webview,
-) -> Result<crate::stats::StatsPayload, String> {
+) -> Result<crate::usage::StatsPayload, String> {
     ensure_local_origin(&webview)?;
     if !crate::tray_menu::managed_service_ready(&app) {
         return Err(crate::locale::text(
@@ -45,7 +52,7 @@ pub async fn session_stats_get(
         .into());
     }
     let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || crate::stats::snapshot(&config))
+    tauri::async_runtime::spawn_blocking(move || crate::usage::snapshot(&config))
         .await
         .map_err(|e| {
             crate::locale::owned(
@@ -53,6 +60,81 @@ pub async fn session_stats_get(
                 format!("The session statistics task ended unexpectedly: {e}"),
             )
         })
+}
+
+/// 订阅额度快照（阶段 3 的只读入口）。
+#[tauri::command]
+pub async fn usage_subscriptions_get(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::usage::SubscriptionSnapshot>, String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取订阅额度。",
+            "Subscription quotas are available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    tauri::async_runtime::spawn_blocking(move || crate::usage::subscriptions(&config))
+        .await
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("订阅额度查询任务异常结束：{e}"),
+                format!("The subscription query task ended unexpectedly: {e}"),
+            )
+        })
+}
+
+/// 供应商账户快照（阶段 2 的只读入口：枚举已配置路由并查询余额）。
+#[tauri::command]
+pub async fn usage_accounts_get(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<Vec<crate::usage::AccountSnapshot>, String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取账户信息。",
+            "Account information is available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    tauri::async_runtime::spawn_blocking(move || crate::usage::accounts(&config))
+        .await
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("账户查询任务异常结束：{e}"),
+                format!("The account query task ended unexpectedly: {e}"),
+            )
+        })?
+}
+
+/// 历史用量聚合报告（阶段 1 的只读入口；跨会话按日/模型聚合本地日志）。
+#[tauri::command]
+pub async fn usage_report_get(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::usage::UsageReport, String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取用量统计。",
+            "Usage statistics are available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    tauri::async_runtime::spawn_blocking(move || crate::usage::report(&config))
+        .await
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("用量统计任务异常结束：{e}"),
+                format!("The usage statistics task ended unexpectedly: {e}"),
+            )
+        })?
 }
 
 /// 余额弹窗内“刷新”按钮：后台重新查询，结果经轮询通道返回。

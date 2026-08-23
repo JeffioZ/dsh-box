@@ -6,7 +6,6 @@ dshdApplyI18n();
 
 let openKind = '';
 let currentOpen = null;
-let lastBalanceData = null;
 let lastCheckResult = null;
 // 更新源已切换标记：切到检查更新页时强制重查（不用关弹窗重开）
 let dshChannelChanged = false;
@@ -26,44 +25,203 @@ function applyTruncationTips(root) {
   });
 }
 
-// —— 余额 ——
-function renderBalance(data) {
-  // 轮询响应晚到时（期间已切换/关闭弹窗）不写已重置的 DOM
-  if (openKind !== 'balance') return;
-  lastBalanceData = data;
+// —— 用量与余额（统一页：历史用量聚合 + 供应商账户/订阅） ——
+let usageSeq = 0;
+async function renderUsagePage() {
+  const seq = ++usageSeq;
   const body = $('body');
-  if (!data) {
-    body.innerHTML = '<div class="msg" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</div>';
-    // 无底部操作区（dsh 设置弹窗无 footer）
-    return;
-  }
-  if (!data.ok || !data.balances || !data.balances.length) {
-    body.innerHTML = '<div class="msg error" role="alert">' + esc((data && data.error) || dshdT('balanceQueryFailed')) + '</div>';
-    // 无底部操作区（dsh 设置弹窗无 footer）
-    return;
-  }
-  const b = data.balances[0];
-  const fmt = (v) => esc(dshdBalanceValue(v));
-  const parts = '<div class="balance-parts">' +
-    '<div class="balance-part"><span data-trunc-tip>' + dshdT('toppedUpBalance') + '</span><b data-trunc-tip>' + cur(b.currency) + fmt(b.topped_up_balance) + '</b></div>' +
-    '<div class="balance-part"><span data-trunc-tip>' + dshdT('grantedBalance') + '</span><b data-trunc-tip>' + cur(b.currency) + fmt(b.granted_balance) + '</b></div>' +
-    '</div>';
-  const upd = data.updated_at
-    ? '<span class="upd">' + dshdT('updatedAt', { time: new Date(data.updated_at * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }) }) + '</span>'
-    : '';
-  const dot = data.is_available ? '' : ' warn';
-  const st = data.is_available ? dshdT('accountAvailable') : dshdT('accountUnavailable');
   body.innerHTML =
-    '<div class="center-wrap">' +
-    '<div class="bal-api">DeepSeek API</div>' +
-    '<div class="big">' + cur(b.currency) + fmt(b.total_balance) +
-    '<span class="cur">' + esc(b.currency) + '</span></div>' + parts +
-    '<div class="status"><span class="dot' + dot + '"></span>' + st + upd + '</div>' +
+    '<div class="usage-wrap">' +
+    '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
+    '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTitle') + '</h3>' +
+    '<div class="usage-summary" id="usage-summary"></div>' +
+    '<div class="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
+    '</section>' +
     '</div>';
-  // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
-  // 无底部操作区（dsh 设置弹窗无 footer）
-  applyTruncationTips($('body'));
+  try {
+    const report = await invoke('usage_report_get');
+    if (openKind !== 'usage' || seq !== usageSeq) return;
+    renderUsageReport(report);
+  } catch (e) {
+    if (openKind !== 'usage' || seq !== usageSeq) return;
+    $('usage-load').className = 'usage-load err';
+    $('usage-load').textContent = dshdT('usageFailed') + ': ' + e;
+  }
 }
+
+function fmtTokens(n) {
+  // 与 dsh 前端一致：<1e3 原样；K/M 缩放，<100 保留一位小数。
+  if (n < 1e3) return String(Math.round(n));
+  const scaled = (n / 1e3 < 100 && n < 1e6) ? Math.round(n / 1e3 * 10) / 10 : Math.round(n / 1e3);
+  const unit = n < 1e6 ? 'K' : 'M';
+  return String(scaled) + unit;
+}
+
+function formatPercent(p) {
+  return (p === null || p === undefined) ? '—' : String(p) + '%';
+}
+
+function renderUsageReport(report) {
+  const summary = $('usage-summary');
+  if (!summary) return;
+  const total = report.total || {};
+  const hit = report.total && report.total.cache_hit_rate;
+  summary.innerHTML =
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageToday') + '</span><b>' + fmtTokens(todayTokens(report)) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageThisMonth') + '</span><b>' + fmtTokens(monthTokens(report)) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotal') + '</span><b>' + fmtTokens(total.tokens || 0) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageCacheHit') + '</span><b>' + formatPercent(hit) + '</b></div>';
+  const load = $('usage-load');
+  if (load) load.remove();
+  // 账户（余额/订阅）最常被查看，放在摘要之后；热图与模型下钻在后。
+  renderAccounts();
+  renderHeatmap(report);
+  renderModelBreakdown(report);
+}
+
+function todayTokens(report) {
+  const today = localDayKey(Date.now());
+  const day = (report.days || []).find((d) => d.date === today);
+  return day ? day.tokens : 0;
+}
+function monthTokens(report) {
+  const prefix = localDayKey(Date.now()).slice(0, 7);
+  return (report.days || [])
+    .filter((d) => d.date.startsWith(prefix))
+    .reduce((sum, d) => sum + d.tokens, 0);
+}
+function localDayKey(ms) {
+  const d = new Date(ms);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + m + '-' + day;
+}
+
+function renderHeatmap(report) {
+  const wrap = $('body');
+  const section = document.createElement('section');
+  section.className = 'usage-card';
+  section.setAttribute('aria-labelledby', 'usage-heatmap-heading');
+  const days = report.days || [];
+  section.innerHTML =
+    '<h3 id="usage-heatmap-heading" class="usage-h">' + dshdT('usageHeatmap') + '</h3>' +
+    '<div class="usage-heatmap" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>';
+  const map = section.querySelector('.usage-heatmap');
+  if (!days.length) {
+    map.innerHTML = '<span class="usage-empty" role="status">' + dshdT('usageEmpty') + '</span>';
+    wrap.appendChild(section);
+    return;
+  }
+  // 最近 12 周（84 天）热力格；每格 8px、间隔 3px，颜色按 token 量分档。
+  const cells = [];
+  const byDay = new Map(days.map((d) => [d.date, d.tokens]));
+  const max = Math.max(1, ...days.map((d) => d.tokens));
+  const now = new Date();
+  for (let i = 83; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 864e5);
+    const key = localDayKey(d.getTime());
+    const value = byDay.get(key) || 0;
+    const level = value === 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(value / max * 4)));
+    cells.push('<span class="hm-cell lv' + level + '" title="' + key + ' · ' + fmtTokens(value) + ' tok" aria-label="' + esc(key + '：' + fmtTokens(value)) + '"></span>');
+  }
+  map.innerHTML = cells.join('');
+  wrap.appendChild(section);
+}
+
+function renderModelBreakdown(report) {
+  const days = report.days || [];
+  const byModel = new Map();
+  for (const d of days) {
+    for (const m of (d.models || [])) {
+      if (m.tokens > 0) byModel.set(m.model, (byModel.get(m.model) || 0) + m.tokens);
+    }
+  }
+  const rows = [...byModel.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  if (!rows.length) return;
+  const wrap = $('body');
+  const section = document.createElement('section');
+  section.className = 'usage-card';
+  section.setAttribute('aria-labelledby', 'usage-models-heading');
+  section.innerHTML = '<h3 id="usage-models-heading" class="usage-h">' + dshdT('usageModels') + '</h3><ul class="usage-models"></ul>';
+  const ul = section.querySelector('.usage-models');
+  for (const [model, tokens] of rows) {
+    const li = document.createElement('li');
+    li.className = 'usage-model';
+    li.innerHTML = '<span class="usage-model-name" data-trunc-tip>' + esc(model) + '</span><b>' + fmtTokens(tokens) + '</b>';
+    ul.appendChild(li);
+  }
+  wrap.appendChild(section);
+  applyTruncationTips(wrap);
+}
+
+async function renderAccounts() {
+  const wrap = $('body');
+  const section = document.createElement('section');
+  section.className = 'usage-card';
+  section.setAttribute('aria-labelledby', 'usage-accounts-heading');
+  section.innerHTML = '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3><div class="usage-accounts"></div>';
+  wrap.appendChild(section);
+  const box = section.querySelector('.usage-accounts');
+  box.innerHTML = '<span class="usage-empty" role="status"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
+  try {
+    const accounts = await invoke('usage_accounts_get');
+    if (openKind !== 'usage') return;
+    const subs = await invoke('usage_subscriptions_get');
+    if (openKind !== 'usage') return;
+    renderAccountCards(box, accounts || [], subs || []);
+  } catch (e) {
+    if (openKind !== 'usage') return;
+    box.innerHTML = '<span class="usage-empty err" role="alert">' + esc(dshdT('usageFailed')) + ': ' + esc(String(e)) + '</span>';
+  }
+}
+
+function renderAccountCards(box, accounts, subs) {
+  box.textContent = '';
+  const items = [...accounts, ...subs.map((s) => ({ id: s.id, display_name: s.display_name, mode: s.mode, status: s.status, windows: s.windows, adapter: s.adapter }))];
+  if (!items.length) {
+    box.innerHTML = '<span class="usage-empty" role="status">' + dshdT('accountUnavailable') + '</span>';
+    return;
+  }
+  for (const a of items) {
+    const card = document.createElement('div');
+    card.className = 'usage-account';
+    // 状态语义文字化：每个 status 独立标签，不靠颜色区分（Color-Only 规则）
+    const statusKey = ACCOUNT_STATUS_KEY[a.status] || 'accountUnavailable';
+    const statusText = dshdT(statusKey);
+    const statusTone = a.status === 'ok' ? 'ok' : (a.status === 'not-configured' ? 'dim' : 'err');
+    let detail = '';
+    if (a.status === 'not-configured') {
+      detail = '<span class="usage-acc-hint">' + dshdT('accountNotConfiguredHint') + '</span>';
+    } else if (a.balance && a.balance.remaining !== null && a.balance.remaining !== undefined) {
+      const cur = a.balance.currency || '';
+      detail = '<b class="usage-acc-amount">' + esc(cur) + ' ' + (a.balance.unlimited ? '∞' : fmtTokens(a.balance.remaining)) + '</b>';
+    } else if (a.windows && a.windows.length) {
+      detail = a.windows.map((w) =>
+        '<span class="usage-acc-window" role="status" aria-label="' + esc(w.kind) + ' ' + w.remaining_percent + '%">' +
+        '<span class="usage-acc-wl">' + esc(w.kind) + '</span>' +
+        '<span class="usage-acc-bar" aria-hidden="true"><span style="width:' + w.remaining_percent + '%"></span></span>' +
+        '<span class="usage-acc-wv">' + w.remaining_percent + '%</span></span>'
+      ).join('');
+    }
+    card.innerHTML =
+      '<div class="usage-acc-head"><span class="usage-acc-name" data-trunc-tip>' + esc(a.display_name || a.id) + '</span>' +
+      '<span class="usage-acc-status ' + statusTone + '">' + esc(statusText) + '</span></div>' +
+      (detail ? '<div class="usage-acc-detail">' + detail + '</div>' : '');
+    box.appendChild(card);
+  }
+  applyTruncationTips(box);
+}
+
+const ACCOUNT_STATUS_KEY = {
+  ok: 'accountOk',
+  'not-configured': 'accountNotConfigured',
+  unauthorized: 'accountUnauthorized',
+  'rate-limited': 'accountRateLimited',
+  unavailable: 'accountUnavailableStatus',
+  'invalid-response': 'accountInvalidResponse',
+  blocked: 'accountBlocked',
+  unsupported: 'accountUnsupported',
+};
 
 // —— 检查更新 ——
 function renderCheckLoading(message) {
@@ -251,43 +409,6 @@ function renderUpdateDone(p) {
   }
 }
 
-// —— 会话统计详情 ——
-const STATS_HINTS = {
-  counts: 'statsCountsHint', durations: 'statsDurationsHint', speeds: 'statsSpeedsHint',
-  cache: 'statsCacheHint', tokens: 'statsTokensHint',
-};
-let statsDetailSeq = 0;
-async function renderStatsDetail(initial) {
-  const seq = ++statsDetailSeq;
-  const body = $('body');
-  body.innerHTML = '<div class="msg" role="status"><span class="spin" aria-hidden="true"></span>' + dshdT('statsLoading') + '</div>';
-  try {
-    const payload = await invoke('session_stats_get');
-    if (openKind !== 'stats' || seq !== statsDetailSeq) return;
-    const groups = payload && Array.isArray(payload.groups) ? payload.groups : [];
-    if (!groups.length) {
-      body.innerHTML = '<div class="msg">' + esc(dshdT('statsEmpty')) + '</div>';
-      return;
-    }
-    const selected = initial && initial.group;
-    const details = new Map(((payload && payload.details) || []).map((item) => [item.key, item.lines || []]));
-    body.innerHTML = '<div class="stats-detail-grid">' + groups.map((group) => {
-      const lines = details.get(group.key) || [];
-      return '<section class="stats-detail-card' + (selected === group.key ? ' selected' : '') + '">' +
-        '<h3>' + esc(dshdT(STATS_HINTS[group.key] || 'statsRegion')) + '</h3>' +
-        '<div class="stats-detail-value">' + esc(group.text) + '</div>' +
-        (lines.length ? '<div class="stats-detail-lines">' + lines.map((line) => '<span>' + esc(line) + '</span>').join('') + '</div>' : '') +
-        '</section>';
-    }).join('') + '</div>';
-    const selectedCard = body.querySelector('.stats-detail-card.selected');
-    if (selectedCard) selectedCard.scrollIntoView({ block: 'nearest' });
-  } catch (e) {
-    if (openKind === 'stats' && seq === statsDetailSeq) {
-      body.innerHTML = '<div class="msg error">' + esc(String(e)) + '</div>';
-    }
-  }
-}
-
 // —— 关于 ——
 const ABOUT_LOGO =
   '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 64 64">' +
@@ -364,8 +485,7 @@ function renderUpdatePrompt(p) {
 
 // —— 左侧导航（单窗口多功能切换） ——
 const NAV_ITEMS = [
-  { kind: 'stats', label: 'navStats', icon: 'chart', capability: 'managed-ready' },
-  { kind: 'balance', label: 'navBalance', icon: 'wallet', capability: 'local' },
+  { kind: 'usage', label: 'navUsage', icon: 'chart', capability: 'managed-ready' },
   { separator: true },
   { kind: 'plugins', label: 'navPlugins', icon: 'puzzle', capability: 'managed-ready' },
   { kind: 'settings', label: 'navSettings', icon: 'gear' },
@@ -391,7 +511,7 @@ function navCapability(item) {
     : { enabled: false, reason: dshdT('navRequiresReady') };
 }
 const NAV_TITLE_KEY = {
-  stats: 'statsTitle', balance: 'balanceTitle', check: 'checkUpdates', plugins: 'pluginsTitle',
+  usage: 'usageTitle', check: 'checkUpdates', plugins: 'pluginsTitle',
   settings: 'settingsTitle', about: 'about',
 };
 const NAV_ICONS = {
@@ -454,13 +574,8 @@ function renderNav(activeKind) {
 }
 function renderCurrent(opts) {
   const k = openKind;
-  if (k === 'stats') renderStatsDetail((currentOpen && currentOpen.initial) || {});
-  else if (k === 'balance') {
-    renderBalance(lastBalanceData);
-    // 导航进入余额页：后台触发一次刷新——打开即显示缓存（有则），
-    // 新数据就绪后由轮询替换；避免"切换到余额一直查询中"（此前仅
-    // 直接打开才触发查询，导航切换不触发）
-    if (opts && opts.triggerBalance) invoke('app_dialog_refresh_balance').catch(() => {});
+  if (k === 'usage') {
+    renderUsagePage();
   }
   else if (k === 'check') {
     const updating = !!(currentOpen && currentOpen.initial && currentOpen.initial.updating);
@@ -490,18 +605,13 @@ function navigateTo(kind) {
   if (!currentOpen || openKind === kind) return;
   const item = NAV_ITEMS.find((candidate) => candidate.kind === kind);
   if (!navCapability(item).enabled) return;
-  if (kind !== 'balance') setBalanceRefreshBusy(false);
   openKind = kind;
   currentOpen = { kind, title: '', initial: currentOpen.initial };
   document.body.classList.toggle('update-prompt-mode', kind === 'update-prompt');
   renderNav(kind);
-  // 标题已由 renderNav 写入导航顶部 nav-title（#title 元素已随结构重构移除，
-  // 此前此处 $('title') 抛 TypeError 导致 renderCurrent 不执行——导航切换失效的根因）
   applyTruncationTips(document);
-  $('btn-refresh').classList.toggle('hidden', kind !== 'balance');
-  renderCurrent({ triggerCheck: true, triggerBalance: true });
+  renderCurrent({ triggerCheck: true });
   $('body').scrollTop = 0;
-  // 只提示右侧内容已切换；整窗保持稳定，快速连续点击会直接重启动画。
   playViewTransition();
 }
 
@@ -518,26 +628,9 @@ function close() {      // 内容快速淡出（不露出“…”标题），90
 }
 
 let lastOpenKey = '';
-// 余额刷新按钮：转圈至少一圈；新数据经轮询到达后停止
-let balanceRefreshStart = 0;
 let pwshPromptShown = false;
 // 更新执行中：期间“更新/安装”按钮保持禁用（结果行重建会重置禁用态）
 let updateRunning = false;
-function setBalanceRefreshBusy(busy) {
-  const button = $('btn-refresh');
-  button.classList.toggle('refreshing', busy);
-  button.disabled = busy;
-  button.toggleAttribute('aria-busy', busy);
-}
-$('btn-refresh').addEventListener('click', () => {
-  const button = $('btn-refresh');
-  if (button.classList.contains('refreshing')) return;
-  setBalanceRefreshBusy(true);
-  balanceRefreshStart = Date.now();
-  invoke('app_dialog_refresh_balance').catch(() => {
-    setBalanceRefreshBusy(false);
-  });
-});
 function applyOpen(p) {
   if (!p) return;
   // 快速重开：先取消挂起的关闭 invoke 并撤掉淡出——即使载荷与上次
@@ -554,15 +647,10 @@ function applyOpen(p) {
   // 复位轮询/流程状态：关闭前的 __dshdReset 可能尚未执行（130ms 关闭
   // 窗口内快速重开），残留的印章会让轮询误判“无变化”而不渲染——
   // UAC“继续”不再出现、结果行永久转圈
-  balanceStamp = '';
   checkStamp = '';
   lastResultKey = '';
   lastProgress = '';
-  pendingRefreshData = null;
   pwshPromptShown = false;
-  setBalanceRefreshBusy(false);
-  // 刷新按钮仅余额弹窗显示
-  $('btn-refresh').classList.toggle('hidden', p.kind !== 'balance');
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   currentOpen = p;
   openKind = p.kind;
@@ -598,21 +686,16 @@ window.__dshdReset = () => {
   closeTimer = null;
   lastOpenKey = '';
   currentOpen = null;
-  lastBalanceData = null;
   lastCheckResult = null;
   lastResultKey = '';
   lastProgress = '';
   openKind = '';
   document.body.classList.remove('update-prompt-mode');
-  balanceStamp = '';
   checkStamp = '';
-  pendingRefreshData = null;
   pwshPromptShown = false;
   updateRunning = false;
   renderNav(openKind);
-  setBalanceRefreshBusy(false);
   pluginApplyStamp = '';
-  statsDetailSeq += 1;
   // 标题由 renderNav 写导航顶部；此处仅清空残留
   $('body').innerHTML = '';
   // 无底部操作区（dsh 设置弹窗无 footer）
@@ -649,44 +732,11 @@ window.addEventListener('dshd-language-changed', () => {
   renderCurrent();
 });
 // —— 轮询拉取（事件通道对该窗口不可靠，此为主通道）——
-let balanceStamp = '';
 let checkStamp = '';
 let lastResultKey = '';
-let pendingRefreshData = null;
 setInterval(async () => {
   try {
-    if (openKind === 'balance') {
-      const data = await invoke('app_dialog_balance_get');
-      // await 期间可能已重置/切换：晚到响应不写已重置的 DOM 与状态
-      if (openKind !== 'balance') return;
-      const key = JSON.stringify(data || null);
-      const button = $('btn-refresh');
-      const refreshing = button.classList.contains('refreshing');
-      // 本轮是否已按新鲜数据渲染：满圈同拍时防止随后用更早缓冲的旧数据
-      // 二次渲染/回写旧值
-      let renderedFresh = false;
-      if (key !== balanceStamp) {
-        if (!refreshing || Date.now() - balanceRefreshStart >= 900) {
-          balanceStamp = key;
-          renderBalance(data);
-          renderedFresh = true;
-        } else {
-          // 转圈未满一圈：暂存新数据，待满圈后与停止动画一起应用——
-          // 内容先更新、动画后停会显得“突然停下”（与浮层刷新节奏统一）
-          pendingRefreshData = data;
-        }
-      }
-      if (refreshing && Date.now() - balanceRefreshStart >= 900) {
-        setBalanceRefreshBusy(false);
-        if (pendingRefreshData) {
-          if (!renderedFresh) {
-            balanceStamp = JSON.stringify(pendingRefreshData);
-            renderBalance(pendingRefreshData);
-          }
-          pendingRefreshData = null;
-        }
-      }
-    } else if (openKind === 'check') {
+    if (openKind === 'check') {
       const s = await invoke('app_dialog_check_get');
       if (openKind !== 'check') return;
       const key = JSON.stringify(s);

@@ -313,7 +313,7 @@ pub(crate) fn run() {
             #[cfg(windows)]
             tray_menu::precreate(app.handle());
             // 标题栏余额常驻显示：后台每 5 分钟刷新一次
-            balance::start_periodic_refresh(app.handle().clone());
+            crate::balance::start_periodic_refresh(app.handle().clone());
             // 运行期每 6 小时自动检查一次 dsh 更新（发现新版弹提示，不自动安装）
             updater::start_periodic_check(app.handle().clone());
             // 任务完成系统通知（主窗口不可见时；只读轮询 dsh 会话日志）
@@ -323,9 +323,9 @@ pub(crate) fn run() {
             // 跟随 dsh 的设置（语言/主题）：后台每 3s 检查 settings.yaml mtime
             tray::start_follow_dsh_settings(app.handle().clone());
             // 状态栏会话统计：每 5s 轮询 dsh 投影并广播（失败静默显示占位）
-            stats::start_periodic(app.handle().clone());
+            crate::usage::start_periodic(app.handle().clone());
             // 状态栏实时生成速率：每 2s 尾帧解码会话日志估算流式 tok/s
-            stats::start_live_rate(app.handle().clone());
+            crate::usage::start_live_rate(app.handle().clone());
             // 内置插件市场（dsh-market）：dsh 就绪后自动预装，此后每日同步最新版
             plugins::start_market_bootstrap(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标
@@ -342,8 +342,8 @@ pub(crate) fn run() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(150));
-                    stats::refresh_once(handle.clone());
-                    balance::refresh_once(handle);
+                    crate::usage::refresh_once(handle.clone());
+                    crate::balance::refresh_once(handle);
                 });
             }
             // 启动静默期：恢复/协商产生的几何事件不落盘（3s 内），

@@ -275,7 +275,7 @@ pub fn navigate(app: &AppHandle, url: &str) {
         }
         let _ = wv.navigate(u);
         // 状态栏统计立即刷新：dsh 就绪后不必等下一个 5s 轮询周期
-        stats::refresh_once(app.clone());
+        crate::usage::refresh_once(app.clone());
         // dsh 页面挂载时会用自带 document.title 覆盖窗口标题。
         // 两层保障：立即 set_title（窗口级，立刻生效）；
         // 页面加载完成后注入常驻脚本，任意时刻的 title 变化都会被拉回产品名。

@@ -141,7 +141,7 @@ pub fn settings_set(
             state.set_hide_stats_line(value)?;
             crate::apply_hide_stats(&app);
             // 互斥：状态栏统计区随开关即时显示/隐藏（不等下一个轮询周期）
-            crate::stats::refresh_once(app.clone());
+            crate::usage::refresh_once(app.clone());
         }
         "hide_statusbar" => {
             state.set_hide_statusbar(value)?;

@@ -259,7 +259,7 @@ fn start_restart_coordinator(app: &AppHandle) {
                 break;
             }
             let config = handle.state::<AppState>().config();
-            if crate::stats::session_activity(&config) != Some(false) {
+            if crate::usage::session_activity(&config) != Some(false) {
                 RESTART_STATE
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())

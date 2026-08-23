@@ -27,11 +27,11 @@ mod plugins;
 mod processes;
 mod runtime;
 mod session_log;
-mod stats;
 mod titlebar;
 mod tray;
 mod tray_menu;
 mod updater;
+mod usage;
 mod versions;
 mod webview;
 mod window;
@@ -186,8 +186,8 @@ pub fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
-    stats::refresh_once(app.clone());
-    balance::refresh_once(app.clone());
+    crate::usage::refresh_once(app.clone());
+    crate::balance::refresh_once(app.clone());
 }
 
 pub fn run() {

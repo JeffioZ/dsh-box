@@ -52,7 +52,7 @@ pub fn start_task_watch(app: AppHandle) {
 
 fn poll_once(app: &AppHandle, watched: &mut Option<WatchedSession>) -> Result<(), String> {
     let config = app.state::<AppState>().config();
-    let Some(session_id) = crate::stats::current_session_id(&config) else {
+    let Some(session_id) = crate::usage::current_session_id(&config) else {
         return Ok(());
     };
     let path = config

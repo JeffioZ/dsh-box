@@ -1,11 +1,9 @@
-//! 会话统计：轮询 dsh 后端同源 RPC（session.list → session.history）读取
-//! 持久投影 sessionStats / tokenUsage，格式化为状态栏显示组并广播
-//! `session-stats-updated`。
+//! 状态栏实时会话统计：轮询 dsh 后端同源 RPC（session.list → session.history）
+//! 读取持久投影 sessionStats / tokenUsage，格式化为状态栏显示组并广播
+//! `session-stats-updated`；另含尾帧估算的实时 tok/s 与会话活性探测。
 //!
-//! 数据走 RPC 协议面而非 DOM 抓取：dsh 前端的 StatsLine 正是消费同一投影
-//! （tail page 的 `projections.values`），协议稳定性远高于页面 DOM。
-//! 全部失败静默：dsh 未就绪、无活动会话、投影缺失时广播空组，
-//! 状态栏显示占位——统计轮询永不影响 dsh 页面本体。
+//! 历史/跨会话用量聚合见 `super::aggregate`；本模块只负责「当前会话」的
+//! 轻量实时指标，供底部状态栏与通知/插件维护使用。
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
