@@ -237,31 +237,44 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .usage-empty { color: var(--dshd-text-dim); font-size: 12px; }
 .usage-empty.err { color: var(--dshd-error-text); }
 
-/* 热力图：84 格 = 14 列（周）× 6 行。grid-auto-flow 默认 row：
-   每 14 个格填一行（一周），再填下一行（前一周）。 */
-.usage-heatmap {
-  display: grid; grid-template-columns: repeat(14, 8px);
-  grid-template-rows: repeat(6, 8px);
-  gap: 3px; justify-content: start;
-}
-/* 空态：热力图容器退化为普通流式，文字横排不竖排 */
+/* 热力图 = 月历：月导航 + 周一起始网格 + 格内数值与命中率 */
 .usage-heatmap.empty { display: block; }
-.hm-cell { width: 8px; height: 8px; border-radius: 2px; background: var(--dshd-border); }
-.hm-cell.lv1 { background: color-mix(in srgb, var(--dshd-accent) 25%, transparent); }
-.hm-cell.lv2 { background: color-mix(in srgb, var(--dshd-accent) 45%, transparent); }
-.hm-cell.lv3 { background: color-mix(in srgb, var(--dshd-accent) 70%, transparent); }
-.hm-cell.lv4 { background: var(--dshd-accent); }
+.usage-heat-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.usage-heat-header .usage-h { margin: 0; }
+.usage-month-nav { display: flex; align-items: center; gap: 2px; }
+.usage-month-title { min-width: 84px; text-align: center; font-size: 12px; font-weight: 500; color: var(--dshd-text); font-variant-numeric: tabular-nums; }
+.usage-month-btn { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: 6px; color: var(--dshd-text-dim); cursor: pointer; padding: 0; font: inherit; }
+.usage-month-btn.usage-month-today { width: auto; padding: 0 8px; font-size: 11px; }
+.usage-month-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+.usage-month-btn:disabled { opacity: .35; cursor: default; }
+.usage-month-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+.usage-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; width: 100%; }
+.usage-week-label { font-size: 10px; line-height: 16px; text-align: center; color: var(--dshd-text-dim); }
+.usage-day { display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; height: 30px; border: none; border-radius: 6px; background: var(--dshd-grid-cell, var(--dshd-hover)); color: var(--dshd-text); font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; }
+.usage-day.empty { background: transparent; cursor: default; }
+.usage-day .usage-day-tok { font-size: 10px; color: var(--dshd-text-dim); }
+.usage-day .usage-day-hit { font-size: 9px; color: var(--dshd-text-dim); }
+.usage-day[data-lv="1"] { background: rgba(31,111,235,0.25); }
+.usage-day[data-lv="2"] { background: rgba(31,111,235,0.45); }
+.usage-day[data-lv="3"] { background: rgba(31,111,235,0.7); }
+.usage-day[data-lv="4"] { background: rgba(31,111,235,0.9); }
+.usage-day[data-lv]:not([data-lv="0"]) { color: rgba(255,255,255,0.95); }
+.usage-day[data-lv]:not([data-lv="0"]) .usage-day-tok,
+.usage-day[data-lv]:not([data-lv="0"]) .usage-day-hit { color: rgba(255,255,255,0.85); }
+.usage-day.selected { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 
-/* 模型用量列表 */
-.usage-models { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.usage-model {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 5px 0; font-size: 12px; line-height: 1.4;
-  border-top: 1px solid var(--dshd-border);
-}
+/* 选中日的模型明细 */
+.usage-day-detail { margin-top: 8px; border-top: 1px solid var(--dshd-border); padding-top: 8px; }
+.usage-day-detail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+/* 模型行：名字 + token + 命中率 + 分布条（参考项目同构，采用 dshd token） */
+.usage-model { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 6px 0; font-size: 12px; line-height: 1.4; border-top: 1px solid var(--dshd-border); }
 .usage-model:first-child { border-top: none; }
 .usage-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dshd-text); }
-.usage-model b { font-variant-numeric: tabular-nums; color: var(--dshd-text-dim); font-weight: 500; }
+.usage-model b { font-variant-numeric: tabular-nums; color: var(--dshd-text); font-weight: 500; }
+.usage-model-hit { font-size: 11px; color: var(--dshd-text-dim); font-variant-numeric: tabular-nums; text-align: right; min-width: 52px; }
+.usage-model-bar { grid-column: 1 / -1; height: 5px; border-radius: 2px; background: var(--dshd-fill, var(--dshd-hover)); overflow: hidden; }
+.usage-model-bar span { display: block; height: 100%; background: var(--dshd-accent); border-radius: 2px; }
 
 /* 账户卡片：余额/订阅窗口统一展示 */
 .usage-accounts { display: flex; flex-direction: column; gap: 8px; }

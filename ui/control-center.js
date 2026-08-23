@@ -116,35 +116,145 @@ function localDayKey(ms) {
   return d.getFullYear() + '-' + m + '-' + day;
 }
 
+// —— 月历热图：月份导航 + 周一起始网格 + 选中日下钻 ——
+let usageViewMonth = null;   // 'YYYY-MM'；null = 当前月
+let usageSelectedDay = null; // 'YYYY-MM-DD'
+
+function usageCurrentMonthKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function usageShiftMonth(key, delta) {
+  const [y, m] = key.split('-').map(Number);
+  const date = new Date(y, m - 1 + delta, 1);
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+}
+function usageMonthLabel(key) {
+  const [y, m] = key.split('-').map(Number);
+  const locale = dshdLocale && dshdLocale() === 'zh-CN' ? 'zh-CN' : 'en';
+  try { return new Date(y, m - 1, 1).toLocaleDateString(locale, { year: 'numeric', month: 'long' }); }
+  catch (e) { return key; }
+}
+
 function renderHeatmap(wrap, report) {
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-heatmap-heading');
   const days = report.days || [];
+  const dayMap = new Map(days.map((d) => [d.date, d]));
+  if (!usageViewMonth) usageViewMonth = usageCurrentMonthKey();
+  const curMonth = usageCurrentMonthKey();
+  const prevDisabled = usageViewMonth <= '1970-01';
+  const nextDisabled = usageViewMonth >= curMonth;
   section.innerHTML =
+    '<div class="usage-heat-header">' +
     '<h3 id="usage-heatmap-heading" class="usage-h">' + dshdT('usageHeatmap') + '</h3>' +
-    '<div class="usage-heatmap" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>';
-  const map = section.querySelector('.usage-heatmap');
-  if (!days.length) {
-    map.classList.add('empty');
-    map.innerHTML = '<span class="usage-empty" role="status">' + dshdT('usageEmpty') + '</span>';
-    wrap.appendChild(section);
+    '<div class="usage-month-nav">' +
+    '<button type="button" class="usage-month-btn" data-usage-prev aria-label="' + dshdT('usagePrevMonth') + '"' + (prevDisabled ? ' disabled' : '') + '>' + CHEV_LEFT + '</button>' +
+    '<span class="usage-month-title">' + esc(usageMonthLabel(usageViewMonth)) + '</span>' +
+    '<button type="button" class="usage-month-btn" data-usage-next aria-label="' + dshdT('usageNextMonth') + '"' + (nextDisabled ? ' disabled' : '') + '>' + CHEV_RIGHT + '</button>' +
+    (usageViewMonth !== curMonth ? '<button type="button" class="usage-month-btn usage-month-today" data-usage-today>' + dshdT('usageTodayBtn') + '</button>' : '') +
+    '</div></div>' +
+    '<div class="usage-cal" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>' +
+    '<div class="usage-day-detail" hidden></div>';
+  wrap.appendChild(section);
+
+  const cal = section.querySelector('.usage-cal');
+  const detail = section.querySelector('.usage-day-detail');
+  const draw = () => {
+    if (usageViewMonth === null) usageViewMonth = curMonth;
+    usageRenderCalendar(cal, detail, usageViewMonth, dayMap, report);
+    const prev = section.querySelector('[data-usage-prev]');
+    const next = section.querySelector('[data-usage-next]');
+    if (prev) prev.disabled = usageViewMonth <= '1970-01';
+    if (next) next.disabled = usageViewMonth >= usageCurrentMonthKey();
+  };
+  section.querySelector('[data-usage-prev]').addEventListener('click', () => {
+    usageViewMonth = usageShiftMonth(usageViewMonth, -1);
+    draw();
+  });
+  section.querySelector('[data-usage-next]').addEventListener('click', () => {
+    usageViewMonth = usageShiftMonth(usageViewMonth, 1);
+    draw();
+  });
+  const todayBtn = section.querySelector('[data-usage-today]');
+  if (todayBtn) todayBtn.addEventListener('click', () => {
+    usageViewMonth = usageCurrentMonthKey();
+    draw();
+  });
+  draw();
+}
+
+const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>';
+const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+
+function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
+  const [year, month0] = monthKey.split('-').map(Number);
+  const month = month0 - 1;
+  const first = new Date(year, month, 1);
+  const startDow = (first.getDay() + 6) % 7; // 周一起始
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const max = Math.max(1, ...(report.days || []).map((d) => d.tokens || 0));
+  const weekLabels = (dshdLocale && dshdLocale() === 'zh-CN')
+    ? ['一', '二', '三', '四', '五', '六', '日']
+    : ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  cal.textContent = '';
+  weekLabels.forEach((w) => {
+    const span = document.createElement('span');
+    span.className = 'usage-week-label';
+    span.textContent = w;
+    cal.appendChild(span);
+  });
+  for (let i = 0; i < startDow; i++) {
+    const span = document.createElement('span');
+    span.className = 'usage-day empty';
+    cal.appendChild(span);
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const key = year + '-' + String(month0).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    const entry = dayMap.get(key);
+    const tokens = entry ? entry.tokens : 0;
+    const hit = entry ? entry.cache_hit_rate : null;
+    const lv = tokens <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(Math.sqrt(tokens / max) * 4)));
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'usage-day' + (usageSelectedDay === key ? ' selected' : '');
+    btn.dataset.lv = String(lv);
+    btn.setAttribute('aria-label', key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : ''));
+    btn.innerHTML = '<span>' + d + '</span>' +
+      (tokens > 0 ? '<span class="usage-day-tok">' + fmtTokens(tokens) + '</span>' : '') +
+      (hit !== null && hit !== undefined ? '<span class="usage-day-hit">' + hit + '%</span>' : '');
+    btn.addEventListener('click', () => {
+      const prevSel = cal.querySelector('.usage-day.selected');
+      if (prevSel) prevSel.classList.remove('selected');
+      usageSelectedDay = usageSelectedDay === key ? null : key;
+      if (usageSelectedDay) btn.classList.add('selected');
+      usageRenderDayDetail(detail, usageSelectedDay, dayMap);
+    });
+    cal.appendChild(btn);
+  }
+  usageRenderDayDetail(detail, usageSelectedDay, dayMap);
+}
+
+function usageRenderDayDetail(detail, dayKey, dayMap) {
+  if (!dayKey) { detail.hidden = true; detail.textContent = ''; return; }
+  const entry = dayMap.get(dayKey);
+  if (!entry || !(entry.models && entry.models.length)) {
+    detail.hidden = false;
+    detail.innerHTML = '<span class="usage-empty">' + dshdT('usageEmpty') + '</span>';
     return;
   }
-  const cells = [];
-  const byDay = new Map(days.map((d) => [d.date, d.tokens]));
-  const max = Math.max(1, ...days.map((d) => d.tokens));
-  const now = new Date();
-  // 84 格 = 14 列 × 6 行（周）；行序：先填最近四列（周），再往前。
-  for (let i = 83; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 864e5);
-    const key = localDayKey(d.getTime());
-    const value = byDay.get(key) || 0;
-    const level = value === 0 ? 0 : Math.max(1, Math.min(4, Math.ceil(value / max * 4)));
-    cells.push('<span class="hm-cell lv' + level + '" title="' + key + ' · ' + fmtTokens(value) + ' tok" aria-label="' + esc(key + '：' + fmtTokens(value)) + '"></span>');
-  }
-  map.innerHTML = cells.join('');
-  wrap.appendChild(section);
+  const max = Math.max(1, ...entry.models.map((m) => m.tokens));
+  detail.hidden = false;
+  detail.innerHTML = '<ul class="usage-day-detail-list">' + entry.models.map((m) =>
+    '<li class="usage-model">' +
+    '<span class="usage-model-name" data-trunc-tip>' + esc(m.model) + '</span>' +
+    '<span class="usage-model-hit">' + (m.cache_hit_rate !== null && m.cache_hit_rate !== undefined ? m.cache_hit_rate + '%' : '—') + '</span>' +
+    '<b>' + fmtTokens(m.tokens) + '</b>' +
+    '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * m.tokens / max)) + '%"></span></span>' +
+    '</li>'
+  ).join('') + '</ul>';
+  applyTruncationTips(detail);
 }
 
 function renderModelBreakdown(wrap, report) {
@@ -157,6 +267,7 @@ function renderModelBreakdown(wrap, report) {
   }
   const rows = [...byModel.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   if (!rows.length) return;
+  const maxTokens = Math.max(1, ...rows.map((r) => r[1]));
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-models-heading');
@@ -165,7 +276,11 @@ function renderModelBreakdown(wrap, report) {
   for (const [model, tokens] of rows) {
     const li = document.createElement('li');
     li.className = 'usage-model';
-    li.innerHTML = '<span class="usage-model-name" data-trunc-tip>' + esc(model) + '</span><b>' + fmtTokens(tokens) + '</b>';
+    li.innerHTML =
+      '<span class="usage-model-name" data-trunc-tip>' + esc(model) + '</span>' +
+      '<span class="usage-model-hit">' + dshdT('usageCacheHit') + ' —</span>' +
+      '<b>' + fmtTokens(tokens) + '</b>' +
+      '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * tokens / maxTokens)) + '%"></span></span>';
     ul.appendChild(li);
   }
   wrap.appendChild(section);
