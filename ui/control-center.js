@@ -27,6 +27,25 @@ function applyTruncationTips(root) {
 
 // —— 用量与余额（统一页：历史用量聚合 + 供应商账户/订阅） ——
 let usageSeq = 0;
+
+// 账户区只展示「有意义」的账户：已配凭据 + 有可用适配器的路由。
+// 避免把未配置的所有供应商都铺出来（屏效低、信息噪音大）。
+function meaningfulAccounts(accounts, subs) {
+  const out = [];
+  for (const a of (accounts || [])) {
+    // 余额快照：仅当有余额可显示或状态非 not-configured 时才展示。
+    const hasBalance = a.balance && (a.balance.remaining !== null && a.balance.remaining !== undefined);
+    if (a.status === 'not-configured' && !hasBalance) continue;
+    out.push({ ...a });
+  }
+  for (const s of (subs || [])) {
+    // 订阅：未配置凭据的不展示。
+    if (s.status === 'not-configured') continue;
+    out.push({ id: s.id, display_name: s.display_name, mode: s.mode, status: s.status, windows: s.windows, adapter: s.adapter });
+  }
+  return out;
+}
+
 async function renderUsagePage() {
   const seq = ++usageSeq;
   const body = $('body');
@@ -35,8 +54,8 @@ async function renderUsagePage() {
     '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
     '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTitle') + '</h3>' +
     '<div class="usage-summary" id="usage-summary"></div>' +
-    '<div class="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
     '</section>' +
+    '<div class="usage-load" id="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
     '</div>';
   try {
     const report = await invoke('usage_report_get');
@@ -44,13 +63,12 @@ async function renderUsagePage() {
     renderUsageReport(report);
   } catch (e) {
     if (openKind !== 'usage' || seq !== usageSeq) return;
-    $('usage-load').className = 'usage-load err';
-    $('usage-load').textContent = dshdT('usageFailed') + ': ' + e;
+    const load = $('usage-load');
+    if (load) { load.className = 'usage-load err'; load.textContent = dshdT('usageFailed') + ': ' + e; }
   }
 }
 
 function fmtTokens(n) {
-  // 与 dsh 前端一致：<1e3 原样；K/M 缩放，<100 保留一位小数。
   if (n < 1e3) return String(Math.round(n));
   const scaled = (n / 1e3 < 100 && n < 1e6) ? Math.round(n / 1e3 * 10) / 10 : Math.round(n / 1e3);
   const unit = n < 1e6 ? 'K' : 'M';
@@ -62,8 +80,9 @@ function formatPercent(p) {
 }
 
 function renderUsageReport(report) {
+  const wrap = document.querySelector('.usage-wrap');
   const summary = $('usage-summary');
-  if (!summary) return;
+  if (!wrap || !summary) return;
   const total = report.total || {};
   const hit = report.total && report.total.cache_hit_rate;
   summary.innerHTML =
@@ -73,10 +92,10 @@ function renderUsageReport(report) {
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageCacheHit') + '</span><b>' + formatPercent(hit) + '</b></div>';
   const load = $('usage-load');
   if (load) load.remove();
-  // 账户（余额/订阅）最常被查看，放在摘要之后；热图与模型下钻在后。
-  renderAccounts();
-  renderHeatmap(report);
-  renderModelBreakdown(report);
+  // 区块顺序：账户（余额/订阅）最常看 → 每日用量热图 → 模型下钻。
+  renderAccountsSection(wrap);
+  renderHeatmap(wrap, report);
+  renderModelBreakdown(wrap, report);
 }
 
 function todayTokens(report) {
@@ -97,8 +116,7 @@ function localDayKey(ms) {
   return d.getFullYear() + '-' + m + '-' + day;
 }
 
-function renderHeatmap(report) {
-  const wrap = $('body');
+function renderHeatmap(wrap, report) {
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-heatmap-heading');
@@ -108,15 +126,16 @@ function renderHeatmap(report) {
     '<div class="usage-heatmap" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>';
   const map = section.querySelector('.usage-heatmap');
   if (!days.length) {
+    map.classList.add('empty');
     map.innerHTML = '<span class="usage-empty" role="status">' + dshdT('usageEmpty') + '</span>';
     wrap.appendChild(section);
     return;
   }
-  // 最近 12 周（84 天）热力格；每格 8px、间隔 3px，颜色按 token 量分档。
   const cells = [];
   const byDay = new Map(days.map((d) => [d.date, d.tokens]));
   const max = Math.max(1, ...days.map((d) => d.tokens));
   const now = new Date();
+  // 84 格 = 14 列 × 6 行（周）；行序：先填最近四列（周），再往前。
   for (let i = 83; i >= 0; i--) {
     const d = new Date(now.getTime() - i * 864e5);
     const key = localDayKey(d.getTime());
@@ -128,7 +147,7 @@ function renderHeatmap(report) {
   wrap.appendChild(section);
 }
 
-function renderModelBreakdown(report) {
+function renderModelBreakdown(wrap, report) {
   const days = report.days || [];
   const byModel = new Map();
   for (const d of days) {
@@ -138,7 +157,6 @@ function renderModelBreakdown(report) {
   }
   const rows = [...byModel.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   if (!rows.length) return;
-  const wrap = $('body');
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-models-heading');
@@ -154,38 +172,35 @@ function renderModelBreakdown(report) {
   applyTruncationTips(wrap);
 }
 
-async function renderAccounts() {
-  const wrap = $('body');
+async function renderAccountsSection(wrap) {
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-accounts-heading');
-  section.innerHTML = '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3><div class="usage-accounts"></div>';
+  section.innerHTML = '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3><div class="usage-accounts" role="status" aria-live="polite"></div>';
   wrap.appendChild(section);
   const box = section.querySelector('.usage-accounts');
-  box.innerHTML = '<span class="usage-empty" role="status"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
+  box.innerHTML = '<span class="usage-empty"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
   try {
     const accounts = await invoke('usage_accounts_get');
     if (openKind !== 'usage') return;
     const subs = await invoke('usage_subscriptions_get');
     if (openKind !== 'usage') return;
-    renderAccountCards(box, accounts || [], subs || []);
+    renderAccountCards(box, meaningfulAccounts(accounts, subs));
   } catch (e) {
     if (openKind !== 'usage') return;
     box.innerHTML = '<span class="usage-empty err" role="alert">' + esc(dshdT('usageFailed')) + ': ' + esc(String(e)) + '</span>';
   }
 }
 
-function renderAccountCards(box, accounts, subs) {
+function renderAccountCards(box, items) {
   box.textContent = '';
-  const items = [...accounts, ...subs.map((s) => ({ id: s.id, display_name: s.display_name, mode: s.mode, status: s.status, windows: s.windows, adapter: s.adapter }))];
   if (!items.length) {
-    box.innerHTML = '<span class="usage-empty" role="status">' + dshdT('accountUnavailable') + '</span>';
+    box.innerHTML = '<span class="usage-empty" role="status">' + dshdT('accountNotConfiguredHint') + '</span>';
     return;
   }
   for (const a of items) {
     const card = document.createElement('div');
     card.className = 'usage-account';
-    // 状态语义文字化：每个 status 独立标签，不靠颜色区分（Color-Only 规则）
     const statusKey = ACCOUNT_STATUS_KEY[a.status] || 'accountUnavailable';
     const statusText = dshdT(statusKey);
     const statusTone = a.status === 'ok' ? 'ok' : (a.status === 'not-configured' ? 'dim' : 'err');

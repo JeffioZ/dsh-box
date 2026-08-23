@@ -237,13 +237,15 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .usage-empty { color: var(--dshd-text-dim); font-size: 12px; }
 .usage-empty.err { color: var(--dshd-error-text); }
 
-/* 热力图：84 格（12 周），每格带 title/aria-label，颜色只是补充信号 */
+/* 热力图：84 格 = 14 列（周）× 6 行。grid-auto-flow 默认 row：
+   每 14 个格填一行（一周），再填下一行（前一周）。 */
 .usage-heatmap {
   display: grid; grid-template-columns: repeat(14, 8px);
   grid-template-rows: repeat(6, 8px);
-  grid-auto-flow: column;
   gap: 3px; justify-content: start;
 }
+/* 空态：热力图容器退化为普通流式，文字横排不竖排 */
+.usage-heatmap.empty { display: block; }
 .hm-cell { width: 8px; height: 8px; border-radius: 2px; background: var(--dshd-border); }
 .hm-cell.lv1 { background: color-mix(in srgb, var(--dshd-accent) 25%, transparent); }
 .hm-cell.lv2 { background: color-mix(in srgb, var(--dshd-accent) 45%, transparent); }
