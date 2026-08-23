@@ -153,7 +153,7 @@ function renderHeatmap(wrap, report) {
     '<button type="button" class="usage-month-btn" data-usage-prev aria-label="' + dshdT('usagePrevMonth') + '"' + (prevDisabled ? ' disabled' : '') + '>' + CHEV_LEFT + '</button>' +
     '<span class="usage-month-title">' + esc(usageMonthLabel(usageViewMonth)) + '</span>' +
     '<button type="button" class="usage-month-btn" data-usage-next aria-label="' + dshdT('usageNextMonth') + '"' + (nextDisabled ? ' disabled' : '') + '>' + CHEV_RIGHT + '</button>' +
-    (usageViewMonth !== curMonth ? '<button type="button" class="usage-month-btn usage-month-today" data-usage-today>' + dshdT('usageTodayBtn') + '</button>' : '') +
+    '<button type="button" class="usage-month-btn usage-month-today" data-usage-today hidden>' + dshdT('usageTodayBtn') + '</button>' +
     '</div></div>' +
     '<div class="usage-cal" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>' +
     '<div class="usage-day-detail" hidden></div>';
@@ -164,10 +164,16 @@ function renderHeatmap(wrap, report) {
   const draw = () => {
     if (usageViewMonth === null) usageViewMonth = curMonth;
     usageRenderCalendar(cal, detail, usageViewMonth, dayMap, report);
+    // 同步月份标题与「今天」按钮显隐（此前只更新按钮禁用态，标题不动，
+    // 导致翻页看似「月份不变」）
+    const title = section.querySelector('.usage-month-title');
+    if (title) title.textContent = usageMonthLabel(usageViewMonth);
     const prev = section.querySelector('[data-usage-prev]');
     const next = section.querySelector('[data-usage-next]');
     if (prev) prev.disabled = usageViewMonth <= '1970-01';
     if (next) next.disabled = usageViewMonth >= usageCurrentMonthKey();
+    const today = section.querySelector('[data-usage-today]');
+    if (today) today.hidden = usageViewMonth === usageCurrentMonthKey();
   };
   section.querySelector('[data-usage-prev]').addEventListener('click', () => {
     usageViewMonth = usageShiftMonth(usageViewMonth, -1);

@@ -250,8 +250,12 @@ body.fade-out { animation: none; opacity: 0; transition: opacity 90ms ease-in; }
 .usage-month-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .usage-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; width: 100%; }
 .usage-week-label { font-size: 10px; line-height: 16px; text-align: center; color: var(--dshd-text-dim); }
-.usage-day { display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; height: 30px; border: none; border-radius: 6px; background: var(--dshd-grid-cell, var(--dshd-hover)); color: var(--dshd-text); font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; }
+.usage-day { display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; height: 30px; border: none; border-radius: 6px; background: var(--dshd-grid-cell, var(--dshd-hover)); color: var(--dshd-text); font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; transition: background-color var(--dshd-m-fast) ease, outline-color var(--dshd-m-fast) ease; }
+.usage-day:hover { background: var(--dshd-hover); }
+/* 有热度（蓝）的格子 hover 时加深而非变灰 */
+.usage-day[data-lv]:not([data-lv="0"]):hover { filter: brightness(1.12); }
 .usage-day.empty { background: transparent; cursor: default; }
+.usage-day.empty:hover { background: transparent; }
 .usage-day .usage-day-tok { font-size: 10px; color: var(--dshd-text-dim); }
 .usage-day .usage-day-hit { font-size: 9px; color: var(--dshd-text-dim); }
 .usage-day[data-lv="1"] { background: rgba(31,111,235,0.25); }
