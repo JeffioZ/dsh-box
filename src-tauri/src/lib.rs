@@ -154,8 +154,14 @@ pub fn main_webview(app: &AppHandle) -> Option<tauri::Webview> {
 }
 
 pub(crate) fn main_is_visible(app: &AppHandle) -> bool {
+    // Windows 上最小化窗口仍报告 visible，需同时排除最小化，否则“隐藏到
+    // 任务栏/最小化后”用户仍看不到结果却收不到完成通知。
     main_window(app)
-        .and_then(|window| window.is_visible().ok())
+        .and_then(|window| {
+            let visible = window.is_visible().ok()?;
+            let minimized = window.is_minimized().unwrap_or(false);
+            Some(visible && !minimized)
+        })
         .unwrap_or(false)
 }
 

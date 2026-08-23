@@ -16,6 +16,8 @@ pub struct SettingsState {
     pub hide_statusbar: bool,
     pub hide_balance: bool,
     pub auto_update_plugins: bool,
+    /// 主窗口不可见时，任务完成后是否发系统通知。
+    pub task_notifications: bool,
     /// dsh 更新通道："latest" 或 "next"
     pub dsh_update_channel: String,
     pub close_behavior: String,
@@ -38,6 +40,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         hide_statusbar: config.hide_statusbar,
         hide_balance: config.hide_balance,
         auto_update_plugins: config.auto_update_plugins,
+        task_notifications: config.task_notifications,
         dsh_update_channel: config.dsh_update_channel.clone(),
         close_behavior: config.close_behavior.clone(),
         launch_behavior: config.launch_behavior.clone(),
@@ -152,6 +155,9 @@ pub fn settings_set(
         "auto_update_plugins" => {
             ensure_local_service_scope(&app)?;
             state.set_auto_update_plugins(value)?;
+        }
+        "task_notifications" => {
+            state.set_task_notifications(value)?;
         }
         // 更新通道字段不改走 bool 开关逻辑（settings_set 的 value 是 bool，
         // 通道是字符串二选一），由 set_dsh_channel command 处理

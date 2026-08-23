@@ -562,6 +562,14 @@ impl AppState {
         )
     }
 
+    pub fn set_task_notifications(&self, value: bool) -> Result<(), String> {
+        self.persist_config_change(
+            "task_notifications",
+            serde_json::Value::Bool(value),
+            |config| config.task_notifications = value,
+        )
+    }
+
     /// 设置 dsh 内核更新通道（latest/next），持久化到 config.json。
     pub fn set_dsh_update_channel(&self, channel: &str) -> Result<(), String> {
         if !matches!(channel, "latest" | "next") {

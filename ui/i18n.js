@@ -183,6 +183,8 @@ const DSHD_MESSAGES = {
   settingsHideStatusbarDesc: ['隐藏窗口底部的会话统计和余额。', 'Hide session stats and balance at the bottom of the window.'],
   settingsHideBalance: ['隐藏余额显示', 'Hide balance'],
   settingsHideBalanceDesc: ['隐藏状态栏右侧的余额；仅在显示状态栏时生效。', 'Hide the balance on the right. Applies only when the status bar is visible.'],
+  settingsTaskNotifications: ['任务完成通知', 'Task completion notifications'],
+  settingsTaskNotificationsDesc: ['主窗口隐藏时，任务完成后发送系统通知。', 'Send a system notification when a task finishes while the main window is hidden.'],
   settingsHideTools: ['隐藏工具调用', 'Hide tool calls'],
   settingsHideToolsDesc: ['隐藏对话中的工具调用卡片，只显示文本消息和最终输出。', 'Hide tool call cards and show only text messages and final output.'],
   settingsAutoUpdatePlugins: ['自动更新内置插件', 'Auto-update built-in plugins'],

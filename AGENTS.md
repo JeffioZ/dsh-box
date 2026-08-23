@@ -33,7 +33,7 @@ cargo test --manifest-path src-tauri/Cargo.toml # 单测
 
 ## 关键架构事实（改代码前必读）
 
-- **配置**：数据目录（默认 `%LOCALAPPDATA%\DSHBox`，可用 `DSH_BOX_ROOT` 覆盖）下 `config.json` 只保存用户设置：`port` / `api_base` / `language` / `hide_tool_calls` / `hide_stats_line` / `hide_statusbar` / `hide_balance` / `auto_update_plugins` / `dsh_update_channel` / `close_behavior` / `launch_behavior` / `download_source`；`state.json` 保存窗口、首次引导和插件维护状态。两者不做跨文件兼容读取。环境变量（`DSH_BOX_*`、`DSHD_LANG`）优先于 config.json。见 `app_state/config.rs`、`app_state/store.rs`。
+- **配置**：数据目录（默认 `%LOCALAPPDATA%\DSHBox`，可用 `DSH_BOX_ROOT` 覆盖）下 `config.json` 只保存用户设置：`port` / `api_base` / `language` / `hide_tool_calls` / `hide_stats_line` / `hide_statusbar` / `hide_balance` / `auto_update_plugins` / `task_notifications` / `dsh_update_channel` / `close_behavior` / `launch_behavior` / `download_source`；`state.json` 保存窗口、首次引导和插件维护状态。两者不做跨文件兼容读取。环境变量（`DSH_BOX_*`、`DSHD_LANG`）优先于 config.json。见 `app_state/config.rs`、`app_state/store.rs`。
 - **语言与主题**：优先读 dsh 的 `$DSH_HOME/settings.yaml`（`locale.preference`、`ui-theme.preference`），读改写操作必须走 `update_text_file`（进程内锁覆盖完整读改写，最终由 `atomic_write` 原子替换；dsh 有文件监视器会热发布）。`tray::start_follow_dsh_settings` 每 3s 检查一次该文件 mtime，文件变化才跟随（无变化零解析开销）。
 - **注入脚本**：`PAGE_INIT_SCRIPT`（深色主题首帧预设）+ `locale::init_script()` 在窗口创建时作为 `initialization_script`；`MENU_INJECT` 是导航到 dsh 页面后 `eval` 的右键菜单注入（**对外部 URL 导航，initialization_script 不可靠，必须走 navigate 后的 eval**——见 `lib.rs` 的 `on_navigation` 观察器）。
 - **更新事务**：`updater/transaction.rs` 提供"备份 + 标记 + 中断恢复"原语；`updater/` 的 dsh/Node 更新与回滚都基于它。Windows 应用本体必须从精确版本 tag 解析唯一附件，写入 `.part` 后校验 GitHub Release asset 的 SHA-256 digest，再进入替换流程。新增任何"替换文件"类操作必须复用对应事务/恢复模式。

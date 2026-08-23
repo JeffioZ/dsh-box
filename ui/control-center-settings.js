@@ -2,7 +2,7 @@
 
 // —— 设置（按桌面行为 / 界面 / 服务能力 / 凭据与模型分组） ——
 let settingsBusy = false;
-const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'auto_update_plugins'];
+const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'task_notifications', 'auto_update_plugins'];
 function settingsRow(key, nameKey, descKey, className) {
   return (
     '<label class="srow' + (className ? ' ' + className : '') + '">' +
@@ -45,6 +45,7 @@ function renderSettings() {
     '<section class="psection settings-section" aria-labelledby="settings-desktop-heading">' +
     '<h3 id="settings-desktop-heading">' + dshdT('settingsDesktopTitle') + '</h3>' +
     settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
+    settingsRow('task_notifications', 'settingsTaskNotifications', 'settingsTaskNotificationsDesc') +
     behaviorRow('launch_behavior', 'settingsLaunchBehavior', 'settingsLaunchBehaviorDesc', 'window', 'settingsLaunchWindow', 'tray', 'settingsLaunchTray') +
     behaviorRow('close_behavior', 'settingsCloseBehavior', 'settingsCloseBehaviorDesc', 'tray', 'settingsCloseTray', 'quit', 'settingsCloseQuit') +
     '</section>' +
@@ -366,6 +367,7 @@ function applySettingState(state) {
     if (el) {
       el.checked = Boolean(state[key]);
       if (key === 'auto_update_plugins') el.disabled = external;
+      if (key === 'task_notifications') el.disabled = external;
       if (key === 'hide_balance') el.disabled = Boolean(state.hide_statusbar);
     }
   });
@@ -430,7 +432,7 @@ async function onSettingToggle(ev) {
     showSettingError(dshdT('settingsFailed', { message: String(e) }));
   } finally {
     settingsBusy = false;
-    if (input.dataset.key === 'auto_update_plugins') input.disabled = Boolean(document.querySelector('#settings-external-note:not([hidden])'));
+    if (input.dataset.key === 'auto_update_plugins' || input.dataset.key === 'task_notifications') input.disabled = Boolean(document.querySelector('#settings-external-note:not([hidden])'));
     else if (input.dataset.key === 'hide_balance') input.disabled = Boolean($('body').querySelector('.sswitch[data-key="hide_statusbar"]')?.checked);
     else input.disabled = false;
   }

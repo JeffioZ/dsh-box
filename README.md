@@ -96,6 +96,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
   "hide_statusbar": false,
   "hide_balance": false,
   "auto_update_plugins": true,
+  "task_notifications": true,
   "dsh_update_channel": "latest",
   "close_behavior": "tray",
   "launch_behavior": "window",

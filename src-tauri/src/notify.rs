@@ -91,7 +91,7 @@ fn poll_once(app: &AppHandle, watched: &mut Option<WatchedSession>) -> Result<()
     };
     let is_new = entry.notified_seq.is_none_or(|notified| seq > notified);
     entry.notified_seq = Some(seq);
-    if is_new && !crate::main_is_visible(app) {
+    if is_new && config.task_notifications && !crate::main_is_visible(app) {
         crate::logging::log(&format!(
             "notify: 当前会话出现新完成轮次（seq {seq}），发送系统通知"
         ));
@@ -128,8 +128,8 @@ fn show_notification(app: &AppHandle) -> Result<(), String> {
         .title(crate::locale::text("任务完成", "Task complete").to_string())
         .body(
             crate::locale::text(
-                "任务已完成，点击查看结果。",
-                "Task complete. Click to view the result.",
+                "任务已完成，可回到 DSHBox 查看结果。",
+                "Task complete. Return to DSHBox to view the result.",
             )
             .to_string(),
         )

@@ -38,6 +38,8 @@ pub struct Config {
     /// 是否自动升级内置插件清单中的包（默认开启；
     /// 首次预装引导不受此开关影响）。
     pub auto_update_plugins: bool,
+    /// 主窗口不可见时，任务完成后是否发系统通知。
+    pub task_notifications: bool,
     /// dsh 内核更新通道："latest"（稳定推荐，默认）或 "next"（预览尝鲜）。
     pub dsh_update_channel: String,
     /// 主窗口关闭按钮行为：tray（隐藏到托盘）或 quit（退出应用）。
@@ -75,6 +77,7 @@ impl Config {
             hide_statusbar: false,
             hide_balance: false,
             auto_update_plugins: true,
+            task_notifications: true,
             dsh_update_channel: "latest".to_string(),
             close_behavior: "tray".to_string(),
             launch_behavior: "window".to_string(),
@@ -115,6 +118,9 @@ impl Config {
                 }
                 if let Some(upd) = json.get("auto_update_plugins").and_then(|v| v.as_bool()) {
                     cfg.auto_update_plugins = upd;
+                }
+                if let Some(v) = json.get("task_notifications").and_then(|v| v.as_bool()) {
+                    cfg.task_notifications = v;
                 }
                 if let Some(ch) = json.get("dsh_update_channel").and_then(|v| v.as_str()) {
                     if matches!(ch, "latest" | "next") {
@@ -343,5 +349,39 @@ fn portable_root() -> Option<PathBuf> {
         Some(dir.join("data"))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn task_notifications_defaults_on_and_reads_config_override() {
+        // 空目录：无 config.json，默认开启。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-config-default-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let prev = std::env::var("DSH_BOX_ROOT").ok();
+        std::env::set_var("DSH_BOX_ROOT", &root);
+        let default = Config::load();
+        assert!(default.task_notifications);
+
+        // 显式关闭：解析后尊重写入值。
+        std::fs::write(root.join("config.json"), r#"{"task_notifications":false}"#).unwrap();
+        let overridden = Config::load();
+        assert!(!overridden.task_notifications);
+
+        match prev {
+            Some(value) => std::env::set_var("DSH_BOX_ROOT", value),
+            None => std::env::remove_var("DSH_BOX_ROOT"),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }
