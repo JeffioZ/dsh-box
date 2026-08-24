@@ -3,9 +3,6 @@
 use super::package_manager::{ensure_pnpm, run_pnpm_add, PnpmAdd};
 use super::*;
 
-const NPM_REGISTRY: &str = "https://registry.npmjs.org";
-const NPM_MIRROR: &str = "https://registry.npmmirror.com";
-
 fn dsh_installed(config: &Config) -> bool {
     config.dsh_entry().exists()
 }
@@ -31,23 +28,6 @@ pub(crate) fn prepare_dsh_installer(
     reporter: &mut dyn FnMut(&str, &str),
 ) -> Result<PathBuf, String> {
     ensure_pnpm(app, config, node_exe, &npm_cli(node_exe)?, reporter)
-}
-
-fn registries(config: &Config) -> Vec<(&'static str, &'static str)> {
-    match config.download_source.as_str() {
-        "official" => vec![(
-            NPM_REGISTRY,
-            crate::locale::text("npm 官方源", "Official npm registry"),
-        )],
-        "mirror" => vec![(NPM_MIRROR, crate::locale::text("镜像源", "Mirror"))],
-        _ => vec![
-            (
-                NPM_REGISTRY,
-                crate::locale::text("npm 官方源", "Official npm registry"),
-            ),
-            (NPM_MIRROR, crate::locale::text("镜像源", "Mirror")),
-        ],
-    }
 }
 
 fn log_version(version: &str) -> String {

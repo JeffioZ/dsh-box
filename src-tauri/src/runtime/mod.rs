@@ -35,7 +35,10 @@ use crate::{emit_status, emit_status_progress};
 
 const NODEJS_INDEX: &str = "https://nodejs.org/dist/index.json";
 /// npmmirror 国内镜像（阿里开源镜像，302 到 CDN）：官方直连失败时兜底，
-/// 缓解 nodejs.org 在国内下载慢/超时。仅包下载用，校验与 index 仍走官方。
+/// 缓解 nodejs.org 在国内下载慢/超时。包下载与版本索引 index.json 都会
+/// 走镜像；SHASUMS256 校验清单位置随 download_source——mirror 模式同样
+/// 走镜像（完整性锚点为镜像自身，见 node.rs 与 docs/security.md 的说明），
+/// official/auto 始终走官方校验。
 const NODE_MIRROR_BASE: &str = "https://npmmirror.com/mirrors/node";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
 /// npm 包自身的 dist-tags（查询 npm 最新版用于检查更新）。
@@ -43,8 +46,32 @@ const NPM_LATEST: &str = "https://registry.npmjs.org/-/package/npm/dist-tags";
 /// @deepseek-ai/dsh 的完整包元数据（拿全部版本 + 发布时间，用于动态降级）。
 const DSH_PACKAGE_META: &str = "https://registry.npmjs.org/@deepseek-ai%2fdsh";
 
-/// 全局共享 HTTP 客户端：TLS 配置只构建一次（高频查询路径省初始化开销）。
-static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+/// npm registry 官方源与国内镜像（pnpm 引导 / dsh 安装 / npm 升级共用一份，
+/// 避免多处定义漂移）。
+pub(crate) const NPM_REGISTRY: &str = "https://registry.npmjs.org";
+pub(crate) const NPM_MIRROR: &str = "https://registry.npmmirror.com";
+
+/// 按下载源配置给出（registry, 展示名）候选列表：official 仅官方、mirror 仅
+/// 镜像、auto 官方优先镜像兜底。
+pub(crate) fn registries(config: &Config) -> Vec<(&'static str, &'static str)> {
+    match config.download_source.as_str() {
+        "official" => vec![(
+            NPM_REGISTRY,
+            crate::locale::text("npm 官方源", "Official npm registry"),
+        )],
+        "mirror" => vec![(NPM_MIRROR, crate::locale::text("镜像源", "Mirror"))],
+        _ => vec![
+            (
+                NPM_REGISTRY,
+                crate::locale::text("npm 官方源", "Official npm registry"),
+            ),
+            (NPM_MIRROR, crate::locale::text("镜像源", "Mirror")),
+        ],
+    }
+}
+
+/// 版本检查客户端进程内缓存（见 check_client）。
+static CHECK_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
 const MAX_NODE_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn install_cancelled(app: &AppHandle) -> bool {
@@ -55,34 +82,22 @@ fn install_cancelled_error() -> String {
     crate::locale::text("安装已取消。", "Installation cancelled.").to_string()
 }
 
-/// 带超时的 HTTP 客户端（TLS 后端见 Cargo.toml 平台条件依赖：
-/// Windows/macOS 用系统原生实现，Linux 用 rustls）。
-/// ureq 3 将读超时拆分为接收响应与接收响应体两部分，两者均设 90s。
-pub(crate) fn client() -> ureq::Agent {
-    AGENT
+/// 版本检查专用客户端：连接 5s、响应 8s——检查类请求（npm / Node LTS /
+/// GitHub）应当快速失败并显示"暂无法获取版本信息"，而不是拖满 90s
+/// 拖慢整个检查流程（大文件下载仍用 download_client）。
+/// 进程内缓存复用：TLS 配置只构建一次。
+pub(crate) fn check_client() -> ureq::Agent {
+    CHECK_AGENT
         .get_or_init(|| {
             ureq::Agent::config_builder()
                 .tls_config(crate::default_tls_config())
-                .timeout_connect(Some(Duration::from_secs(15)))
-                .timeout_recv_response(Some(Duration::from_secs(90)))
-                .timeout_recv_body(Some(Duration::from_secs(90)))
+                .timeout_connect(Some(Duration::from_secs(5)))
+                .timeout_recv_response(Some(Duration::from_secs(8)))
+                .timeout_recv_body(Some(Duration::from_secs(8)))
                 .build()
                 .new_agent()
         })
         .clone()
-}
-
-/// 版本检查专用客户端：连接 5s、响应 8s——检查类请求（npm / Node LTS /
-/// GitHub）应当快速失败并显示"暂无法获取版本信息"，而不是拖满 90s
-/// 拖慢整个检查流程（大文件下载仍用 download_client）。
-pub(crate) fn check_client() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .tls_config(crate::default_tls_config())
-        .timeout_connect(Some(Duration::from_secs(5)))
-        .timeout_recv_response(Some(Duration::from_secs(8)))
-        .timeout_recv_body(Some(Duration::from_secs(8)))
-        .build()
-        .new_agent()
 }
 
 /// 大文件下载专用客户端：ureq 3 的 timeout_recv_body 是「响应头收完起、

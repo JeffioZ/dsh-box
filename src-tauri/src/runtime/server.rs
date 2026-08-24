@@ -73,22 +73,9 @@ pub(super) fn version_supports_no_open(version: &str) -> bool {
 /// 更早版本不认识该标志会把未知选项当错误导致启动失败，因此必须按
 /// 已装版本判定；无法解析的版本号保守不加（保持旧行为）。
 fn dsh_supports_no_open(config: &Config) -> bool {
-    let pkg = config
-        .dsh_dir()
-        .join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh")
-        .join("package.json");
-    let Ok(text) = std::fs::read_to_string(&pkg) else {
-        return false;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
-    let Some(version) = json.get("version").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    version_supports_no_open(version)
+    installed_dsh_version(config)
+        .as_deref()
+        .is_some_and(version_supports_no_open)
 }
 
 /// 隐藏窗口启动 `dsh web` 服务。保留 Child 供调用方监控早退；只保留 PID

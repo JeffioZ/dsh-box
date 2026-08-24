@@ -6,8 +6,6 @@ use super::*;
 /// 与 dsh 上游 `packageManager` 保持一致。固定版本避免用户 PATH、Corepack
 /// 缓存或全局 pnpm 的差异影响首次安装；该包无依赖、无安装脚本。
 const PNPM_VERSION: &str = "11.7.0";
-const NPM_REGISTRY: &str = "https://registry.npmjs.org";
-const NPM_MIRROR: &str = "https://registry.npmmirror.com";
 
 /// 来自 dsh 上游 pnpm-workspace.yaml 的发布依赖脚本策略。核心运行所需的
 /// node-pty / koffi 与 dsh 自身 helper 明确放行；已确认无必要的脚本明确拒绝；
@@ -61,23 +59,6 @@ fn pnpm_is_ready(config: &Config) -> bool {
         )
         .as_deref()
             == Some(PNPM_VERSION)
-}
-
-fn registries(config: &Config) -> Vec<(&'static str, &'static str)> {
-    match config.download_source.as_str() {
-        "official" => vec![(
-            NPM_REGISTRY,
-            crate::locale::text("npm 官方源", "Official npm registry"),
-        )],
-        "mirror" => vec![(NPM_MIRROR, crate::locale::text("镜像源", "Mirror"))],
-        _ => vec![
-            (
-                NPM_REGISTRY,
-                crate::locale::text("npm 官方源", "Official npm registry"),
-            ),
-            (NPM_MIRROR, crate::locale::text("镜像源", "Mirror")),
-        ],
-    }
 }
 
 /// 安装固定版本 pnpm。这里只让 npm 解析一个无依赖、无 install script 的包，
@@ -350,7 +331,9 @@ fn run_node_tool(
     ))
 }
 
-fn wait_after_kill(child: &mut std::process::Child) {
+/// kill_tree 后等待子进程真正退出：Unix 下不 wait 会留 zombie，
+/// 且立即返回可能与下一轮操作并发争用同一资源。
+pub(super) fn wait_after_kill(child: &mut std::process::Child) {
     let mut waited = Duration::ZERO;
     while child.try_wait().ok().flatten().is_none() && waited < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(200));

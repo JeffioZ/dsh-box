@@ -340,7 +340,8 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
             "The Node.js download URL is invalid",
         )
     })?;
-    let expected_sha256 = node_archive_sha256(&version, official_archive_name)?;
+    let expected_sha256 =
+        node_archive_sha256(&version, official_archive_name, &config.download_source)?;
     let archive_path = config.root.join(archive_name);
     std::fs::create_dir_all(&node_dir).map_err(|e| e.to_string())?;
 
@@ -501,20 +502,7 @@ pub(crate) fn upgrade_portable_npm(
         "",
     );
     let prefix = node_dir.to_string_lossy().into_owned();
-    let registries: &[&str] = match config.download_source.as_str() {
-        "official" => &["https://registry.npmjs.org"],
-        "mirror" => &["https://registry.npmmirror.com"],
-        _ => &[
-            "https://registry.npmjs.org",
-            "https://registry.npmmirror.com",
-        ],
-    };
-    for registry in registries {
-        let source = if registry.contains("npmmirror") {
-            crate::locale::text("镜像源", "Mirror")
-        } else {
-            crate::locale::text("npm 官方源", "Official npm registry")
-        };
+    for (registry, source) in registries(config) {
         emit_status(
             app,
             BootPhase::InstallingNode,
@@ -533,7 +521,7 @@ pub(crate) fn upgrade_portable_npm(
             // 单请求 60s 超时——升级只有 1 个包，60s 足够，挂起时快速失败
             "--fetch-timeout=60000".to_string(),
             "--registry".to_string(),
-            (*registry).to_string(),
+            registry.to_string(),
         ];
         let envs = base_envs(&node_exe, config);
         let mut child =
@@ -556,11 +544,13 @@ pub(crate) fn upgrade_portable_npm(
                 Ok(None) => {
                     if install_cancelled(app) {
                         processes::kill_tree(child.id());
+                        super::package_manager::wait_after_kill(&mut child);
                         return Err(install_cancelled_error());
                     }
                     if std::time::Instant::now() > deadline {
                         // 超时先杀进程树（strict/非 strict 都杀，避免泄漏）
                         processes::kill_tree(child.id());
+                        super::package_manager::wait_after_kill(&mut child);
                         if strict {
                             return Err(crate::locale::text(
                                 "升级 npm 超时（150s）",
@@ -658,9 +648,16 @@ fn node_package(version: &str) -> (String, String, String, bool) {
     }
 }
 
-/// 从 Node.js 官方校验清单中取得目标归档的 SHA-256。
-fn node_archive_sha256(version: &str, archive_name: &str) -> Result<String, String> {
-    let checksums_url = format!("https://nodejs.org/dist/{version}/SHASUMS256.txt");
+/// 从 Node.js 校验清单中取得目标归档的 SHA-256。
+/// 清单来源跟随下载源：mirror 模式完整性锚点为镜像自身（npmmirror，
+/// 与官方校验分属不同信任域）；official/auto 始终用官方清单——auto 的
+/// 镜像只作下载兜底，校验锚点不变。official 仍是默认推荐。
+fn node_archive_sha256(
+    version: &str,
+    archive_name: &str,
+    download_source: &str,
+) -> Result<String, String> {
+    let checksums_url = node_checksums_url(version, download_source);
     let checksums = get_text(&checksums_url).map_err(|e| {
         crate::locale::owned(
             format!("获取 Node.js 校验信息失败：{e}"),
@@ -669,10 +666,18 @@ fn node_archive_sha256(version: &str, archive_name: &str) -> Result<String, Stri
     })?;
     parse_node_sha256(&checksums, archive_name).ok_or_else(|| {
         crate::locale::owned(
-            format!("Node.js 官方校验列表中未找到 {archive_name}"),
-            format!("{archive_name} was not found in the official Node.js checksum list"),
+            format!("Node.js 校验列表中未找到 {archive_name}"),
+            format!("{archive_name} was not found in the Node.js checksum list"),
         )
     })
+}
+
+/// 校验清单地址：镜像模式走 npmmirror 对应路径，其余（official/auto）走官方。
+fn node_checksums_url(version: &str, download_source: &str) -> String {
+    match download_source {
+        "mirror" => format!("{NODE_MIRROR_BASE}/{version}/SHASUMS256.txt"),
+        _ => format!("https://nodejs.org/dist/{version}/SHASUMS256.txt"),
+    }
 }
 
 pub(super) fn parse_node_sha256(checksums: &str, archive_name: &str) -> Option<String> {
@@ -821,5 +826,26 @@ mod npm_cli_tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod checksums_url_tests {
+    use super::node_checksums_url;
+
+    #[test]
+    fn checksums_url_follows_the_download_source() {
+        // mirror：清单与归档同一信任域（镜像自身）
+        assert_eq!(
+            node_checksums_url("v24.1.0", "mirror"),
+            "https://npmmirror.com/mirrors/node/v24.1.0/SHASUMS256.txt"
+        );
+        // official / auto：始终锚定官方清单
+        for source in ["official", "auto"] {
+            assert_eq!(
+                node_checksums_url("v24.1.0", source),
+                "https://nodejs.org/dist/v24.1.0/SHASUMS256.txt"
+            );
+        }
     }
 }
