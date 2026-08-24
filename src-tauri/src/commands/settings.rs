@@ -69,13 +69,7 @@ pub fn set_deepseek_api_key(
     let config = app.state::<AppState>().config();
     match api_key.map(|value| value.trim().to_string()) {
         Some(value) if !value.is_empty() => {
-            if value.len() > 4096 || value.chars().any(char::is_control) {
-                return Err(crate::locale::text(
-                    "API Key 含有无效字符或长度异常。",
-                    "The API key contains invalid characters or is too long.",
-                )
-                .into());
-            }
+            crate::onboarding::validate_api_key(&value)?;
             crate::credentials::save(&config, "DEEPSEEK_API_KEY", &value)?;
             crate::logging::log("settings: DeepSeek API Key 已更新");
         }
@@ -186,5 +180,8 @@ pub fn set_dsh_channel(
     if state.config().dsh_update_channel != channel {
         state.set_dsh_update_channel(&channel)?;
     }
-    Ok(settings_state(&app))
+    // 与其他设置命令一致：持久化后广播，其他内建窗口据此刷新
+    let settings = settings_state(&app);
+    let _ = app.emit("settings-changed", &settings);
+    Ok(settings)
 }

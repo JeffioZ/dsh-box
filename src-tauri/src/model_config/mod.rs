@@ -133,8 +133,10 @@ fn extract_section_text(text: &str) -> String {
             }
             continue;
         }
-        // 已进入段：遇到下一个顶层键即段结束
-        if !line.starts_with(' ') && !line.trim().is_empty() {
+        // 已进入段：遇到下一个顶层键即段结束。列 0 注释行不是顶层键，
+        // 照常保留在段内（模板可能把说明注释插在段中间）。
+        let is_comment = line.trim_start().starts_with('#');
+        if !line.starts_with(' ') && !line.trim().is_empty() && !is_comment {
             break;
         }
         out.push_str(line);
@@ -187,33 +189,88 @@ const BUILTIN_ROUTES: &[&str] = &[
     "zai-coding-cn",
 ];
 
+/// 是否为 `providers:` 键行（允许行内注释；content 已去行首空白）。
+fn is_providers_key(content: &str) -> bool {
+    content.strip_prefix("providers:").is_some_and(|rest| {
+        let rest = rest.trim_start();
+        rest.is_empty() || rest.starts_with('#')
+    })
+}
+
 /// 从 llm-pi-ai 段文本中移除官方目录路由，仅保留自定义路由。
 /// 无自定义路由时返回空字符串（调用方据此返回 None）。
+/// 不假设缩进宽度：providers 块取缩进最小的 `providers:` 行，路由键是
+/// 块内第一个更深层级的首层键；缩进的注释行只是注释，不会被当成路由键。
 fn filter_builtin_routes(section: &str) -> String {
+    let line_indent = |line: &str| line.len() - line.trim_start().len();
+    let providers_indent = section
+        .lines()
+        .filter(|line| is_providers_key(line.trim_start()))
+        .map(line_indent)
+        .min();
+    // 没有 providers 块就没有可导出的路由（与「全是官方路由」同等处理）
+    let Some(providers_indent) = providers_indent else {
+        return String::new();
+    };
+    // 路由键缩进 = providers 块内首个更深的非空非注释行（空行与注释不算键）
+    let mut route_indent = None;
+    let mut in_providers = false;
+    for line in section.lines() {
+        let content = line.trim_start();
+        if !in_providers {
+            if is_providers_key(content) && line_indent(line) == providers_indent {
+                in_providers = true;
+            }
+            continue;
+        }
+        if content.is_empty() || content.starts_with('#') {
+            continue;
+        }
+        if line_indent(line) <= providers_indent {
+            break; // providers 块结束，没有任何路由键
+        }
+        route_indent = Some(line_indent(line));
+        break;
+    }
+    let Some(route_indent) = route_indent else {
+        return String::new();
+    };
     let mut out = String::new();
+    let mut in_providers = false;
     // 当前 provider 是否为自定义路由（决定其整块去留）
     let mut current_is_custom = false;
     // 是否保留过至少一个自定义 provider（否则整段视为空）
     let mut kept_any = false;
+    // 是否已遇到首个路由键（之前的块级前言——注释/空行——总是保留）
+    let mut seen_any_route = false;
     for line in section.lines() {
-        let indent = line.len() - line.trim_start().len();
+        let indent = line_indent(line);
         let content = line.trim_start();
-        // llm-pi-ai:（indent 0）与 providers:（indent 2）等结构行总是保留
-        if indent == 0 {
+        let is_blank_or_comment = content.is_empty() || content.starts_with('#');
+        if !in_providers {
+            if is_providers_key(content) && indent == providers_indent {
+                in_providers = true;
+            }
             out.push_str(line);
             out.push('\n');
             continue;
         }
-        if indent == 2 {
-            // providers: 或其他段级字段，始终保留
+        if !is_blank_or_comment && indent <= providers_indent {
+            // providers 块结束：段级字段等其他内容总是保留
+            in_providers = false;
             out.push_str(line);
             out.push('\n');
             continue;
         }
-        if indent == 4 {
-            // provider 路由键
-            let route = content.trim_end().trim_end_matches(':');
+        if !is_blank_or_comment && indent == route_indent {
+            // provider 路由键：剥离尾部冒号（及冒号前空白）与首尾引号后匹配
+            let route = content
+                .trim_end()
+                .trim_end_matches(':')
+                .trim_end()
+                .trim_matches(['"', '\'']);
             current_is_custom = !BUILTIN_ROUTES.contains(&route);
+            seen_any_route = true;
             if current_is_custom {
                 kept_any = true;
                 out.push_str(line);
@@ -221,8 +278,9 @@ fn filter_builtin_routes(section: &str) -> String {
             }
             continue;
         }
-        // provider 内字段（indent >= 6）或更深的嵌套，跟随当前 provider 的去留
-        if current_is_custom {
+        // 块内前言（首个路由键之前）总是保留；其余空行/注释/更深层级内容
+        // 跟随当前 provider 的去留
+        if !seen_any_route || current_is_custom {
             out.push_str(line);
             out.push('\n');
         }
@@ -263,13 +321,15 @@ pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String>
                 crate::locale::text("API Key 不能为空。", "API key cannot be empty.").into(),
             );
         }
-        if !valid_env_name(name) || key.chars().any(char::is_control) {
+        if !valid_env_name(name) {
             return Err(crate::locale::text(
-                "凭据名称或 API Key 含有不允许的字符。",
-                "The credential name or API key contains invalid characters.",
+                "凭据名称含有不允许的字符。",
+                "The credential name contains invalid characters.",
             )
             .into());
         }
+        // 与设置页、首次引导同一口径（控制字符 + 4096 上限）
+        crate::onboarding::validate_api_key(key.trim())?;
         if provided.contains(name) {
             return Err(crate::locale::text(
                 "同一凭据不能重复提供。",
@@ -295,9 +355,7 @@ pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String>
     // 4) 整体替换或追加 llm-pi-ai 段；读—改—写在同一锁内完成。
     let settings_path = config.dsh_home().join("settings.yaml");
     let normalized = normalize_section(&payload.yaml)?;
-    app_state::update_text_file(&settings_path, |text| {
-        Ok(upsert_section(&text, &normalized))
-    })?;
+    app_state::update_text_file(&settings_path, |text| upsert_section(&text, &normalized))?;
 
     crate::logging::log(&format!(
         "model-import: 已导入 {} 个提供方路由（写 settings.yaml + credentials.yaml）",
@@ -314,8 +372,9 @@ fn settings_has_section(text: &str) -> bool {
 }
 
 /// 行级替换（或追加）一个顶层段。`new_section` 必须是完整顶层段（含键行）。
-/// 只替换同名顶层段，绝不触碰其他顶层段。
-fn upsert_section(text: &str, new_section: &str) -> String {
+/// 只替换同名顶层段，绝不触碰其他顶层段。原文件已含多个同名顶层段时返回
+/// 错误：重复键的 YAML 语义未定义，静默选边会让结果取决于解析器。
+fn upsert_section(text: &str, new_section: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut replaced = false;
     let section = format!("{SECTION_KEY}:");
@@ -323,9 +382,18 @@ fn upsert_section(text: &str, new_section: &str) -> String {
     while let Some(line) = lines.next() {
         let is_top = !line.starts_with(' ') && !line.trim().is_empty();
         if is_top && line.trim_end() == section {
-            // 跳过整个旧 llm-pi-ai 段（直到下一个顶层键）
+            if replaced {
+                return Err(crate::locale::text(
+                    "settings.yaml 中存在重复的 llm-pi-ai 段，请先手动修复后再导入。",
+                    "settings.yaml contains duplicate llm-pi-ai sections; fix the file manually before importing.",
+                )
+                .into());
+            }
+            // 跳过整个旧 llm-pi-ai 段（直到下一个顶层键；列 0 注释行属于
+            // 段内容，一并跳过，否则其后的旧段内容会残留为孤儿行）
             while let Some(&next) = lines.peek() {
-                if !next.starts_with(' ') && !next.trim().is_empty() {
+                let next_is_comment = next.trim_start().starts_with('#');
+                if !next.starts_with(' ') && !next.trim().is_empty() && !next_is_comment {
                     break;
                 }
                 lines.next();
@@ -352,7 +420,7 @@ fn upsert_section(text: &str, new_section: &str) -> String {
             out.push('\n');
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -461,7 +529,7 @@ llm-pi-ai:
     fn upsert_replaces_existing_section() {
         let old = "locale:\n  preference: zh\nllm-pi-ai:\n  providers:\n    a:\n      models:\n        - id: x\nui-theme:\n  preference: dark\n";
         let new = "llm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
-        let merged = upsert_section(old, new);
+        let merged = upsert_section(old, new).unwrap();
         assert!(merged.contains("locale:\n  preference: zh"));
         assert!(merged.contains("ui-theme:\n  preference: dark"));
         // 旧 llm-pi-ai 段被替换
@@ -475,7 +543,7 @@ llm-pi-ai:
     fn upsert_appends_when_missing() {
         let old = "locale:\n  preference: zh\n";
         let new = "llm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
-        let merged = upsert_section(old, new);
+        let merged = upsert_section(old, new).unwrap();
         assert!(merged.contains("locale:\n  preference: zh"));
         assert!(merged.contains("id: y"));
     }
@@ -608,5 +676,77 @@ llm-pi-ai:
         let out = filter_builtin_routes(section);
         // 全部是官方路由：应返回空字符串（而非只剩结构行）
         assert!(out.is_empty(), "expected empty, got: {out}");
+    }
+
+    #[test]
+    fn extract_section_keeps_content_after_column_zero_comment() {
+        // 段中间的列 0 注释是段内容，不是下一个顶层键
+        let text = "llm-pi-ai:\n  providers:\n    gw:\n      models:\n        - id: x\n# 段中间的说明\n  extra: keep\nlocale:\n  preference: zh\n";
+        let out = extract_section_text(text);
+        assert!(out.contains("# 段中间的说明"));
+        assert!(out.contains("extra: keep"));
+        assert!(!out.contains("locale:"));
+    }
+
+    #[test]
+    fn extract_section_keeps_leading_column_zero_comment() {
+        // 段首的列 0 注释同样属于段内容，不会让段提前结束而丢成空段
+        let text =
+            "llm-pi-ai:\n# 模板说明\n  providers:\n    gw:\n      models:\n        - id: x\n";
+        let out = extract_section_text(text);
+        assert!(out.contains("# 模板说明"));
+        assert!(out.contains("providers:"));
+        assert!(out.contains("id: x"));
+    }
+
+    #[test]
+    fn upsert_rejects_duplicate_top_level_sections() {
+        // 原文件已含多个同名顶层段：行为明确为报错，绝不重复插入
+        let old = "llm-pi-ai:\n  providers:\n    a:\n      models:\n        - id: x\nllm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
+        let new = "llm-pi-ai:\n  providers:\n    c:\n      models:\n        - id: z\n";
+        assert!(upsert_section(old, new).is_err());
+    }
+
+    #[test]
+    fn upsert_skips_column_zero_comments_inside_old_section() {
+        // 旧段内的列 0 注释及其后的旧段内容都属于旧段，不得残留为孤儿行
+        let old = "llm-pi-ai:\n  providers:\n    a:\n      models:\n        - id: x\n# 旧段内的说明\n  stale: drop\nlocale:\n  preference: zh\n";
+        let new = "llm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
+        let merged = upsert_section(old, new).unwrap();
+        assert!(!merged.contains("# 旧段内的说明"));
+        assert!(!merged.contains("stale: drop"));
+        assert!(merged.contains("id: y"));
+        assert!(merged.contains("locale:\n  preference: zh"));
+        assert_eq!(merged.matches("llm-pi-ai:").count(), 1);
+    }
+
+    #[test]
+    fn filter_handles_four_space_indentation() {
+        let section = "llm-pi-ai:\n    providers:\n        openai:\n            apiKeyEnv: OPENAI_API_KEY\n        acme-gw:\n            models:\n                - id: x\n";
+        let out = filter_builtin_routes(section);
+        assert!(!out.contains("openai:"));
+        assert!(out.contains("acme-gw:"));
+        assert!(out.contains("id: x"));
+        assert!(out.contains("    providers:"));
+    }
+
+    #[test]
+    fn filter_ignores_indented_comments_as_route_keys() {
+        // 缩进的注释行不是路由键；首个路由键之前的块级注释照常保留
+        let section = "llm-pi-ai:\n  providers:\n    # 网关说明\n    acme-gw:\n      models:\n        - id: x\n";
+        let out = filter_builtin_routes(section);
+        assert!(out.contains("# 网关说明"));
+        assert!(out.contains("acme-gw:"));
+        assert!(out.contains("id: x"));
+    }
+
+    #[test]
+    fn filter_matches_quoted_route_keys() {
+        // 路由键匹配前剥离首尾引号与尾部冒号空白
+        let section = "llm-pi-ai:\n  providers:\n    \"openai\":\n      apiKeyEnv: K\n    'acme-gw':\n      models:\n        - id: x\n";
+        let out = filter_builtin_routes(section);
+        assert!(!out.contains("openai"));
+        assert!(out.contains("acme-gw"));
+        assert!(out.contains("id: x"));
     }
 }

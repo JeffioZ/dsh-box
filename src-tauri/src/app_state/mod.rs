@@ -8,7 +8,7 @@ pub use config::Config;
 #[cfg(test)]
 use managed_file::merge_section_field;
 pub(crate) use managed_file::{atomic_write, update_text_file};
-pub(crate) use store::{load_state_value, save_config_value, save_state_value};
+pub(crate) use store::{load_state_value, remove_state_value, save_config_value, save_state_value};
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -333,8 +333,15 @@ impl AppState {
 
         let (retry_tx, retry_rx) = std::sync::mpsc::channel::<()>();
         let (service_choice_tx, service_choice_rx) = std::sync::mpsc::channel::<ServiceChoice>();
+        // 隐式单例假设：new() 每次都会覆写全局 RETRY_RX。进程内只应创建
+        // 一个 AppState（单实例应用成立）；单测并发创建多个 AppState 时，
+        // 后建者会覆盖先建者的接收端，依赖 RETRY_RX 的测试需注意。
         *RETRY_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(retry_rx);
         let config = Config::load();
+        // 清理上次进程中断可能残留的原子写临时文件（仅匹配 `.dshbox-*.tmp`
+        // 命名，dsh 自有文件不受影响）；配置目录与 dsh 主目录都有写操作。
+        managed_file::cleanup_stale_temp_files(&config.root);
+        managed_file::cleanup_stale_temp_files(config.dsh_home());
         let language_override = std::env::var("DSHD_LANG").ok();
         // 语言解析优先级：DSHD_LANG 环境变量 > dsh settings.yaml（locale.preference）
         // > config.json 的 language > 系统界面语言。dsh 偏好放在 config 之前，
@@ -636,7 +643,9 @@ impl AppState {
         };
         // 缓存缺失时即时检测一次：启动页首帧就显示完整的版本信息
         // （Node 版本由 boot 线程稍后检测，直接等会导致信息出现太晚、
-        // 启动快时刚显示就随页面导航消失）
+        // 启动快时刚显示就随页面导航消失）。node/npm 版本仅检测成功后才
+        // 写入缓存，失败不缓存——下次 snapshot 会重新检测；dsh 版本不缓存，
+        // 每次读 package.json，保证安装/更新后立即反映。
         let node_version = if external_service.is_some() {
             None
         } else if node_version.is_some() {
@@ -1095,6 +1104,36 @@ mod tests {
         let source = "locale:\n  preference: zh\n  preference: en\n";
         let merged = merge_section_field(source, "locale", "preference", "zh");
         assert_eq!(merged.matches("preference:").count(), 1);
+    }
+
+    #[test]
+    fn merge_section_field_tolerates_bom_on_section_header() {
+        // 文件首行段头带 BOM 时仍应命中，而不是追加重复段
+        let source = "\u{feff}locale:\n  preference: zh\n";
+        let merged = merge_section_field(source, "locale", "preference", "en");
+        assert!(merged.contains("preference: en"));
+        assert_eq!(merged.matches("locale:").count(), 1);
+    }
+
+    #[test]
+    fn cleanup_removes_only_dshbox_temp_files() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-cleanup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let stale = root.join(".settings.yaml.dshbox-1-2.tmp");
+        let keep = root.join("settings.yaml");
+        std::fs::write(&stale, "partial").unwrap();
+        std::fs::write(&keep, "locale:\n").unwrap();
+        super::managed_file::cleanup_stale_temp_files(&root);
+        assert!(!stale.exists());
+        assert!(keep.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn sample_prompt(kind: &str) -> crate::control_center::UpdatePrompt {

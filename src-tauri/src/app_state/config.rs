@@ -25,7 +25,7 @@ pub struct Config {
     pub dsh_home: PathBuf,
     /// DeepSeek API 基地址。
     pub api_base: String,
-    /// Desktop shell UI language (zh-CN / en); None follows the OS.
+    /// 桌面外壳界面语言（zh-CN / en）；None 跟随系统。
     pub ui_language: Option<String>,
     /// 隐藏 dsh 对话中的工具调用卡片（仅保留文本消息与最终输出）。
     pub hide_tool_calls: bool,
@@ -52,11 +52,15 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Config {
+        // 空字符串按未设置处理（与空环境变量的常见惯例一致）
         let root = std::env::var("DSH_BOX_ROOT")
+            .ok()
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|_| portable_root().unwrap_or_else(default_app_root));
+            .unwrap_or_else(|| portable_root().unwrap_or_else(default_app_root));
         let dsh_home = std::env::var("DSH_HOME")
             .ok()
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 dirs::home_dir()
@@ -142,6 +146,11 @@ impl Config {
                         cfg.download_source = value.to_string();
                     }
                 }
+            } else {
+                crate::logging::log(&format!(
+                    "config: config.json 解析失败，按默认值运行（{}）",
+                    cfg_file.display()
+                ));
             }
         }
         // 环境变量永远覆盖 config.json。

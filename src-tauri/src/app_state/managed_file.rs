@@ -72,8 +72,40 @@ fn atomic_write_unlocked(path: &Path, text: &str) -> Result<(), String> {
         let _ = std::fs::remove_file(&temp);
         return Err(e.to_string());
     }
+    fsync_parent_dir(path);
     Ok(())
 }
+
+/// 清理目录中崩溃残留的原子写临时文件（`.<name>.dshbox-*.tmp`）。
+/// 正常路径写完即删，只有进程中断会残留；启动时扫一次即可。
+pub(crate) fn cleanup_stale_temp_files(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if name.starts_with('.') && name.contains(".dshbox-") && name.ends_with(".tmp") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 目录项变更（rename/replace）后 fsync 父目录，保证崩溃后目录项本身
+/// 落盘；best-effort，失败不影响已完成的写入。Windows 无对应语义，跳过。
+#[cfg(unix)]
+fn fsync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn fsync_parent_dir(_path: &Path) {}
 
 /// 行级合并一个顶层段落里的字段；只改目标字段，其他 YAML 内容原样保留。
 pub(super) fn merge_section_field(text: &str, section: &str, field: &str, value: &str) -> String {
@@ -84,7 +116,10 @@ pub(super) fn merge_section_field(text: &str, section: &str, field: &str, value:
     let mut saw_section = false;
     let mut wrote = false;
     for line in text.lines() {
-        if !line.starts_with(' ') && line.trim_end() == section_header {
+        // 容忍 UTF-8 BOM：文件首行的段头可能带 BOM（trim 不去 \u{feff}），
+        // 失配会追加重复段
+        let head = line.strip_prefix('\u{feff}').unwrap_or(line);
+        if !head.starts_with(' ') && head.trim_end() == section_header {
             in_section = true;
             saw_section = true;
             out.push_str(line);
