@@ -86,6 +86,9 @@ body.window-inactive .sb-chip { opacity: .55; }
 .sb-chip .dot.warn { background: var(--dshd-warning); }
 .sb-chip .dot.err { background: var(--dshd-error); }
 .sb-chip .dot.neutral { background: var(--dshd-text-dim); }
+/* 余额预警文字色：remaining/total 阈值驱动（悬停另有文字说明，不只靠颜色） */
+.sb-chip.low-warning #balance-text { color: var(--dshd-warning); }
+.sb-chip.low-critical #balance-text { color: var(--dshd-error-text); }
 
 /* 浅色主题覆盖 */
 @media (prefers-color-scheme: light) {

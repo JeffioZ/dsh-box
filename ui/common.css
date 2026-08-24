@@ -55,13 +55,10 @@
   --dshd-shadow-lv3: 0 0 1px rgba(0, 0, 0, .2),
     0 0 4px rgba(0, 0, 0, .02), 0 12px 32px rgba(0, 0, 0, .08);
 
-  /* 字号层级（正文基准 13px，与 dsh 界面一致） */
+  /* 字号层级（正文基准 14px，与 dsh 界面一致） */
   --dshd-fs-xs: 11px;
   --dshd-fs-sm: 12px;
   --dshd-fs-base: 13px;
-  --dshd-fs-md: 14px;
-  --dshd-fs-lg: 20px;
-  --dshd-fs-xl: 22px;
 
   /* 圆角层级（dsh 设计系统：紧凑菜单 7 / 条目 10 / 菜单面板 12） */
   --dshd-r-sm: 7px;
@@ -74,7 +71,6 @@
   --dshd-sp-1: 4px;
   --dshd-sp-2: 8px;
   --dshd-sp-3: 12px;
-  --dshd-sp-4: 16px;
   --dshd-sp-5: 20px;
 
   /* 动效 token：进入减速(ease-out)、离开加速、旋转/进度 linear；
@@ -295,6 +291,10 @@
 }
 
 .dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
+
+/* 跨页面共享：显隐工具类与加载旋转关键帧（此前各页面各自重复定义） */
+.hidden { display: none !important; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* 弹窗按钮 */
 .dshd-btn {
