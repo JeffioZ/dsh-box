@@ -4,16 +4,26 @@
 //! - Linux：~/.config/autostart/dsh-box.desktop。
 
 /// 可执行文件路径（不带引号，供 plist 等按参数拆分使用）。
-fn exe_path() -> String {
+/// 取不到时返回错误：把空串写进 Run 键/plist/desktop 会留下指向空路径的
+/// 自启动项（静默坏配置），不如直接失败并告知。
+fn exe_path() -> Result<String, String> {
     std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .map_err(|e| {
+            format!(
+                "{}: {e}",
+                crate::locale::text(
+                    "无法确定当前程序路径",
+                    "Could not determine the current executable path"
+                )
+            )
+        })
 }
 
 /// 自启动命令（带 --minimized 静默进托盘）。
 #[cfg(windows)]
-fn app_command() -> String {
-    format!("\"{}\" --minimized", exe_path())
+fn app_command() -> Result<String, String> {
+    Ok(format!("\"{}\" --minimized", exe_path()?))
 }
 
 pub fn is_enabled() -> bool {
@@ -92,7 +102,7 @@ mod imp {
         }
         let name = to_wide(VALUE_NAME);
         let result = if enabled {
-            let cmd = to_wide(&app_command());
+            let cmd = to_wide(&app_command()?);
             unsafe {
                 RegSetValueExW(
                     hkey,
@@ -183,7 +193,7 @@ mod imp {
 </plist>
 "#,
             label = LABEL,
-            exe = xml_escape(&exe_path()),
+            exe = xml_escape(&exe_path()?),
         );
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| {
@@ -252,7 +262,7 @@ mod imp {
                 )),
             };
         }
-        let exec = format!("{} --minimized", desktop_exec_arg(&exe_path()));
+        let exec = format!("{} --minimized", desktop_exec_arg(&exe_path()?));
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
@@ -279,5 +289,16 @@ mod imp {
                 crate::locale::text("写入 .desktop 失败", "Failed to write the .desktop file")
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exe_path;
+
+    #[test]
+    fn exe_path_resolves_to_a_non_empty_path() {
+        // 约定：成功时绝不返回空串（空串写进自启动项是静默坏配置）
+        assert!(!exe_path().unwrap().is_empty());
     }
 }

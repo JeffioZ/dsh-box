@@ -384,7 +384,13 @@ fn pick_tray_image(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
         "16"
     };
     crate::logging::log(&format!("托盘: 图标 {size}px（scale={scale:.2}）"));
-    tauri::image::Image::from_bytes(bytes).ok()
+    match tauri::image::Image::from_bytes(bytes) {
+        Ok(image) => Some(image),
+        Err(e) => {
+            crate::logging::log(&format!("托盘: 图标 {size}px 解码失败：{e}"));
+            None
+        }
+    }
 }
 
 fn open_browser(app: &AppHandle) {
@@ -415,13 +421,22 @@ fn open_browser(app: &AppHandle) {
     {
         let mut cmd = std::process::Command::new("open");
         cmd.arg(&url);
-        let _ = cmd.spawn();
+        // spawn 后不 wait，子进程退出会留 zombie，起线程回收
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
     #[cfg(target_os = "linux")]
     {
         let mut cmd = std::process::Command::new("xdg-open");
         cmd.arg(&url);
-        let _ = cmd.spawn();
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
 }
 
@@ -478,6 +493,25 @@ fn restart_from_tray(app: &AppHandle) {
     }
     let handle = app.clone();
     std::thread::spawn(move || {
+        // 快速双击时两次点击都可能通过上面的检查：进入重启前复查，
+        // 已有启动/更新流程在进行则放弃本次（前一次点击会继续执行）。
+        // Starting 一并视为忙碌：restart_service_locked 一开始就置该相位，
+        // 不含它复查挡不住紧跟着的第二次重启。
+        let state = handle.state::<AppState>();
+        if state.is_updating()
+            || matches!(
+                state.phase(),
+                crate::app_state::BootPhase::Starting
+                    | crate::app_state::BootPhase::SwitchingService
+                    | crate::app_state::BootPhase::ServiceChoice
+                    | crate::app_state::BootPhase::InstallingNode
+                    | crate::app_state::BootPhase::InstallingDsh
+                    | crate::app_state::BootPhase::StartingServer
+            )
+        {
+            crate::logging::log("托盘: 已有启动/更新流程在进行，忽略本次重启请求");
+            return;
+        }
         // 重启本身在内部处理成功/失败状态（失败会进错误页）；失败额外弹窗告知原因。
         if let Err(e) = crate::updater::restart_service(&handle) {
             use tauri_plugin_dialog::MessageDialogKind;
@@ -497,8 +531,13 @@ fn restart_from_tray(app: &AppHandle) {
 fn quit(app: &AppHandle) {
     let state = app.state::<AppState>();
     state.set_quitting(true);
-    dsh::shutdown(app);
-    // 给进程树一点收尾时间
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    app.exit(0);
+    // 停服与收尾等待挪到后台线程：macOS/Linux 下本函数在托盘事件（主线程）
+    // 里执行，shutdown 的进程 wait 与 sleep 会阻塞事件循环
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        dsh::shutdown(&handle);
+        // 给进程树一点收尾时间
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        handle.exit(0);
+    });
 }

@@ -32,9 +32,21 @@ static OVERLAY_HEIGHT: AtomicU64 = AtomicU64::new(TITLEBAR_HEIGHT as u64);
 /// 标题栏页面初始化完成回报标记：启动自愈看门狗据此判断页面是否加载成功。
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// 状态栏页面就绪标记。状态栏没有 titlebar_ready 那样的页面侧回报命令
+/// （自愈保持纯 Rust 实现，不改 ui/statusbar.js），由 init_statusbar 的
+/// on_page_load(Finished) 事件置位。
+static STATUSBAR_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 页面回报初始化完成（titlebar_ready 命令）。
 pub fn mark_ready() {
     READY.store(true, Ordering::SeqCst);
+}
+
+/// 复位就绪标记：reload 前调用，要求重载后的页面重新完成就绪握手。
+/// READY 一旦置位永不复位的话，子 webview 崩溃/重载后的再次加载失败
+/// 对看门狗不可见，自愈通道就此失效。
+fn reset_ready() {
+    READY.store(false, Ordering::SeqCst);
 }
 
 /// 强制子 webview 重建合成层：间歇性「标题栏渲染空白」的自动修复。
@@ -79,13 +91,41 @@ pub fn is_ready() -> bool {
     READY.load(Ordering::SeqCst)
 }
 
+/// 状态栏页面是否已就绪（启动自愈看门狗据此判断页面是否加载成功）。
+pub fn statusbar_is_ready() -> bool {
+    STATUSBAR_READY.load(Ordering::SeqCst)
+}
+
+/// 状态栏页面加载完成（on_page_load Finished 事件）。
+fn mark_statusbar_ready() {
+    STATUSBAR_READY.store(true, Ordering::SeqCst);
+}
+
+/// 复位状态栏就绪标记：语义同 reset_ready。
+fn reset_statusbar_ready() {
+    STATUSBAR_READY.store(false, Ordering::SeqCst);
+}
+
 /// 重新加载标题栏页面（自愈：首次加载失败时重试）。
 pub fn reload(app: &AppHandle) {
+    reset_ready();
+    reload_child(app, TITLEBAR_LABEL, "titlebar.html");
+}
+
+/// 重新加载状态栏页面（自愈：看门狗检测到页面未就绪时重试一次）。
+pub fn reload_statusbar(app: &AppHandle) {
+    reset_statusbar_ready();
+    reload_child(app, STATUSBAR_LABEL, "statusbar.html");
+}
+
+/// 重新加载指定子 webview 的页面。调用方须先复位对应就绪标记，
+/// 使本次重载重新走就绪握手。
+fn reload_child(app: &AppHandle, label: &str, page: &str) {
     let Some(window) = app.get_window(MAIN_WINDOW) else {
         return;
     };
     for wv in window.webviews() {
-        if wv.label() != TITLEBAR_LABEL {
+        if wv.label() != label {
             continue;
         }
         // 优先重试当前 URL（加载失败时 URL 通常仍是目标地址）；
@@ -100,10 +140,10 @@ pub fn reload(app: &AppHandle) {
             }
             None => {
                 #[cfg(windows)]
-                let fallback = "http://tauri.localhost/titlebar.html";
+                let fallback = format!("http://tauri.localhost/{page}");
                 #[cfg(not(windows))]
-                let fallback = "tauri://localhost/titlebar.html";
-                if let Ok(u) = url::Url::parse(fallback) {
+                let fallback = format!("tauri://localhost/{page}");
+                if let Ok(u) = url::Url::parse(&fallback) {
                     let _ = wv.navigate(u);
                 }
             }
@@ -138,6 +178,14 @@ pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
         // 首次渲染滞后（loading 界面先出、状态栏后出的跳跃感）
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .initialization_script(crate::locale::init_script())
+        // 状态栏没有页面侧就绪回报命令（区别于标题栏的 titlebar_ready，
+        // 不改 ui/statusbar.js）：以页面加载完成事件作为就绪信号，
+        // 供 bootstrap 的一次性自愈看门狗判断
+        .on_page_load(|_, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                mark_statusbar_ready();
+            }
+        })
         .on_navigation(move |url| {
             let allowed =
                 crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
@@ -361,5 +409,28 @@ mod tests {
         assert_eq!(layout.status_height, 0);
         assert_eq!(layout.main_height, 521);
         assert_eq!(layout.status_y, 575);
+    }
+
+    #[test]
+    fn titlebar_ready_rearms_after_reset() {
+        // reload 路径复位后，页面重新完成就绪握手必须能再次置位
+        mark_ready();
+        assert!(is_ready());
+        reset_ready();
+        assert!(!is_ready());
+        mark_ready();
+        assert!(is_ready());
+        reset_ready();
+    }
+
+    #[test]
+    fn statusbar_ready_rearms_after_reset() {
+        mark_statusbar_ready();
+        assert!(statusbar_is_ready());
+        reset_statusbar_ready();
+        assert!(!statusbar_is_ready());
+        mark_statusbar_ready();
+        assert!(statusbar_is_ready());
+        reset_statusbar_ready();
     }
 }

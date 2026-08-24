@@ -107,6 +107,53 @@ fn msgbox(text: &str, title: &str, style: u32) -> i32 {
     unsafe { MessageBoxW(std::ptr::null_mut(), t.as_ptr(), cap.as_ptr(), style) }
 }
 
+/// 安装器退出后删除临时安装器：进程句柄释放略有滞后，首次删除失败时
+/// 短延迟重试一次；仍失败记日志（残留由系统临时目录清理兜底，不静默）。
+fn remove_installer(path: &std::path::Path) {
+    if std::fs::remove_file(path).is_ok() {
+        return;
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    if let Err(e) = std::fs::remove_file(path) {
+        log_line(&format!(
+            "删除安装器临时文件失败（已重试一次）：{}：{e}",
+            path.display()
+        ));
+    }
+}
+
+/// 追加一行到应用日志（dshbox.log）。本模块在 logging 初始化之前运行，
+/// 只能自行解析日志目录（与 Config::load 的根目录规则保持一致：
+/// DSH_BOX_ROOT > exe 旁 portable.txt 便携标记 > 默认数据目录）。
+fn log_line(msg: &str) {
+    let root = std::env::var("DSH_BOX_ROOT")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| {
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?;
+            dir.join("portable.txt").is_file().then(|| dir.join("data"))
+        })
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .or_else(dirs::home_dir)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("DSHBox")
+        });
+    let path = root.join("logs").join("dshbox.log");
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "webview2: {msg}");
+    }
+}
+
 const MAX_BOOTSTRAPPER_BYTES: u64 = 32 * 1024 * 1024;
 
 /// 下载 Evergreen 引导安装器（微软官方链接）。
@@ -191,26 +238,24 @@ fn download_bootstrapper(path: &std::path::Path) -> Result<(), String> {
 /// 确保 WebView2 可用；缺失或版本过旧时下载官方引导安装器安装/修复。
 /// 返回 false 表示未就绪（应退出）。
 pub fn ensure_webview2() -> bool {
-    match webview2_version() {
-        Some(v) if !version_too_old(&v) => {
-            return true; // 已安装且版本合格
-        }
-        _ => {}
+    // 单次执行内只查一次注册表并复用结果（此前同一检测重复读注册表多次）
+    let detected = webview2_version();
+    if detected.as_deref().is_some_and(|v| !version_too_old(v)) {
+        return true; // 已安装且版本合格
     }
-    let too_old = webview2_version().is_some();
+    let too_old = detected.is_some();
     // 自启动（--minimized）场景无人可问，直接静默安装（仍会弹 UAC）。
     let silent = std::env::args().any(|a| a == "--minimized");
     if !silent {
         let prompt = if too_old {
+            let version = detected.clone().unwrap_or_default();
             if locale::is_chinese() {
                 format!(
-                    "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机检测到的 WebView2 版本过旧（{}），是否立即更新？\n（需联网下载安装组件，并弹出管理员授权提示，请选择“是”）",
-                    webview2_version().unwrap_or_default()
+                    "{APP_TITLE} 需要 Microsoft Edge WebView2 运行时才能显示界面。\n\n本机检测到的 WebView2 版本过旧（{version}），是否立即更新？\n（需联网下载安装组件，并弹出管理员授权提示，请选择“是”）"
                 )
             } else {
                 format!(
-                    "{APP_TITLE} requires the Microsoft Edge WebView2 Runtime to display its interface.\n\nAn outdated WebView2 Runtime was found ({}). Update it now?\n(Internet access and an administrator approval prompt are required.)",
-                    webview2_version().unwrap_or_default()
+                    "{APP_TITLE} requires the Microsoft Edge WebView2 Runtime to display its interface.\n\nAn outdated WebView2 Runtime was found ({version}). Update it now?\n(Internet access and an administrator approval prompt are required.)"
                 )
             }
         } else if locale::is_chinese() {
@@ -302,11 +347,11 @@ pub fn ensure_webview2() -> bool {
     for _ in 0..120 {
         std::thread::sleep(Duration::from_secs(1));
         if webview2_version().is_some_and(|v| !version_too_old(&v)) {
-            let _ = std::fs::remove_file(&installer);
+            remove_installer(&installer);
             return true;
         }
     }
-    let _ = std::fs::remove_file(&installer);
+    remove_installer(&installer);
     msgbox(
         locale::text(
             "未能确认 WebView2 安装完成，请重试。\n或到微软官网搜索“WebView2 Runtime”手动安装。",

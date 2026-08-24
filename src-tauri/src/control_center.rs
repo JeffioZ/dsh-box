@@ -92,6 +92,41 @@ fn dialog_size(app: &AppHandle, kind: &str) -> (f64, f64) {
     )
 }
 
+/// 主窗口内容区逻辑矩形（x/y 为内容区左上角，w/h 为内容区尺寸）。
+/// 统一取 inner 口径（inner_position + inner_size），与 dialog_card_width/height
+/// 同源：macOS 保留系统装饰时 outer 会多算约 28px 原生标题栏，inner/outer
+/// 混用会让居中结果垂直偏移其一半（约 14px）；无边框平台 inner==outer，行为不变。
+fn main_inner_logical_rect(app: &AppHandle) -> Option<(f64, f64, f64, f64)> {
+    let w = crate::main_window(app)?;
+    let scale = w.scale_factor().ok()?;
+    let pos = w.inner_position().ok()?;
+    let size = w.inner_size().ok()?;
+    Some((
+        pos.x as f64 / scale,
+        pos.y as f64 / scale,
+        size.width as f64 / scale,
+        size.height as f64 / scale,
+    ))
+}
+
+/// 弹窗窗口（含阴影余量）相对主窗口内容区居中后的左上角逻辑坐标。
+/// 注意按卡片视觉中心对齐：窗口含不对称阴影空间（上 24/下 48/左右 36），
+/// 直接按窗口矩形居中会让卡片视觉中心偏下。
+fn centered_dialog_pos(
+    main: (f64, f64, f64, f64),
+    status_h: f64,
+    dialog_w: f64,
+    dialog_h: f64,
+) -> (f64, f64) {
+    let (mlx, mly, mlw, mlh) = main;
+    // dsh 弹窗对齐的是主窗口内容区（去标题栏/状态栏），非整个窗口
+    let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
+    let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
+    let dx = mlx + (mlw - (dialog_w - SHADOW_SIDES * 2.0)) / 2.0 - SHADOW_SIDES;
+    let dy = content_y + (content_h - (dialog_h - SHADOW_TOP - SHADOW_BOTTOM)) / 2.0 - SHADOW_TOP;
+    (dx, dy)
+}
+
 fn main_is_presented(main: &tauri::Window) -> bool {
     main.is_visible().unwrap_or(false) && !main.is_minimized().unwrap_or(false)
 }
@@ -115,25 +150,13 @@ pub fn precreate(app: &AppHandle) {
     let (dialog_w, dialog_h) = dialog_size(app, "default");
     // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
     // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
-    let initial_pos = crate::main_window(app).and_then(|w| {
-        let scale = w.scale_factor().ok()?;
-        let pos = w.outer_position().ok()?;
-        let size = w.outer_size().ok()?;
-        let mlx = pos.x as f64 / scale;
-        let mly = pos.y as f64 / scale;
-        let mlw = size.width as f64 / scale;
-        let mlh = size.height as f64 / scale;
+    let initial_pos = main_inner_logical_rect(app).map(|rect| {
         let status_h = if app.state::<AppState>().config().hide_statusbar {
             0.0
         } else {
             crate::titlebar::STATUSBAR_HEIGHT
         };
-        let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
-        let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
-        let dx = mlx + (mlw - (dialog_w - SHADOW_SIDES * 2.0)) / 2.0 - SHADOW_SIDES;
-        let dy =
-            content_y + (content_h - (dialog_h - SHADOW_TOP - SHADOW_BOTTOM)) / 2.0 - SHADOW_TOP;
-        Some((dx, dy))
+        centered_dialog_pos(rect, status_h, dialog_w, dialog_h)
     });
     let mut builder = tauri::WebviewWindowBuilder::new(
         app,
@@ -200,8 +223,8 @@ fn show_with_update_token(
     initial: serde_json::Value,
     update_prompt_token: Option<u64>,
 ) {
-    // 尺寸、状态提交与隐藏窗口内容注入必须保持同一顺序；否则一个刚被
-    // 普通页面抢占的更新提示仍可能晚到并覆盖新页面。
+    // 状态提交、尺寸/位置与隐藏窗口内容注入必须在同一持锁序列内完成；
+    // 否则一个刚被普通页面抢占的更新提示仍可能晚到并覆盖新页面。
     let _show_guard = APP_DIALOG_SHOW_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -219,44 +242,32 @@ fn show_with_update_token(
             w
         }
     };
-    // 代次 +1：若上次关闭的延迟隐藏尚未执行，令其失效，避免误藏本次弹窗
-    let dialog_gen = app.state::<AppState>().bump_dialog_gen();
+    // 尺寸与位置只计算不应用：更新提示的 token 可能已过期（被普通页面抢占），
+    // 过期路径不得对共享窗口产生任何副作用（尺寸/位置/代次），一律挪到
+    // 下方的 commit 门控之后。
     let (ww, wh) = dialog_size(app, kind);
-    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(ww, wh)));
+    let mut pending_size = tauri::Size::Logical(tauri::LogicalSize::new(ww, wh));
+    let mut pending_pos: Option<tauri::Position> = None;
+    let mut center_fallback = false;
     let mut target_pos: Option<(f64, f64)> = None;
     let main = crate::main_window(app);
     let main_presented = main.as_ref().is_some_and(main_is_presented);
     if main_presented {
-        // 主窗口正常显示时相对主窗口居中。
-        // 注意按卡片视觉中心对齐：窗口含不对称阴影空间（上 24/下 48/左右 36），
-        // 直接按窗口矩形居中会让卡片视觉中心偏下。
-        if let Some(main) = main.as_ref() {
-            if let (Ok(mp), Ok(ms)) = (main.outer_position(), main.outer_size()) {
-                let scale = main.scale_factor().unwrap_or(1.0);
-                let mlx = mp.x as f64 / scale;
-                let mly = mp.y as f64 / scale;
-                let mlw = ms.width as f64 / scale;
-                let mlh = ms.height as f64 / scale;
-                // dsh 弹窗对齐的是主窗口内容区（去标题栏/状态栏），非整个窗口
-                let status_h = if app.state::<AppState>().config().hide_statusbar {
-                    0.0
-                } else {
-                    crate::titlebar::STATUSBAR_HEIGHT
-                };
-                let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
-                let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
-                let card_w = ww - SHADOW_SIDES * 2.0;
-                let card_h = wh - SHADOW_TOP - SHADOW_BOTTOM;
-                let dx = mlx + (mlw - card_w) / 2.0 - SHADOW_SIDES;
-                let dy = content_y + (content_h - card_h) / 2.0 - SHADOW_TOP;
-                crate::logging::log(&format!(
-                    "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
-                ));
-                target_pos = Some((dx, dy));
-                let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    dx, dy,
-                )));
-            }
+        // 主窗口正常显示时相对主窗口内容区居中（inner 口径，与卡片尺寸同源）。
+        if let Some((mlx, mly, mlw, mlh)) = main_inner_logical_rect(app) {
+            let status_h = if app.state::<AppState>().config().hide_statusbar {
+                0.0
+            } else {
+                crate::titlebar::STATUSBAR_HEIGHT
+            };
+            let (dx, dy) = centered_dialog_pos((mlx, mly, mlw, mlh), status_h, ww, wh);
+            crate::logging::log(&format!(
+                "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
+            ));
+            target_pos = Some((dx, dy));
+            pending_pos = Some(tauri::Position::Logical(tauri::LogicalPosition::new(
+                dx, dy,
+            )));
         }
     } else {
         // 仅托盘运行时（主窗口不可见/最小化），按鼠标所在屏幕的工作区居中
@@ -276,16 +287,16 @@ fn show_with_update_token(
                 - (SHADOW_SIDES * scale) as i32;
             let y = area.position.y + (area.size.height.saturating_sub(card_h) / 2) as i32
                 - (SHADOW_TOP * scale) as i32;
-            let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+            pending_size = tauri::Size::Physical(tauri::PhysicalSize::new(
                 (ww * scale).round() as u32,
                 (wh * scale).round() as u32,
-            )));
+            ));
             target_pos = Some((x as f64 / scale, y as f64 / scale));
-            let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            pending_pos = Some(tauri::Position::Physical(tauri::PhysicalPosition::new(
                 x, y,
             )));
         } else {
-            let _ = win.center();
+            center_fallback = true;
         }
     }
     // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。
@@ -336,6 +347,15 @@ fn show_with_update_token(
     if !committed {
         crate::logging::log("app-dialog: 更新提示展示权已失效，取消旧展示");
         return;
+    }
+    // 通过提交门控后才产生副作用：代次 +1（若上次关闭的延迟隐藏尚未执行，
+    // 令其失效，避免误藏本次弹窗），并应用之前算好的尺寸/位置。
+    let dialog_gen = app.state::<AppState>().bump_dialog_gen();
+    let _ = win.set_size(pending_size);
+    if let Some(pos) = pending_pos {
+        let _ = win.set_position(pos);
+    } else if center_fallback {
+        let _ = win.center();
     }
     // 先把本次内容同步渲染进隐藏窗口，再显示：show 的第一帧就是正确内容，
     // 不会先把上一弹窗的残影亮出一帧。载荷内联进 eval（无 IPC 往返），
@@ -720,5 +740,28 @@ mod tests {
     fn dialog_card_has_usable_lower_bounds() {
         assert_eq!(fit_card_width(400.0), CARD_MIN_WIDTH);
         assert_eq!(fit_card_height(300.0), CARD_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn dialog_center_aligns_card_visual_center_with_content_area() {
+        // 主窗口内容区逻辑矩形 (100,200 1200x900)，状态栏可见（26px）
+        let dialog_w = 800.0 + SHADOW_SIDES * 2.0;
+        let dialog_h = 640.0 + SHADOW_TOP + SHADOW_BOTTOM;
+        let (dx, dy) = centered_dialog_pos((100.0, 200.0, 1200.0, 900.0), 26.0, dialog_w, dialog_h);
+        // 卡片视觉中心必须落在内容区（去标题栏/状态栏）中心
+        let card_cx = dx + SHADOW_SIDES + 800.0 / 2.0;
+        let card_cy = dy + SHADOW_TOP + 640.0 / 2.0;
+        let content_cx = 100.0 + 1200.0 / 2.0;
+        let content_cy = 200.0
+            + crate::titlebar::TITLEBAR_HEIGHT
+            + (900.0 - crate::titlebar::TITLEBAR_HEIGHT - 26.0) / 2.0;
+        assert!(
+            (card_cx - content_cx).abs() < 1e-9,
+            "水平未对齐：{card_cx} vs {content_cx}"
+        );
+        assert!(
+            (card_cy - content_cy).abs() < 1e-9,
+            "垂直未对齐：{card_cy} vs {content_cy}"
+        );
     }
 }

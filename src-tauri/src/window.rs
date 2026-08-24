@@ -115,7 +115,10 @@ fn save_now(app: &AppHandle) {
         }
         if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
             // 兜底：窗口尺寸几乎占满工作区也视为最大化残留（最大化状态翻转前的
-            // Resized 事件可能抢在 is_maximized 生效前落盘），不保存
+            // Resized 事件可能抢在 is_maximized 生效前落盘），不保存。
+            // 代价：用户手动把窗口拖到距工作区边缘 <8px 时同样不落盘——该场景
+            // 少见且下次启动沿用上次尺寸影响轻微；收窄判定会重新引入竞态，
+            // 误存“全屏尺寸”会让下次恢复直接撑满屏幕。
             if let Ok(Some(monitor)) = win.current_monitor() {
                 let scale = monitor.scale_factor();
                 let wa = monitor.work_area();

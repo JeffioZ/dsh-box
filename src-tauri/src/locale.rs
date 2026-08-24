@@ -96,9 +96,10 @@ fn detect_chinese() -> bool {
 
     #[cfg(not(windows))]
     {
+        // POSIX 惯例：变量为空字符串等价于未设置，继续向后探测
         let value = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
-            .find_map(|name| std::env::var(name).ok());
+            .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()));
         // 英文环境 → en；其余（含未设置）→ 产品默认 zh，与 dsh 一致
         !value.is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("en"))
     }

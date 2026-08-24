@@ -88,12 +88,12 @@ pub struct TreeGuard {
 impl TreeGuard {
     /// 为子进程建立守卫。子进程必须经本模块 spawn（Windows 由 Job 加入；
     /// Unix 由 process_group(0) 使 pgid == pid）。
+    /// Windows 下 Job 创建/加入失败时返回 None：调用方据此走按 PID 的
+    /// kill_tree 兜底，而不是拿到一个回收不了任何进程的空守卫。
     pub fn from_child(child: &Child) -> Option<TreeGuard> {
         #[cfg(windows)]
         {
-            // Job 创建/加入失败时降级（返回守卫但 job 为空），不影响运行。
-            let job = win::job_for_process(child.id());
-            Some(TreeGuard { job })
+            win::job_for_process(child.id()).map(|job| TreeGuard { job: Some(job) })
         }
         #[cfg(unix)]
         {

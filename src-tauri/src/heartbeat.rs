@@ -73,16 +73,17 @@ fn poll_once(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let config = app.state::<AppState>().config();
-    // 服务不健康时交给 dsh 看门狗（重启窗口内页面必然无响应，不能误判为页面挂起）
-    if !crate::dsh::health_check(config.port) {
-        return Ok(());
-    }
     let Some(wv) = crate::main_webview(app) else {
         return Ok(()); // 主 webview 尚未创建
     };
     let url = wv.url().map_err(|e| format!("读取页面地址失败：{e}"))?;
+    // 先判页面再探测端口：非 dsh 页面不做无谓的健康检查
     if !crate::is_dsh_url(&url, &config) {
         return Ok(()); // 本地启动页/其他页面不监控
+    }
+    // 服务不健康时交给 dsh 看门狗（重启窗口内页面必然无响应，不能误判为页面挂起）
+    if !crate::dsh::health_check(config.port) {
+        return Ok(());
     }
     let (last, failures) = app.state::<AppState>().heartbeat_state();
     let Some(last) = last else {
@@ -118,7 +119,7 @@ mod tests {
     #[test]
     fn backoff_power_is_capped() {
         // 退避幂次封顶在 MAX_BACKOFF_POWER（5），2^p 最大为 32，不会溢出；
-        // 实际封顶逻辑见 backoff() 中的 failures.min(MAX_BACKOFF_POWER)
+        // 实际封顶逻辑内联在 poll_once 的 failures.min(MAX_BACKOFF_POWER)
         assert_eq!(MAX_BACKOFF_POWER, 5);
         assert_eq!(2u32.pow(MAX_BACKOFF_POWER), 32);
     }

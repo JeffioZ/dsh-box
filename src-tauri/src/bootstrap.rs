@@ -20,11 +20,60 @@ fn preferred_main_size(work_width: f64, work_height: f64) -> (f64, f64) {
     (width, height)
 }
 
+/// 启动致命错误的最后兜底：记日志 + 用户可见提示，然后以退出码 1 优雅退出。
+/// 此时 Tauri 事件循环尚未运行，tauri 对话框与自绘 UI 都不可用——Windows
+/// 只能直接调 MessageBoxW（宽字符、无父窗口），非 Windows 退回 stderr。
+/// 不能用 expect/panic：release 构建 panic = "abort"，GUI 应用没有可见
+/// stderr，进程会无声消失，用户完全无从得知失败原因。
+fn fatal_boot_exit(stage: &str, error: &dyn std::fmt::Display) -> ! {
+    // 日志正常时已由 setup 初始化；若失败发生在更早阶段本条会静默丢弃，
+    // 但提示框仍携带完整错误文本与日志路径指引
+    let log_path = app_state::Config::load().logs_dir().join("dshbox.log");
+    logging::log(&format!("启动: 致命错误（{stage}）：{error}"));
+    let text = if locale::is_chinese() {
+        format!(
+            "{APP_TITLE} 启动失败（{stage}）。\n\n错误：{error}\n\n详细原因见日志文件：\n{}\n\n请重试；若反复出现，请将日志提交给支持人员排查。",
+            log_path.display()
+        )
+    } else {
+        format!(
+            "{APP_TITLE} failed to start ({stage}).\n\nError: {error}\n\nSee the log file for details:\n{}\n\nPlease try again; if it keeps failing, send the log to support.",
+            log_path.display()
+        )
+    };
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let to_wide = |s: &str| {
+            s.encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+        };
+        let text_w = to_wide(&text);
+        let title_w = to_wide(APP_TITLE);
+        // 无父窗口：事件循环未起，主窗口可能根本未创建成功
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text_w.as_ptr(),
+                title_w.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    eprintln!("{text}");
+    std::process::exit(1);
+}
+
 pub(crate) fn run() {
     let app = tauri::Builder::default()
         .register_uri_scheme_protocol("dshd", handle_dshd_scheme)
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 与启动路径一致：转发参数带 --minimized 时保持托盘静默，不唤出窗口
+            if !args.iter().any(|a| a == "--minimized") {
+                show_main(app);
+            }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -35,10 +84,20 @@ pub(crate) fn run() {
             if app.config().build.dev_url.is_some() {
                 app_state::mark_dev_build();
             }
+            // 日志初始化必须最早：其后的 dev-ui 拉起、窗口创建等步骤都会
+            // 记日志，晚初始化会把这些日志静默丢弃
+            let cfg = app.state::<AppState>().config();
+            logging::init(cfg.logs_dir().join("dshbox.log"));
+            logging::log(&format!(
+                "启动: port={} root={}",
+                cfg.port,
+                cfg.root.display()
+            ));
             // dev 构建：先拉起 UI 静态服务器（同步等待就绪 ≤5s）再创建窗口——
             // 主 webview 首次加载即成功，避免“加载失败 → 服务器就绪后 reload”
             // 的白屏与页面闪烁（reload 会重置页面状态、启动面板重复显示）。
-            // 仅 dev 构建启用（dev_url 非 None），生产构建直接返回 false。
+            // 返回值为“服务器是否已就绪”：仅 dev 构建且未就绪时需要延迟
+            // reload 兜底；生产构建恒返回 false（由 dev_url 守卫排除）。
             let dev_ui_ready = ensure_dev_ui_server(app.handle());
             // 手建主窗口（conf windows 为空）：带初始化脚本预设 dsh 深色主题，
             // 背景色跟随系统主题，与 dsh/loading 底色统一，消除启动与导航的明暗闪烁
@@ -95,7 +154,8 @@ pub(crate) fn run() {
                 }
             })
             .build()
-            .expect("主窗口创建失败");
+            // 主窗口是应用存在的意义，创建失败即致命：可见化报错后退出
+            .unwrap_or_else(|e| fatal_boot_exit("主窗口创建", &e));
             // 不使用 set_shadow：tao 的无边框阴影实现带隐藏 insets（窗口
             // 外矩形比可见区域大一圈），保存/恢复 outer_size 时 insets 逐次
             // 累积——正是“每次启动窗口大一圈”的来源；且它会附加 1px 白边。
@@ -120,12 +180,6 @@ pub(crate) fn run() {
             }
 
             let cfg = app.state::<AppState>().config();
-            logging::init(cfg.logs_dir().join("dshbox.log"));
-            logging::log(&format!(
-                "启动: port={} root={}",
-                cfg.port,
-                cfg.root.display()
-            ));
 
             // 记忆窗口位置/大小：全程逻辑坐标——保存的就是逻辑值，恢复也直接用
             // 逻辑坐标设置，交给系统做 DPI 换算（物理坐标设置在高 DPI 下会被
@@ -228,8 +282,12 @@ pub(crate) fn run() {
                     let scale = win.scale_factor().unwrap_or(1.0);
                     let (lx, ly) = (pos.x as f64 / scale, pos.y as f64 / scale);
                     let (lw, lh) = (size.width as f64 / scale, size.height as f64 / scale);
-                    // 测量本次设置的系统协商增量，供后续保存时扣除
-                    crate::window::record_negotiation_delta(lw - applied.0, lh - applied.1);
+                    // 测量本次设置的系统协商增量，供后续保存时扣除；
+                    // applied 为 (0,0) 表示本次未设置尺寸（无有效记忆且读不到
+                    // 显示器信息），此时差值是窗口实际尺寸而非协商量，不能记录
+                    if applied != (0.0, 0.0) {
+                        crate::window::record_negotiation_delta(lw - applied.0, lh - applied.1);
+                    }
                     if let Some((px, py, pw, ph)) = logical_work_area(&handle) {
                         let wc = lw.min(pw);
                         let hc = lh.min(ph);
@@ -295,6 +353,19 @@ pub(crate) fn run() {
                     }
                 });
             }
+            // 状态栏加载自愈：与标题栏同款一次性看门狗——init_statusbar 后
+            // 约 3s 检查一次，未就绪（on_page_load 未置位，见 titlebar.rs）
+            // 则重载一次；重载会复位就绪标记并重新走就绪握手
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if !titlebar::statusbar_is_ready() {
+                        logging::log("statusbar: 页面未就绪，重试加载");
+                        titlebar::reload_statusbar(&handle);
+                    }
+                });
+            }
             // 标题栏渲染自愈：合成层失效（间歇空白、DOM 正常）无法探测，
             // 周期发送重绘脉冲兜底恢复
             {
@@ -326,6 +397,9 @@ pub(crate) fn run() {
             crate::usage::start_periodic(app.handle().clone());
             // 状态栏实时生成速率：每 2s 尾帧解码会话日志估算流式 tok/s
             crate::usage::start_live_rate(app.handle().clone());
+            // 账户后台监测：dsh 就绪后立即全量刷新余额/订阅缓存，此后每 5 分钟
+            // 一轮并广播 usage-accounts-updated（控制中心用量页只读缓存）
+            crate::usage::start_account_monitor(app.handle().clone());
             // 内置插件市场（dsh-market）：dsh 就绪后自动预装，此后每日同步最新版
             plugins::start_market_bootstrap(app.handle().clone());
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标
@@ -457,7 +531,8 @@ pub(crate) fn run() {
             _ => {}
         })
         .build(tauri::generate_context!())
-        .expect("failed to build tauri application");
+        // 事件循环/插件装配失败同样致命：可见化报错后退出，不再静默 abort
+        .unwrap_or_else(|e| fatal_boot_exit("应用构建", &e));
 
     app.run(|app_handle, event| {
         match event {

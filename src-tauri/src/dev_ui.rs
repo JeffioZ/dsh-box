@@ -5,7 +5,9 @@ use tauri::Manager;
 
 /// dev 构建：内置页面经 devUrl 从 UI 静态服务器（4321）加载，
 /// 未监听时自动拉起 node scripts/serve-ui.mjs 并等待就绪（最多 5s）。
-/// 仅 dev 构建启用；返回 true 表示本次由本函数启动了服务器。
+/// 仅 dev 构建启用；返回 true 表示调用后服务器已就绪（原本在运行或本次
+/// 成功拉起），false 表示非 dev 构建或服务器未就绪（调用方据此延迟 reload
+/// 兜底）。
 /// 必须在主窗口创建前调用：保证 webview 首次加载即成功，无需 reload
 /// （reload 会重置页面状态、导致启动面板重复显示/闪烁）。
 pub(crate) fn ensure_dev_ui_server(app: &AppHandle) -> bool {
@@ -16,7 +18,8 @@ pub(crate) fn ensure_dev_ui_server(app: &AppHandle) -> bool {
         return false;
     }
     if TcpStream::connect(("127.0.0.1", 4321)).is_ok() {
-        return false;
+        // 服务器已在运行（如 dev-run.ps1 先行拉起）：直接就绪，无需重启或兜底
+        return true;
     }
     // serve-ui.mjs 位于仓库 scripts/，开发版 exe 在 dist-dev/ 下
     let Ok(exe_dir) = std::env::current_exe().and_then(|p| {

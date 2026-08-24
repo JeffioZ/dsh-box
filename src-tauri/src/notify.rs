@@ -26,6 +26,12 @@ struct WatchedSession {
 
 /// 启动任务完成监视（后台线程，退出中自动停止）。
 pub fn start_task_watch(app: AppHandle) {
+    // macOS 首次发系统通知前必须向系统申请一次权限（Windows/Linux 无此流程）；
+    // 失败仅记日志，后续 show 仍按系统实际授权结果成败
+    #[cfg(target_os = "macos")]
+    if let Err(e) = app.notification().request_permission() {
+        crate::logging::log(&format!("notify: 申请通知权限失败：{e}"));
+    }
     std::thread::spawn(move || {
         let mut watched: Option<WatchedSession> = None;
         loop {
@@ -80,23 +86,27 @@ fn poll_once(app: &AppHandle, watched: &mut Option<WatchedSession>) -> Result<()
     // 只有尾帧读取/解析成功后才提交 mtime；瞬时读失败留到下一轮重试，
     // 避免把一次错误永久记成“已处理”而漏掉完成通知。
     let latest = latest_turn_end_seq(&path)?;
-    entry.mtime = Some(mtime);
     if !entry.initialized {
+        entry.mtime = Some(mtime);
         entry.initialized = true;
         entry.notified_seq = latest;
         return Ok(());
     }
     let Some(seq) = latest else {
+        entry.mtime = Some(mtime);
         return Ok(());
     };
     let is_new = entry.notified_seq.is_none_or(|notified| seq > notified);
-    entry.notified_seq = Some(seq);
     if is_new && config.task_notifications && !crate::main_is_visible(app) {
         crate::logging::log(&format!(
             "notify: 当前会话出现新完成轮次（seq {seq}），发送系统通知"
         ));
+        // 发送失败不提交 seq/mtime：下一轮对同一事件重试。取舍为宁可极端
+        // 情况下（发送成功但提交前进程退出）重复通知一次，也不漏发。
         show_notification(app)?;
     }
+    entry.notified_seq = Some(seq);
+    entry.mtime = Some(mtime);
     Ok(())
 }
 

@@ -119,7 +119,9 @@ pub fn emit_status_progress(
     app.state::<AppState>().set_phase(phase, message, detail);
     // 事件载荷带完整版本信息：此前这里固定 None，前端每次收到事件都会
     // 重算 footer（版本/端口行）并将其清空——启动过程中 footer 短暂出现
-    // 后即“消失”。snapshot 的版本检测有缓存，高频事件无额外开销。
+    // 后即“消失”。snapshot 里 dsh 版本每次读 package.json（安装/更新后
+    // 立即反映），node/npm 版本仅检测成功后缓存、失败下次重试，高频事件
+    // 不会反复 spawn 进程。
     let snapshot = app.state::<AppState>().snapshot();
     let payload = app_state::StatusPayload {
         phase: phase.as_str().to_string(),

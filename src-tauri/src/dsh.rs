@@ -786,7 +786,13 @@ fn read_log_since(path: &std::path::Path, offset: u64) -> String {
 
 fn parse_server_port(log: &str) -> Option<u16> {
     const PREFIXES: [&str; 2] = ["dsh web: http://127.0.0.1:", "dsh web: http://localhost:"];
-    log.lines().find_map(|line| {
+    // 日志由 dsh 进程并发追加，读到的末尾可能是尚未写完的半行；只解析以
+    // 换行结尾的完整行，避免把撕裂行里的残缺端口写入 actual_port。
+    let complete = match log.rfind('\n') {
+        Some(pos) => &log[..=pos],
+        None => "",
+    };
+    complete.lines().find_map(|line| {
         PREFIXES.iter().find_map(|prefix| {
             let rest = line.trim().strip_prefix(prefix)?;
             let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
@@ -1073,11 +1079,23 @@ mod tests {
             Some(49152)
         );
         assert_eq!(
-            parse_server_port("dsh web: http://localhost:3080 (copied)"),
+            parse_server_port("dsh web: http://localhost:3080 (copied)\n"),
             Some(3080)
         );
-        assert_eq!(parse_server_port("dsh web: http://127.0.0.1:0"), None);
-        assert_eq!(parse_server_port("other server: 49152"), None);
+        assert_eq!(parse_server_port("dsh web: http://127.0.0.1:0\n"), None);
+        assert_eq!(parse_server_port("other server: 49152\n"), None);
+    }
+
+    #[test]
+    fn torn_log_tail_is_not_parsed_as_port() {
+        // 末尾未写完的半行必须丢弃：否则会把撕裂的残缺端口当成实际端口
+        assert_eq!(parse_server_port("dsh web: http://127.0.0.1:491"), None);
+        assert_eq!(parse_server_port("dsh web: http://127.0.0.1:49"), None);
+        // 完整行之后的半行不影响已写完的端口行
+        assert_eq!(
+            parse_server_port("dsh web: http://127.0.0.1:49152\ndsh web: http://127.0.0.1:9"),
+            Some(49152)
+        );
     }
 
     #[test]
