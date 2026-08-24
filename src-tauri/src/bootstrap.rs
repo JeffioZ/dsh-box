@@ -77,6 +77,7 @@ pub(crate) fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::new())
         .invoke_handler(commands::invoke_handler())
         .setup(|app| {

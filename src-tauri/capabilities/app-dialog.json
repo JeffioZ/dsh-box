@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "app-dialog",
+  "description": "app-dialog（控制中心/设置弹窗）所需权限：模型配置“粘贴并解析”经 Tauri 原生命令读取剪贴板，避免 WebView 剪贴板权限弹窗",
+  "windows": ["app-dialog"],
+  "permissions": [
+    "clipboard-manager:allow-read-text"
+  ]
+}

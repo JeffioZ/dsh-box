@@ -706,7 +706,11 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join(".credentials.yaml"), "ZAI_API_KEY: file-zai\n").unwrap();
+        std::fs::write(
+            root.join(".credentials.yaml"),
+            "version: 1\nrefs:\n  ZAI_API_KEY: file-zai\n",
+        )
+        .unwrap();
         let mut config = Config::load();
         config.dsh_home = root.clone();
         let prev_declared = std::env::var(DECLARED).ok();
