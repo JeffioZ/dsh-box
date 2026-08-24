@@ -65,7 +65,7 @@ $manifest = Join-Path $PSScriptRoot "..\src-tauri\Cargo.toml"
 if ($Mode -eq "check") {
   & $cargo check --locked --manifest-path $manifest
 } elseif ($Mode -eq "test") {
-  & $cargo test --locked --manifest-path $manifest --lib
+  & $cargo test --locked --manifest-path $manifest --all-targets
 } elseif ($Mode -eq "dev") {
   # 开发模式：注入 devUrl 使 tauri 不嵌入 UI 资源（运行时从 ui/ 目录直接读取），
   # 不递增版本号。使用独立 target/dev，避免与正式版互相触发重编译或争抢 exe。

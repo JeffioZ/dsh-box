@@ -61,24 +61,32 @@ export function decodePng(buf) {
     return { type, data };
   };
   let width = 0, height = 0, idat = [];
+  let bitDepth = 8;
   let colorType = 0;
   while (pos < buf.length) {
     const { type, data } = readChunk();
     if (type === 'IHDR') {
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
+      bitDepth = data[8];
       colorType = data[9];
     } else if (type === 'IDAT') {
       idat.push(data);
     } else if (type === 'IEND') break;
   }
   const raw = zlib.inflateSync(Buffer.concat(idat));
+  // 灰度/调色板等非 RGB/RGBA 布局与 16bit 位深会被下面的逐字节逻辑静默错解，显式拒绝
+  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
+    throw new Error(`decodePng: 不支持的 bitDepth=${bitDepth}/colorType=${colorType}（仅支持 8bit RGB/RGBA）`);
+  }
   const bpp = colorType === 6 ? 4 : 3;
   const stride = width * bpp;
   const out = Buffer.alloc(width * height * 4);
   let prev = Buffer.alloc(stride);
   for (let y = 0; y < height; y++) {
     const filter = raw[y * (stride + 1)];
+    // 规范只允许 0-4；未知值若按 filter 0 处理会静默错解，显式拒绝
+    if (filter > 4) throw new Error(`decodePng: 不支持的 filter=${filter}（第 ${y} 行，PNG 规范仅 0-4）`);
     const row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
     const recon = Buffer.alloc(stride);
     for (let x = 0; x < stride; x++) {
