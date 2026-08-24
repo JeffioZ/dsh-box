@@ -130,7 +130,12 @@ pub fn quit(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
 pub fn open_logs(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     let dir = app.state::<AppState>().config().logs_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        crate::locale::owned(
+            format!("创建日志目录失败：{e}"),
+            format!("Failed to create the log directory: {e}"),
+        )
+    })?;
     processes::open_in_file_manager(&dir);
     Ok(())
 }
@@ -228,8 +233,10 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::app_dialog_open_usage,
         control_center::session_stats_get,
         control_center::usage_report_get,
+        control_center::usage_session_context_get,
         control_center::usage_accounts_get,
         control_center::usage_subscriptions_get,
+        control_center::usage_accounts_refresh,
         settings::settings_get,
         settings::settings_set,
         settings::set_deepseek_api_key,

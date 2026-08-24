@@ -9,10 +9,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::aggregate::{Buckets, FoldState};
+use super::aggregate::{Buckets, CurrentRoute, FoldKind, FoldState};
 use crate::app_state::Config;
 
-const CACHE_VERSION: u64 = 1;
+// v3：FoldState 新增 kind 与 current_route（上游 v0.3）。旧版本缓存按现有
+// 语义静默丢弃、全新重折，不做迁移。
+const CACHE_VERSION: u64 = 3;
 /// 缓存文件带 `dshbox-` 前缀：与参考项目 dsh-usage-stats（其缓存为
 /// `$DSH_HOME/storages/usage-stats-cache.json`）隔离，避免两个聚合器读写
 /// 同一文件互相覆盖（缓存结构版本不同，同名会互相重置）。
@@ -37,6 +39,23 @@ struct SessionOnDisk {
     last_sample: Option<SampleOnDisk>,
     #[serde(default)]
     current_model: Option<String>,
+    /// 折叠数据来源（"live" | "persisted"，缺省 persisted——与上游
+    /// `parseSession` 的回落口径一致）。
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    current_route: Option<RouteOnDisk>,
+    /// 上次折叠时的日志文件长度（缺省 0 = 未知，下次必然重折一次）。
+    #[serde(default)]
+    file_len: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RouteOnDisk {
+    provider_id: String,
+    model: String,
+    #[serde(default)]
+    updated_at: Option<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -125,7 +144,14 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
                         buckets: x.buckets.into(),
                     }),
                     current_model: s.current_model,
+                    current_route: s.current_route.map(|r| CurrentRoute {
+                        provider_id: r.provider_id,
+                        model: r.model,
+                        updated_at: r.updated_at,
+                    }),
+                    kind: FoldKind::parse(&s.kind),
                     consumed: s.consumed,
+                    file_len: s.file_len,
                 },
             )
         })
@@ -170,6 +196,13 @@ pub(crate) fn save(config: &Config, sessions: &HashMap<String, FoldState>) -> Re
                             buckets: x.buckets.into(),
                         }),
                         current_model: s.current_model.clone(),
+                        current_route: s.current_route.as_ref().map(|r| RouteOnDisk {
+                            provider_id: r.provider_id.clone(),
+                            model: r.model.clone(),
+                            updated_at: r.updated_at,
+                        }),
+                        kind: s.kind.as_str().to_string(),
+                        file_len: s.file_len,
                     },
                 )
             })
@@ -183,10 +216,9 @@ pub(crate) fn save(config: &Config, sessions: &HashMap<String, FoldState>) -> Re
 mod tests {
     use super::*;
 
-    #[test]
-    fn roundtrips_fold_state() {
+    fn temp_config(tag: &str) -> (Config, PathBuf) {
         let root = std::env::temp_dir().join(format!(
-            "dshbox-usage-cache-{}-{}",
+            "dshbox-usage-cache-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -195,11 +227,50 @@ mod tests {
         ));
         let mut config = Config::load();
         config.dsh_home = root.clone();
+        (config, root)
+    }
+
+    #[test]
+    fn roundtrips_fold_state() {
+        let (config, root) = temp_config("roundtrip");
         let mut sessions = HashMap::new();
-        sessions.insert("s1".to_string(), FoldState::default());
+        let state = FoldState {
+            consumed: 7,
+            file_len: 4096,
+            kind: FoldKind::Persisted,
+            current_route: Some(CurrentRoute {
+                provider_id: "deepseek-official".to_string(),
+                model: "deepseek-chat".to_string(),
+                updated_at: Some(1_780_000_000_000),
+            }),
+            ..Default::default()
+        };
+        sessions.insert("s1".to_string(), state);
         save(&config, &sessions).unwrap();
         let loaded = load(&config);
-        assert!(loaded.contains_key("s1"));
+        let state = loaded.get("s1").unwrap();
+        assert_eq!(state.consumed, 7);
+        assert_eq!(state.file_len, 4096);
+        assert_eq!(state.kind, FoldKind::Persisted);
+        let route = state.current_route.as_ref().unwrap();
+        assert_eq!(route.provider_id, "deepseek-official");
+        assert_eq!(route.model, "deepseek-chat");
+        assert_eq!(route.updated_at, Some(1_780_000_000_000));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn drops_cache_from_older_version() {
+        // 旧版本缓存不做迁移：静默丢弃，由调用方全新重折。
+        let (config, root) = temp_config("v1");
+        let path = cache_path(&config);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"sessions":{"s1":{"consumed":7,"days":{}}}}"#,
+        )
+        .unwrap();
+        assert!(load(&config).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 }

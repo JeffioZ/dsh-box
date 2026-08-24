@@ -45,7 +45,7 @@ pub struct BalancePayload {
 enum BalanceError {
     /// 未配置 API Key（error 为引导性文案）。
     NoKey(String),
-    /// API Key 无效（HTTP 401）。
+    /// API Key 无效（HTTP 401/403）。
     InvalidKey,
     /// 其他错误。
     Other(String),
@@ -57,6 +57,14 @@ pub struct BalanceEntry {
     pub total_balance: String,
     pub granted_balance: String,
     pub topped_up_balance: String,
+    /// 机器可读剩余额度（total_balance 的数值解析，供状态栏 chip 预警色
+    /// 计算 ratio；字符串字段保持原样，解析失败为 None）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<f64>,
+    /// 机器可读总额。DeepSeek 余额接口无「总额」概念，恒 None——
+    /// 前端在 total 缺失时不渲染预警色（不造假预警）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -78,28 +86,32 @@ struct RawBalanceInfo {
 }
 
 fn resolve_api_key(config: &Config) -> Result<String, String> {
-    if let Ok(k) = std::env::var("DSH_BOX_API_KEY") {
-        if !k.trim().is_empty() {
-            return Ok(k.trim().to_string());
-        }
-    }
-    if let Ok(k) = std::env::var("DEEPSEEK_API_KEY") {
-        if !k.trim().is_empty() {
-            return Ok(k.trim().to_string());
-        }
-    }
-    if let Some(k) = crate::credentials::value(config, "DEEPSEEK_API_KEY") {
-        return Ok(k);
-    }
-    Err(crate::locale::text(
-        "未找到 DeepSeek API Key。\n请在应用设置中配置，或设置 DSH_BOX_API_KEY / DEEPSEEK_API_KEY 环境变量。",
-        "No DeepSeek API key was found.\nConfigure it in the app, or set DSH_BOX_API_KEY / DEEPSEEK_API_KEY.",
-    )
-    .into())
+    // 链解析统一收在 credentials::resolve_api_key（无路由声明：DSH_BOX_API_KEY
+    // → DEEPSEEK_API_KEY → 凭据文件 DEEPSEEK_API_KEY，与原实现行为等价）。
+    crate::credentials::resolve_api_key(config, None).ok_or_else(|| {
+        crate::locale::text(
+            "未找到 DeepSeek API Key。\n请在应用设置中配置，或设置 DSH_BOX_API_KEY / DEEPSEEK_API_KEY 环境变量。",
+            "No DeepSeek API key was found.\nConfigure it in the app, or set DSH_BOX_API_KEY / DEEPSEEK_API_KEY.",
+        )
+        .into()
+    })
 }
 
 /// 同步查询并记录日志（托盘线程直接调用）。
+///
+/// 查询路径：账户后台监测缓存中有新鲜（< ACCOUNT_REFRESH_MS）的 DeepSeek
+/// 官方路由快照时直接转换复用（状态栏与监测同查一个接口，避免双通道重复
+/// 请求）；缓存空/过期才回退直连查询。
 pub(crate) fn query_balance(config: &Config) -> BalancePayload {
+    if let Some(snapshot) = crate::usage::cached_deepseek() {
+        crate::logging::log("balance: 复用账户监测缓存快照");
+        return payload_from_snapshot(&snapshot);
+    }
+    query_direct(config)
+}
+
+/// 直连查询并记录日志（缓存空/过期时的回退路径）。
+fn query_direct(config: &Config) -> BalancePayload {
     match query(config) {
         Ok(mut payload) => {
             payload.updated_at = Some(unix_now());
@@ -142,6 +154,55 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// 监测快照 → 状态栏余额载荷（字段映射对齐现有契约：remaining/total 为
+/// 机器可读值，字符串金额保留两位小数；updated_at 沿用快照的查询完成时刻）。
+fn payload_from_snapshot(snapshot: &crate::usage::AccountSnapshot) -> BalancePayload {
+    if snapshot.status == "ok" {
+        if let Some(balance) = &snapshot.balance {
+            return BalancePayload {
+                ok: true,
+                // DeepSeek 语义：is_available = 账户余额大于 0；监测快照不存
+                // 该标志，按同口径由 remaining 推导（remaining 缺失视为可用）。
+                is_available: balance.remaining.map(|r| r > 0.0).unwrap_or(true),
+                balances: vec![BalanceEntry {
+                    currency: balance.currency.clone(),
+                    total_balance: fmt_amount(balance.remaining),
+                    granted_balance: fmt_amount(balance.granted),
+                    topped_up_balance: fmt_amount(balance.topped_up),
+                    remaining: balance.remaining,
+                    total: balance.total,
+                }],
+                error: None,
+                error_kind: None,
+                updated_at: snapshot.updated_at,
+            };
+        }
+    }
+    BalancePayload {
+        ok: false,
+        is_available: false,
+        balances: Vec::new(),
+        error: Some(
+            snapshot.error.clone().unwrap_or_else(|| {
+                crate::locale::text("查询余额失败", "Balance query failed").into()
+            }),
+        ),
+        // 与直连路径同一口径：401/403 → invalid_key、缺凭据 → no_key；
+        // 其余瞬态/解析错误不归类（前端按通用失败 + stale 保留处理）。
+        error_kind: match snapshot.status {
+            "unauthorized" => Some("invalid_key".to_string()),
+            "not-configured" => Some("no_key".to_string()),
+            _ => None,
+        },
+        updated_at: snapshot.updated_at,
+    }
+}
+
+/// 金额格式化为两位小数字符串（None → 空串，与直连解析的缺省一致）。
+fn fmt_amount(value: Option<f64>) -> String {
+    value.map(|v| format!("{v:.2}")).unwrap_or_default()
 }
 
 static REFRESH_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -244,16 +305,111 @@ async fn run_balance_query(app: AppHandle) -> BalancePayload {
         })
 }
 
+/// 校验并构造余额查询 URL：仅 http/https、不得携带 userinfo；https 任意主机，
+/// http 仅放行回环/私有地址（允许用户自托管局域网网关，防止误配 http 公网
+/// 地址导致 API Key 明文外泄）。判定与 usage/balance.rs 的 guard_url 保持同一
+/// 口径（其模块不对外导出，无法直接复用；改动时两处需同步）。
+fn guarded_balance_url(api_base: &str) -> Result<String, BalanceError> {
+    fn invalid(api_base: &str) -> BalanceError {
+        BalanceError::Other(format!(
+            "{}: {api_base}",
+            crate::locale::text(
+                "API 地址无效（仅支持 https，或 http 的回环/局域网地址）",
+                "Invalid API base URL (only HTTPS, or HTTP to a loopback/private address, is allowed)"
+            )
+        ))
+    }
+    let combined = format!("{}/user/balance", api_base.trim_end_matches('/'));
+    let url = url::Url::parse(&combined).map_err(|_| invalid(api_base))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(invalid(api_base));
+    }
+    match url.scheme() {
+        "https" => Ok(url.to_string()),
+        "http" => {
+            let host = url.host_str().ok_or_else(|| invalid(api_base))?;
+            if hostname_is_private(host) {
+                Ok(url.to_string())
+            } else {
+                Err(invalid(api_base))
+            }
+        }
+        _ => Err(invalid(api_base)),
+    }
+}
+
+fn hostname_is_private(hostname: &str) -> bool {
+    let host = hostname
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_lowercase();
+    host == "localhost" || host.ends_with(".localhost") || is_private_address(&host)
+}
+
+/// 私有/回环网段判定（IPv4 与 IPv6 简化版；与 usage/balance.rs 同一实现）。
+fn is_private_address(host: &str) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    // IPv6 回环/链路本地/ULA。
+    if host.contains(':') {
+        let lower = host.to_lowercase();
+        if lower == "::1" {
+            return true;
+        }
+        if lower.starts_with("fe80") || lower.starts_with("fc") || lower.starts_with("fd") {
+            return true;
+        }
+        // IPv4-mapped IPv6 ::ffff:a.b.c.d
+        if let Some(rest) = lower.strip_prefix("::ffff:") {
+            return is_private_ipv4(rest);
+        }
+        return false;
+    }
+    is_private_ipv4(host)
+}
+
+fn is_private_ipv4(host: &str) -> bool {
+    let octets: Vec<u32> = match host
+        .split('.')
+        .map(|p| p.parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(v) if v.len() == 4 => v,
+        _ => return false,
+    };
+    let [a, b, c, _] = [octets[0], octets[1], octets[2], octets[3]];
+    a == 0
+        || a == 10
+        || a == 127
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 168)
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 192 && b == 0 && (c == 0 || c == 2))
+        || (a == 198 && (b == 18 || b == 19))
+        || a >= 224
+}
+
+/// 金额字符串解析为 f64（空串/非数值/非有限值一律 None，不向客户端
+/// 吐 NaN/Infinity——serde_json 无法序列化非有限浮点）。
+fn parse_amount(raw: &str) -> Option<f64> {
+    let value = raw.trim().parse::<f64>().ok()?;
+    value.is_finite().then_some(value)
+}
+
 fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
     let key = resolve_api_key(config).map_err(BalanceError::NoKey)?;
-    let url = format!("{}/user/balance", config.api_base.trim_end_matches('/'));
+    let url = guarded_balance_url(&config.api_base)?;
     // 短超时 + 连接复用（见 balance_agent 注释）
     let resp = balance_agent()
         .get(&url)
         .header("Authorization", &format!("Bearer {key}"))
         .call()
         .map_err(|e| {
-            if matches!(e, ureq::Error::StatusCode(401)) {
+            if matches!(
+                e,
+                ureq::Error::StatusCode(401) | ureq::Error::StatusCode(403)
+            ) {
                 BalanceError::InvalidKey
             } else {
                 BalanceError::Other(format!(
@@ -272,10 +428,12 @@ fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
         .balance_infos
         .into_iter()
         .map(|b| BalanceEntry {
+            remaining: parse_amount(&b.total_balance),
             currency: b.currency,
             total_balance: b.total_balance,
             granted_balance: b.granted_balance,
             topped_up_balance: b.topped_up_balance,
+            total: None,
         })
         .collect();
     Ok(BalancePayload {
@@ -305,5 +463,156 @@ mod tests {
         let json = serde_json::to_value(payload).unwrap();
         assert_eq!(json["error_kind"], "no_key");
         assert!(json.get("errorKind").is_none());
+    }
+
+    #[test]
+    fn balance_entry_exposes_machine_readable_amounts_in_snake_case() {
+        let entry = super::BalanceEntry {
+            currency: "CNY".into(),
+            total_balance: "50.50".into(),
+            granted_balance: "10.00".into(),
+            topped_up_balance: "40.50".into(),
+            remaining: super::parse_amount("50.50"),
+            total: None,
+        };
+        let json = serde_json::to_value(entry).unwrap();
+        assert_eq!(json["remaining"], 50.5);
+        assert!(json.get("total").is_none(), "total 为 None 时跳过序列化");
+        assert!(json.get("totalBalance").is_none());
+        // 字符串字段原样保留（线协议不变）。
+        assert_eq!(json["total_balance"], "50.50");
+    }
+
+    #[test]
+    fn parse_amount_rejects_blank_invalid_and_non_finite() {
+        assert_eq!(super::parse_amount("50.50"), Some(50.5));
+        assert_eq!(super::parse_amount(" 12.5 "), Some(12.5));
+        assert_eq!(super::parse_amount(""), None);
+        assert_eq!(super::parse_amount("abc"), None);
+        assert_eq!(super::parse_amount("NaN"), None);
+        assert_eq!(super::parse_amount("inf"), None);
+    }
+
+    /// 构造一条 DeepSeek 官方路由的监测快照（status 可换）。
+    fn snapshot_of(status: &'static str, updated_at: u64) -> crate::usage::AccountSnapshot {
+        let ok = status == "ok";
+        crate::usage::AccountSnapshot {
+            id: "deepseek-official".to_string(),
+            display_name: "DeepSeek".to_string(),
+            mode: "balance",
+            adapter: Some("deepseek-balance"),
+            status,
+            balance: ok.then_some(crate::usage::Balance {
+                remaining: Some(50.5),
+                used: None,
+                total: None,
+                currency: "CNY".to_string(),
+                unlimited: false,
+                granted: Some(10.0),
+                topped_up: Some(40.5),
+            }),
+            windows: Vec::new(),
+            error: (!ok).then(|| "boom".to_string()),
+            updated_at: Some(updated_at),
+            stale: false,
+            warn_level: "none",
+        }
+    }
+
+    #[test]
+    fn snapshot_payload_maps_ok_balance_to_contract_fields() {
+        let payload = super::payload_from_snapshot(&snapshot_of("ok", 100));
+        assert!(payload.ok);
+        assert!(payload.is_available);
+        assert_eq!(payload.updated_at, Some(100));
+        assert!(payload.error.is_none() && payload.error_kind.is_none());
+        let entry = &payload.balances[0];
+        assert_eq!(entry.currency, "CNY");
+        assert_eq!(entry.total_balance, "50.50");
+        assert_eq!(entry.granted_balance, "10.00");
+        assert_eq!(entry.topped_up_balance, "40.50");
+        assert_eq!(entry.remaining, Some(50.5));
+        assert_eq!(entry.total, None);
+    }
+
+    #[test]
+    fn snapshot_payload_maps_error_status_to_error_kind() {
+        // 与直连路径同一口径：unauthorized → invalid_key，not-configured →
+        // no_key，其余错误不归类；updated_at 沿用快照时刻。
+        let payload = super::payload_from_snapshot(&snapshot_of("unauthorized", 100));
+        assert!(!payload.ok);
+        assert_eq!(payload.error_kind.as_deref(), Some("invalid_key"));
+        assert_eq!(payload.updated_at, Some(100));
+        let payload = super::payload_from_snapshot(&snapshot_of("not-configured", 100));
+        assert_eq!(payload.error_kind.as_deref(), Some("no_key"));
+        let payload = super::payload_from_snapshot(&snapshot_of("unavailable", 100));
+        assert!(payload.error_kind.is_none());
+        assert_eq!(payload.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn query_balance_reuses_fresh_cache_and_falls_back_when_stale() {
+        // CACHE 与 env 均为进程全局：两把锁串行（与 monitor/credentials 的
+        // 同类用例同约定），并还原环境变量。
+        let _cache_guard = crate::usage::CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _env_guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev_box = std::env::var("DSH_BOX_API_KEY").ok();
+        let prev_deep = std::env::var("DEEPSEEK_API_KEY").ok();
+        std::env::remove_var("DSH_BOX_API_KEY");
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        let mut config = crate::app_state::Config::load();
+        config.dsh_home = std::env::temp_dir().join("dshbox-balance-cache-nonexistent");
+        let now = super::unix_now();
+        // 新鲜缓存命中：直接转换复用（直连在无 key 时必返回 no_key 错误，
+        // 拿到 ok 载荷即证明未走网络）。
+        crate::usage::set_cache_for_test(vec![snapshot_of("ok", now - 10)]);
+        let payload = super::query_balance(&config);
+        assert!(payload.ok, "新鲜缓存应直接复用：{:?}", payload.error);
+        assert_eq!(payload.updated_at, Some(now - 10));
+        assert_eq!(payload.balances.len(), 1);
+        // 过期缓存（> ACCOUNT_REFRESH_MS=300s）：回退直连，无 key → no_key，
+        // 证明确实走了回退路径而非缓存。
+        crate::usage::set_cache_for_test(vec![snapshot_of("ok", now - 400)]);
+        let payload = super::query_balance(&config);
+        assert!(!payload.ok);
+        assert_eq!(payload.error_kind.as_deref(), Some("no_key"));
+        // 还原：缓存清空、环境变量复位。
+        crate::usage::set_cache_for_test(Vec::new());
+        match prev_box {
+            Some(v) => std::env::set_var("DSH_BOX_API_KEY", v),
+            None => std::env::remove_var("DSH_BOX_API_KEY"),
+        }
+        match prev_deep {
+            Some(v) => std::env::set_var("DEEPSEEK_API_KEY", v),
+            None => std::env::remove_var("DEEPSEEK_API_KEY"),
+        }
+    }
+
+    #[test]
+    fn guarded_url_allows_https_anywhere_and_http_only_on_private_hosts() {
+        use super::guarded_balance_url;
+        // https：任意主机放行（含自带路径的网关）
+        assert_eq!(
+            guarded_balance_url("https://api.deepseek.com")
+                .ok()
+                .as_deref(),
+            Some("https://api.deepseek.com/user/balance")
+        );
+        assert!(guarded_balance_url("https://gateway.example.com:8443/v1").is_ok());
+        // http：仅放行回环/私有地址（自托管局域网网关）
+        assert!(guarded_balance_url("http://127.0.0.1:8317").is_ok());
+        assert!(guarded_balance_url("http://localhost:8317").is_ok());
+        assert!(guarded_balance_url("http://192.168.1.10:8317").is_ok());
+        assert!(guarded_balance_url("http://[::1]:8317").is_ok());
+        // http 公网地址：拒绝（防 API Key 明文外泄）
+        assert!(guarded_balance_url("http://api.deepseek.com").is_err());
+        // userinfo / 其他协议 / 非法 URL：一律拒绝
+        assert!(guarded_balance_url("https://user:pass@api.deepseek.com").is_err());
+        assert!(guarded_balance_url("ftp://api.deepseek.com").is_err());
+        assert!(guarded_balance_url("not a url").is_err());
     }
 }

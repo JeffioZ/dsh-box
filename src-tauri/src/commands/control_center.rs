@@ -62,7 +62,7 @@ pub async fn session_stats_get(
         })
 }
 
-/// 订阅额度快照（阶段 3 的只读入口）。
+/// 订阅额度快照（阶段 3 的只读入口；缓存优先，空缓存回退同步查询）。
 #[tauri::command]
 pub async fn usage_subscriptions_get(
     app: AppHandle,
@@ -77,17 +77,19 @@ pub async fn usage_subscriptions_get(
         .into());
     }
     let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || crate::usage::subscriptions(&config))
-        .await
-        .map_err(|e| {
-            crate::locale::owned(
-                format!("订阅额度查询任务异常结束：{e}"),
-                format!("The subscription query task ended unexpectedly: {e}"),
-            )
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::usage::cached_subscriptions().unwrap_or_else(|| crate::usage::subscriptions(&config))
+    })
+    .await
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("订阅额度查询任务异常结束：{e}"),
+            format!("The subscription query task ended unexpectedly: {e}"),
+        )
+    })
 }
 
-/// 供应商账户快照（阶段 2 的只读入口：枚举已配置路由并查询余额）。
+/// 供应商账户快照（阶段 2 的只读入口；缓存优先，空缓存回退同步查询）。
 #[tauri::command]
 pub async fn usage_accounts_get(
     app: AppHandle,
@@ -102,14 +104,29 @@ pub async fn usage_accounts_get(
         .into());
     }
     let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || crate::usage::accounts(&config))
-        .await
-        .map_err(|e| {
-            crate::locale::owned(
-                format!("账户查询任务异常结束：{e}"),
-                format!("The account query task ended unexpectedly: {e}"),
-            )
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(cached) = crate::usage::cached_accounts() {
+            return Ok(cached);
+        }
+        crate::usage::accounts(&config)
+    })
+    .await
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("账户查询任务异常结束：{e}"),
+            format!("The account query task ended unexpectedly: {e}"),
+        )
+    })?
+}
+
+/// 手动触发账户全量刷新：single-flight 合并、立即返回，结果经
+/// `usage-accounts-updated` 事件推送（后台监测线程旁路的同一通道）。
+#[tauri::command]
+pub fn usage_accounts_refresh(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
+    crate::usage::request_account_refresh(app);
+    Ok(())
 }
 
 /// 历史用量聚合报告（阶段 1 的只读入口；跨会话按日/模型聚合本地日志）。
@@ -135,6 +152,31 @@ pub async fn usage_report_get(
                 format!("The usage statistics task ended unexpectedly: {e}"),
             )
         })?
+}
+
+/// 当前会话路由上下文（只读入口；无活动会话时三字段全 null）。
+#[tauri::command]
+pub async fn usage_session_context_get(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::usage::SessionContext, String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取会话上下文。",
+            "The session context is available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    tauri::async_runtime::spawn_blocking(move || crate::usage::session_context(&config))
+        .await
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("会话上下文任务异常结束：{e}"),
+                format!("The session context task ended unexpectedly: {e}"),
+            )
+        })
 }
 
 /// 余额弹窗内“刷新”按钮：后台重新查询，结果经轮询通道返回。

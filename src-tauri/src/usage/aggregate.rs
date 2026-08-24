@@ -10,6 +10,20 @@
 //! Rust 独立重写。因其构成对上述 MIT 许可软件的实质性派生，按 MIT 条款
 //! 在此保留版权与许可声明，完整文本见仓库根 `THIRD_PARTY_NOTICES.md`。
 //!
+//! 同步锚点：上游仓库 <https://github.com/Ychris12138/dsh-usage-stats>
+//! （npm 包 `@ychris12138/dsh-usage-stats`），锚定 v0.3 未发布版 commit
+//! `f513669`（2026-08-24，待 v0.3 正式 tag 后回锚），对应源文件
+//! `lib/usage.js`（`applyUsageDelta` / `resetUsageState` / `renderUsage`
+//! 等）与 `lib/index.js` 的折叠状态序列化段。与上游的刻意分歧：
+//! - `render` 同 token 的模型行按名称升序二次排序（上游仅按 token 降序，
+//!   并列时保持插入序）；
+//! - 增量缓存文件名与版本独立（`dshbox-usage-stats-cache.json`，见
+//!   `cache.rs`），不与上游共享、互写缓存文件；
+//! - 无时间戳的样本跳过不折（上游会落入 `NaN-NaN-NaN` 日期桶）；
+//! - 数据源只有持久化会话日志一种，`FoldState.kind` 恒为 `Persisted`
+//!   （上游还有 live 内存事件源并处理 live/persisted 迁移；字段与
+//!   `reset_fold` 语义保留，缓存结构与上游对齐）。
+//!
 //! ## 语义说明
 //!
 //! 追加式会话日志中的用量样本来源：
@@ -21,7 +35,9 @@
 //!
 //! 模型归因：`assistant/message` 用 `data.message.source.{provider,model}`；
 //! `usage` chunk 回退到最近一次 `request/header` 的 `data.header.config`；
-//! 两者皆无则落入 `unknown/unknown`。
+//! 两者皆无则落入 `unknown/unknown`。回退游标 `current_model` 只在
+//! `request/header` 事件上更新——`assistant/message` 的归因来自事件自身，
+//! 不污染后续 chunk 的回退归因（对齐上游 `applyUsageDelta`）。
 
 use std::collections::HashMap;
 
@@ -73,8 +89,68 @@ pub struct FoldState {
     pub(crate) last_sample: Option<SampleRef>,
     /// 最近一次 request/header 归因的 provider/model。
     pub(crate) current_model: Option<String>,
+    /// 最近一次路由归因（对齐上游 v0.3 `currentRoute`）：request/header 与
+    /// assistant/message 都会推进，供「当前会话上下文」读取；只是
+    /// current_model 游标的轻量投影，不是第二份用量账。
+    pub current_route: Option<CurrentRoute>,
     /// 已消费的事件序号（增量游标）。
     pub consumed: u64,
+    /// 折叠数据来源（对齐上游 v0.3 `state.kind`）。本壳只扫持久化日志，
+    /// 恒为 `Persisted`；保留字段是为缓存结构与上游对齐。
+    pub kind: FoldKind,
+    /// 上次折叠时会话日志的文件长度：追加式日志 len 未变即无新事件，
+    /// `fold_log` 据此跳过全量解码（serde 默认值兼容旧缓存）。
+    pub file_len: u64,
+}
+
+impl FoldState {
+    /// 重置增量折叠字段（对齐上游 `resetUsageState`）：保留 kind/file_len
+    /// 等元数据，折叠游标全部清零，供整段重折前调用。
+    pub(crate) fn reset_fold(&mut self) {
+        self.days.clear();
+        self.last_sample = None;
+        self.current_model = None;
+        self.current_route = None;
+        self.consumed = 0;
+    }
+}
+
+/// 折叠数据来源（对齐上游 `state.kind` 的 `"live" | "persisted"`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FoldKind {
+    /// 内存事件流（上游 live 会话；本壳无此来源，仅为结构对齐保留）。
+    Live,
+    /// 持久化会话日志（本壳唯一来源，默认值）。
+    #[default]
+    Persisted,
+}
+
+impl FoldKind {
+    /// 缓存落盘用的字符串形式（与上游 `kind` 字段同值）。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            FoldKind::Live => "live",
+            FoldKind::Persisted => "persisted",
+        }
+    }
+
+    /// 从缓存字符串还原（无法识别按上游 `parseSession` 口径回落 persisted）。
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw {
+            "live" => FoldKind::Live,
+            _ => FoldKind::Persisted,
+        }
+    }
+}
+
+/// 最近一次路由归因（provider/model + 事件时刻；对齐上游 `currentRoute`）。
+/// 无凭据、无监测细节，只是会话上下文的展示事实。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CurrentRoute {
+    pub provider_id: String,
+    pub model: String,
+    /// 归因事件的时刻（毫秒 epoch）；事件无时间戳时保留前一值。
+    pub updated_at: Option<i64>,
 }
 
 /// 一个本地日历日（`YYYY-MM-DD`）的聚合值。
@@ -217,13 +293,22 @@ fn local_offset_seconds() -> i64 {
 #[cfg(windows)]
 fn compute_local_offset_seconds() -> i64 {
     // Bias 是「UTC = local + Bias」中的分钟数（东半球为负），因此取反。
+    // 当前生效的附加偏差按返回值区分：夏令时期间用 DaylightBias，
+    // 其余（标准时/无夏令时）用 StandardBias。
     let mut info: windows_sys::Win32::System::Time::TIME_ZONE_INFORMATION =
         unsafe { std::mem::zeroed() };
     let result = unsafe { windows_sys::Win32::System::Time::GetTimeZoneInformation(&mut info) };
     if result == windows_sys::Win32::System::Time::TIME_ZONE_ID_INVALID {
         return 0;
     }
-    -((info.Bias + info.StandardBias) as i64) * 60
+    // windows-sys 0.61 只导出 TIME_ZONE_ID_INVALID；DAYLIGHT 按 Win32 定义取常量值
+    const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
+    let active_bias = if result == TIME_ZONE_ID_DAYLIGHT {
+        info.Bias + info.DaylightBias
+    } else {
+        info.Bias + info.StandardBias
+    };
+    -(active_bias as i64) * 60
 }
 
 #[cfg(not(windows))]
@@ -249,9 +334,23 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// 把一段新事件折叠进状态（顺序执行、可跨多次调用复用增量游标）。
 pub fn apply_delta(state: &mut FoldState, events: &[Event]) {
     for event in events {
-        if event.kind == "request/header" || event.kind == "assistant/message" {
+        // 对齐上游 v0.3（lib/usage.js applyUsageDelta）：request/header 与
+        // assistant/message 都推进 current_route（实时路由上下文，事件无
+        // 时间戳时 updated_at 保留前一值）；token 归因语义不变——
+        // current_model 仍只在 request/header 更新，assistant/message 的
+        // 归因来自事件自身 data.message.source，不污染后续 chunk 的回退归因。
+        if matches!(event.kind.as_str(), "request/header" | "assistant/message") {
             if let Some((p, m)) = event.attribution() {
-                state.current_model = Some(format!("{p}/{m}"));
+                if event.kind == "request/header" {
+                    state.current_model = Some(format!("{p}/{m}"));
+                }
+                state.current_route = Some(CurrentRoute {
+                    provider_id: p,
+                    model: m,
+                    updated_at: event
+                        .time_ms
+                        .or(state.current_route.as_ref().and_then(|r| r.updated_at)),
+                });
             }
         }
         let Some(time) = event.time_ms else {
@@ -447,6 +546,126 @@ mod tests {
         apply_delta(&mut state, &events);
         let entry = state.days.get(&day_key(DAY1)).unwrap();
         assert!(entry.models.contains_key("oz/gpt-x"));
+    }
+
+    #[test]
+    fn message_attribution_does_not_leak_into_following_chunks() {
+        // 上游语义：assistant/message 用自身 source 归因，但不更新回退游标；
+        // 其后无新 header 的 usage chunk 仍归于最近一次 request/header 的模型。
+        let mut state = FoldState::default();
+        let lines = [
+            event(
+                1,
+                DAY1,
+                "request/header",
+                serde_json::json!({"header": {"config": {"provider": "oz", "model": "gpt-x"}}}),
+            ),
+            event(
+                2,
+                DAY1,
+                "assistant/message",
+                serde_json::json!({
+                    "turn": 1, "step": 1,
+                    "message": {"source": {"provider": "kimi", "model": "k2"}},
+                    "usage": {"inputTokens": 10, "outputTokens": 5}
+                }),
+            ),
+            usage_chunk(3, DAY1, 2, 1, 100, 50), // message 之后、无新 header
+        ];
+        let events: Vec<Event> = lines.iter().map(|l| Event::parse(l).unwrap()).collect();
+        apply_delta(&mut state, &events);
+        let entry = state.days.get(&day_key(DAY1)).unwrap();
+        assert_eq!(entry.models.get("kimi/k2").unwrap().total(), 15);
+        assert_eq!(entry.models.get("oz/gpt-x").unwrap().total(), 150);
+        assert_eq!(entry.models.len(), 2);
+    }
+
+    #[test]
+    fn current_route_tracks_messages_while_current_model_stays_header_driven() {
+        // 上游 v0.3：current_route 在 request/header 与 assistant/message 上
+        // 都推进（实时路由上下文），current_model 仍只随 request/header。
+        let mut state = FoldState::default();
+        let lines = [
+            event(
+                1,
+                DAY1,
+                "request/header",
+                serde_json::json!({"header": {"config": {"provider": "oz", "model": "gpt-x"}}}),
+            ),
+            event(
+                2,
+                DAY1 + 1000,
+                "assistant/message",
+                serde_json::json!({
+                    "turn": 1, "step": 1,
+                    "message": {"source": {"provider": "kimi", "model": "k2"}},
+                    "usage": {"inputTokens": 10, "outputTokens": 5}
+                }),
+            ),
+        ];
+        let events: Vec<Event> = lines.iter().map(|l| Event::parse(l).unwrap()).collect();
+        apply_delta(&mut state, &events);
+        assert_eq!(state.current_model.as_deref(), Some("oz/gpt-x"));
+        let route = state.current_route.as_ref().unwrap();
+        assert_eq!(route.provider_id, "kimi");
+        assert_eq!(route.model, "k2");
+        assert_eq!(route.updated_at, Some(DAY1 + 1000));
+    }
+
+    #[test]
+    fn current_route_keeps_previous_updated_at_when_event_has_no_time() {
+        // 上游 v0.3：事件无时间戳时 current_route 仍推进，updated_at 保留
+        // 前一值（`Number.isFinite(event.time) ? event.time : prev ?? null`）。
+        let mut state = FoldState::default();
+        let lines = [
+            event(
+                1,
+                DAY1,
+                "request/header",
+                serde_json::json!({"header": {"config": {"provider": "oz", "model": "gpt-x"}}}),
+            ),
+            // 无 time 字段的 message：路由切换生效，时刻保留 header 的值。
+            serde_json::json!({
+                "seq": 2, "type": "assistant/message",
+                "data": {"turn": 1, "step": 1,
+                    "message": {"source": {"provider": "kimi", "model": "k2"}},
+                    "usage": {"inputTokens": 1, "outputTokens": 1}}
+            })
+            .to_string(),
+        ];
+        let events: Vec<Event> = lines.iter().map(|l| Event::parse(l).unwrap()).collect();
+        apply_delta(&mut state, &events);
+        let route = state.current_route.as_ref().unwrap();
+        assert_eq!(route.provider_id, "kimi");
+        assert_eq!(route.updated_at, Some(DAY1));
+    }
+
+    #[test]
+    fn reset_fold_clears_fold_cursors_but_keeps_metadata() {
+        // 对齐上游 resetUsageState：折叠游标清零，kind/file_len 元数据保留。
+        let mut state = FoldState {
+            kind: FoldKind::Live,
+            file_len: 4096,
+            ..Default::default()
+        };
+        let lines = [
+            event(
+                1,
+                DAY1,
+                "request/header",
+                serde_json::json!({"header": {"config": {"provider": "oz", "model": "gpt-x"}}}),
+            ),
+            usage_chunk(2, DAY1, 1, 1, 10, 5),
+        ];
+        let events: Vec<Event> = lines.iter().map(|l| Event::parse(l).unwrap()).collect();
+        apply_delta(&mut state, &events);
+        assert!(state.current_route.is_some());
+        state.reset_fold();
+        assert!(state.days.is_empty());
+        assert!(state.current_route.is_none());
+        assert_eq!(state.consumed, 0);
+        assert_eq!(state.kind, FoldKind::Live);
+        assert_eq!(state.file_len, 4096);
     }
 
     #[test]

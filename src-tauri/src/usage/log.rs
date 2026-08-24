@@ -12,6 +12,8 @@ use crate::app_state::Config;
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 /// 单帧最大解压大小（防御异常输入）。
 const MAX_FRAME_DECOMPRESSED: usize = 16 * 1024 * 1024;
+/// 全文件解压总量上限（防大日志内存尖峰）。
+const MAX_TOTAL_DECOMPRESSED: usize = 512 * 1024 * 1024;
 
 /// 全量解码一个会话日志文件为 multiline 事件文本。
 ///
@@ -19,6 +21,11 @@ const MAX_FRAME_DECOMPRESSED: usize = 16 * 1024 * 1024;
 /// 解压文本追加到输出并跳到帧尾。压缩数据内出现伪 magic 时解压会失败，
 /// 该候选被当作帧内字节跳过，继续向后扫描（伪 magic 概率极低）。
 pub(crate) fn read_full(path: &Path) -> Result<String, String> {
+    read_full_limited(path, MAX_TOTAL_DECOMPRESSED)
+}
+
+/// `read_full` 的限量版（上限可注入，便于测试）。
+fn read_full_limited(path: &Path, max_total: usize) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
     file.read_to_end(&mut raw).map_err(|e| e.to_string())?;
@@ -32,6 +39,12 @@ pub(crate) fn read_full(path: &Path) -> Result<String, String> {
             // 精确帧边界。
             match decode_one_frame(&raw[cursor..]) {
                 Some((text, consumed)) => {
+                    if out.len() + text.len() > max_total {
+                        return Err(format!(
+                            "会话日志解压总量超过上限（{} MiB）",
+                            max_total / 1024 / 1024
+                        ));
+                    }
                     if !text.is_empty() {
                         out.push_str(&text);
                     }
@@ -55,14 +68,16 @@ fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
     let mut decoder = zstd::stream::read::Decoder::with_buffer(&mut cursor)
         .ok()?
         .single_frame();
-    let mut text = String::new();
+    // 整帧解码为字节后一次性 from_utf8（对照 session_log.rs 的整帧范式）：
+    // 逐块 from_utf8_lossy 会把跨 64KB 块边界的多字节字符拆成 U+FFFD。
+    let mut decoded = Vec::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         match decoder.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                text.push_str(&String::from_utf8_lossy(&buf[..n]));
-                if text.len() > MAX_FRAME_DECOMPRESSED {
+                decoded.extend_from_slice(&buf[..n]);
+                if decoded.len() > MAX_FRAME_DECOMPRESSED {
                     return None;
                 }
             }
@@ -74,6 +89,7 @@ fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
     if consumed == 0 {
         return None;
     }
+    let text = String::from_utf8(decoded).ok()?;
     Some((text, consumed))
 }
 
@@ -102,12 +118,11 @@ pub(crate) fn list_sessions(config: &Config) -> Vec<(String, PathBuf)> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_full;
+    use super::{read_full, read_full_limited};
 
-    #[test]
-    fn decodes_appended_frames_from_head() {
+    fn temp_log(tag: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "dshbox-usage-full-{}-{}",
+            "dshbox-usage-full-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -115,12 +130,42 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("session.jsonl.zstd");
+        root.join("session.jsonl.zstd")
+    }
+
+    #[test]
+    fn decodes_appended_frames_from_head() {
+        let path = temp_log("frames");
         let mut stream = zstd::encode_all("one\n".as_bytes(), 3).unwrap();
         stream.extend_from_slice(&zstd::encode_all("two\n".as_bytes(), 3).unwrap());
         stream.extend_from_slice(&zstd::encode_all("three\n".as_bytes(), 3).unwrap());
         std::fs::write(&path, stream).unwrap();
         assert_eq!(read_full(&path).unwrap(), "one\ntwo\nthree\n");
-        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn decodes_multibyte_char_spanning_read_buffer_boundary() {
+        // 「界」为 3 字节 UTF-8，起点放在 64KB 解码缓冲的最后两个字节处，
+        // 逐块 lossy 会把它拆成 U+FFFD；整帧 from_utf8 必须原样还原。
+        let mut payload = "a".repeat(64 * 1024 - 1);
+        payload.push_str("界\n");
+        payload.push_str(&"b".repeat(70 * 1024));
+        let path = temp_log("utf8");
+        std::fs::write(&path, zstd::encode_all(payload.as_bytes(), 3).unwrap()).unwrap();
+        assert_eq!(read_full(&path).unwrap(), payload);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn errors_when_total_decompressed_exceeds_cap() {
+        let path = temp_log("cap");
+        let mut stream = zstd::encode_all("one\n".as_bytes(), 3).unwrap();
+        stream.extend_from_slice(&zstd::encode_all("two\n".as_bytes(), 3).unwrap());
+        std::fs::write(&path, stream).unwrap();
+        // 两帧各 4 字节：上限 6 时第二帧触发报错，上限 8 时完整读出。
+        assert!(read_full_limited(&path, 6).is_err());
+        assert_eq!(read_full_limited(&path, 8).unwrap(), "one\ntwo\n");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

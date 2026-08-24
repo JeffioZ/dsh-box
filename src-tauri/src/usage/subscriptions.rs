@@ -32,6 +32,10 @@ pub struct SubscriptionSnapshot {
     pub plan: String,
     pub windows: Vec<QuotaWindow>,
     pub error: Option<String>,
+    /// 瞬错保旧标记：true 表示本快照是上次成功数据。
+    pub stale: bool,
+    /// 预警级别："none" | "warning" | "critical"。
+    pub warn_level: &'static str,
 }
 
 /// 订阅适配器：以路由 id 识别。
@@ -102,20 +106,52 @@ fn to_iso(value: Option<f64>) -> Option<String> {
     ))
 }
 
-fn http_get(agent: &ureq::Agent, url: &str, key: &str) -> Result<serde_json::Value, String> {
+/// 订阅预警级别（与前端 warnLevelOf 同阈值）：最紧窗口（min
+/// remaining_percent，0..100）≤ 10 → "critical"，≤ 30 → "warning"；
+/// 无窗口为 "none"。
+fn warn_of_windows(windows: &[QuotaWindow]) -> &'static str {
+    let Some(min) = windows.iter().map(|w| w.remaining_percent).reduce(f64::min) else {
+        return "none";
+    };
+    if min <= 10.0 {
+        "critical"
+    } else if min <= 30.0 {
+        "warning"
+    } else {
+        "none"
+    }
+}
+
+fn http_get(
+    agent: &ureq::Agent,
+    url: &str,
+    key: &str,
+) -> Result<serde_json::Value, (&'static str, String)> {
     let resp = agent
         .get(url)
         .header("Authorization", &format!("Bearer {key}"))
         .header("Accept", "application/json")
         .call()
-        .map_err(|e| format!("{e}"))?;
-    resp.into_body().read_json().map_err(|e| format!("{e}"))
+        .map_err(|e| {
+            // 与 balance::query_route 同一分类口径：401/403 与限流必须区别于
+            // 一般网络错误，账户监测的瞬错保旧（stale）依赖该分类。
+            let status = match &e {
+                ureq::Error::StatusCode(401) | ureq::Error::StatusCode(403) => "unauthorized",
+                ureq::Error::StatusCode(429) => "rate-limited",
+                _ => "unavailable",
+            };
+            (status, format!("{e}"))
+        })?;
+    resp.into_body()
+        .read_json()
+        .map_err(|e| ("invalid-response", format!("{e}")))
 }
 
 fn agent() -> &'static ureq::Agent {
     static A: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     A.get_or_init(|| {
         ureq::Agent::config_builder()
+            .tls_config(crate::default_tls_config())
             .timeout_connect(Some(Duration::from_secs(5)))
             .timeout_recv_response(Some(DEFAULT_TIMEOUT))
             .timeout_recv_body(Some(DEFAULT_TIMEOUT))
@@ -134,7 +170,13 @@ fn guard_url_https(url: &str) -> Result<String, &'static str> {
         return Err("url-credentials");
     }
     if let Some(host) = parsed.host_str() {
-        if is_private_address(host) {
+        // 对齐 balance 的 hostname_is_private 口径：localhost/.localhost
+        // 与私有/回环地址一样拒绝。
+        let host = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_lowercase();
+        if host == "localhost" || host.ends_with(".localhost") || is_private_address(&host) {
             return Err("private-network");
         }
     }
@@ -364,19 +406,64 @@ fn parse_ollama(body: &serde_json::Value) -> Vec<QuotaWindow> {
     out
 }
 
+/// 适配器默认凭据环境变量名（路由未声明 `apiKeyEnv` 时的回退）。
+fn default_key_env(adapter: SubscriptionAdapter) -> &'static str {
+    match adapter {
+        SubscriptionAdapter::OpenCodeGo => "OPENCODE_GO_API_KEY",
+        SubscriptionAdapter::Zai => "ZAI_API_KEY",
+        SubscriptionAdapter::Kimi => "KIMI_API_KEY",
+        SubscriptionAdapter::MiniMax => "MINIMAX_API_KEY",
+        SubscriptionAdapter::Ollama => "OLLAMA_API_KEY",
+    }
+}
+
+/// 凭据环境变量名解析：与 balance::query_route 同口径——优先路由声明的
+/// `apiKeyEnv`，未声明（或空白）时回退适配器默认。
+fn key_env_of(route: &ProviderRoute, adapter: SubscriptionAdapter) -> &str {
+    route
+        .api_key_env
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| default_key_env(adapter))
+}
+
+/// 订阅凭据解析链：路由声明 env → 适配器默认 env → `.credentials.yaml`
+/// （按同序键名各查一次）。路由声明了但环境未提供时继续向链尾回退，
+/// 而不是直接判 not-configured。
+fn resolve_subscription_key(
+    config: &Config,
+    route: &ProviderRoute,
+    adapter: SubscriptionAdapter,
+) -> Option<String> {
+    let declared = route
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let names: Vec<&str> = declared
+        .into_iter()
+        .chain([default_key_env(adapter)])
+        .collect();
+    for name in &names {
+        if let Ok(value) = std::env::var(name) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    names
+        .iter()
+        .find_map(|name| crate::credentials::value(config, name))
+}
+
 /// 查询一个订阅适配器。
 pub fn query_subscription(
     config: &Config,
     route: &ProviderRoute,
     adapter: SubscriptionAdapter,
 ) -> SubscriptionSnapshot {
-    let key_env = match adapter {
-        SubscriptionAdapter::OpenCodeGo => "OPENCODE_GO_API_KEY",
-        SubscriptionAdapter::Zai => "ZAI_API_KEY",
-        SubscriptionAdapter::Kimi => "KIMI_API_KEY",
-        SubscriptionAdapter::MiniMax => "MINIMAX_API_KEY",
-        SubscriptionAdapter::Ollama => "OLLAMA_API_KEY",
-    };
+    let key_env = key_env_of(route, adapter);
     let display_name = match adapter {
         SubscriptionAdapter::OpenCodeGo => "OpenCode Go",
         SubscriptionAdapter::Zai => "Z.ai",
@@ -391,11 +478,7 @@ pub fn query_subscription(
         SubscriptionAdapter::MiniMax => "MiniMax Coding Plan",
         SubscriptionAdapter::Ollama => "Ollama",
     };
-    let Some(key) = std::env::var(key_env)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| crate::credentials::value(config, key_env))
-    else {
+    let Some(key) = resolve_subscription_key(config, route, adapter) else {
         return snapshot(
             route,
             adapter,
@@ -445,12 +528,12 @@ pub fn query_subscription(
             };
             snapshot(route, adapter, display_name, plan, status, windows, None)
         }
-        Err(e) => snapshot(
+        Err((status, e)) => snapshot(
             route,
             adapter,
             display_name,
             plan,
-            "unavailable",
+            status,
             Vec::new(),
             Some(e),
         ),
@@ -473,8 +556,10 @@ fn snapshot(
         adapter: adapter_name_of(_adapter),
         status,
         plan: plan.to_string(),
+        warn_level: warn_of_windows(&windows),
         windows,
         error,
+        stale: false,
     }
 }
 
@@ -488,24 +573,29 @@ fn adapter_name_of(adapter: SubscriptionAdapter) -> &'static str {
     }
 }
 
+/// 支持订阅查询的已知路由 id（每适配器一条）。
+///
+/// 同一适配器只保留一个 id：`zai-coding-cn` 与 `zai` 同属 Zai 适配器，
+/// 下方 `find` 按适配器相等匹配会命中同一条已配置路由，列两次会造成
+/// 同一账户重复查询、重复卡片（kimi/minimax 同理只列一个代表 id）。
+const KNOWN_IDS: &[(&str, SubscriptionAdapter)] = &[
+    ("opencode-go", SubscriptionAdapter::OpenCodeGo),
+    ("zai", SubscriptionAdapter::Zai),
+    ("kimi-coding", SubscriptionAdapter::Kimi),
+    ("minimax", SubscriptionAdapter::MiniMax),
+    ("ollama", SubscriptionAdapter::Ollama),
+];
+
 /// 阶段 3 入口：枚举所有支持订阅的路由并查询。
 pub fn subscriptions(config: &Config) -> Vec<SubscriptionSnapshot> {
     let mut out = Vec::new();
-    let known_ids = [
-        ("opencode-go", SubscriptionAdapter::OpenCodeGo),
-        ("zai", SubscriptionAdapter::Zai),
-        ("zai-coding-cn", SubscriptionAdapter::Zai),
-        ("kimi-coding", SubscriptionAdapter::Kimi),
-        ("minimax", SubscriptionAdapter::MiniMax),
-        ("ollama", SubscriptionAdapter::Ollama),
-    ];
     // 以已配置路由为主，缺失时用已知 id 的默认路由（外部凭据可能未在
     // settings.yaml 建模，但环境变量已提供 key）。
     let routes = super::providers::configured_routes(config);
-    for (id, adapter) in known_ids {
+    for (id, adapter) in KNOWN_IDS {
         let route = routes
             .iter()
-            .find(|r| adapter_of(&r.id) == Some(adapter))
+            .find(|r| adapter_of(&r.id) == Some(*adapter))
             .cloned()
             .unwrap_or_else(|| ProviderRoute {
                 id: id.to_string(),
@@ -513,7 +603,7 @@ pub fn subscriptions(config: &Config) -> Vec<SubscriptionSnapshot> {
                 api_key_env: None,
                 base_url: None,
             });
-        out.push(query_subscription(config, &route, adapter));
+        out.push(query_subscription(config, &route, *adapter));
     }
     out
 }
@@ -521,6 +611,15 @@ pub fn subscriptions(config: &Config) -> Vec<SubscriptionSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route(id: &str, api_key_env: Option<&str>) -> ProviderRoute {
+        ProviderRoute {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            api_key_env: api_key_env.map(str::to_string),
+            base_url: None,
+        }
+    }
 
     #[test]
     fn adapter_mapping_covers_subscription_routes() {
@@ -533,6 +632,161 @@ mod tests {
         assert_eq!(adapter_of("minimax-cn"), Some(SubscriptionAdapter::MiniMax));
         assert_eq!(adapter_of("ollama"), Some(SubscriptionAdapter::Ollama));
         assert_eq!(adapter_of("openrouter"), None);
+    }
+
+    #[test]
+    fn key_env_prefers_route_declaration_then_adapter_default() {
+        // 与 balance::query_route 同口径：路由声明的 apiKeyEnv 优先，
+        // 未声明/空白时回退适配器默认环境变量名。
+        assert_eq!(
+            key_env_of(&route("zai", Some("MY_ZAI_KEY")), SubscriptionAdapter::Zai),
+            "MY_ZAI_KEY"
+        );
+        assert_eq!(
+            key_env_of(&route("zai", None), SubscriptionAdapter::Zai),
+            "ZAI_API_KEY"
+        );
+        assert_eq!(
+            key_env_of(&route("kimi-coding", Some("  ")), SubscriptionAdapter::Kimi),
+            "KIMI_API_KEY"
+        );
+    }
+
+    #[test]
+    fn missing_declared_credential_reports_declared_env_name() {
+        // 未配置凭据时走 not-configured 短路（不发请求），错误信息应引用
+        // 路由声明的 apiKeyEnv 而非适配器默认名。
+        // 回退链会读适配器默认 env（ZAI_API_KEY）：env 进程全局，测试须
+        // 串行并暂时移除，避免真实环境/并行用例干扰判定。
+        let _guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev_default = std::env::var("ZAI_API_KEY").ok();
+        std::env::remove_var("ZAI_API_KEY");
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-sub-cred-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = Config::load();
+        config.dsh_home = root.clone();
+        let snap = query_subscription(
+            &config,
+            &route("zai", Some("DSHBOX_TEST_UNSET_ZAI_KEY_9F3K")),
+            SubscriptionAdapter::Zai,
+        );
+        match prev_default {
+            Some(v) => std::env::set_var("ZAI_API_KEY", v),
+            None => std::env::remove_var("ZAI_API_KEY"),
+        }
+        assert_eq!(snap.status, "not-configured");
+        assert!(snap
+            .error
+            .unwrap()
+            .contains("DSHBOX_TEST_UNSET_ZAI_KEY_9F3K"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn subscription_key_chain_route_env_then_default_env_then_file() {
+        let _guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        const DECLARED: &str = "DSHBOX_TEST_SUB_DECLARED_KEY_6T1W";
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-sub-chain-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".credentials.yaml"), "ZAI_API_KEY: file-zai\n").unwrap();
+        let mut config = Config::load();
+        config.dsh_home = root.clone();
+        let prev_declared = std::env::var(DECLARED).ok();
+        let prev_default = std::env::var("ZAI_API_KEY").ok();
+        // 路由声明优先于适配器默认（两者都设置时取声明值）。
+        std::env::set_var(DECLARED, "declared-key");
+        std::env::set_var("ZAI_API_KEY", "default-key");
+        let declared_route = route("zai", Some(DECLARED));
+        assert_eq!(
+            resolve_subscription_key(&config, &declared_route, SubscriptionAdapter::Zai).as_deref(),
+            Some("declared-key")
+        );
+        // 声明 env 未提供：回退适配器默认 env。
+        std::env::remove_var(DECLARED);
+        assert_eq!(
+            resolve_subscription_key(&config, &declared_route, SubscriptionAdapter::Zai).as_deref(),
+            Some("default-key")
+        );
+        // 链尾：环境全无 → 凭据文件（按适配器默认键名）。
+        std::env::remove_var("ZAI_API_KEY");
+        assert_eq!(
+            resolve_subscription_key(&config, &declared_route, SubscriptionAdapter::Zai).as_deref(),
+            Some("file-zai")
+        );
+        match prev_declared {
+            Some(v) => std::env::set_var(DECLARED, v),
+            None => std::env::remove_var(DECLARED),
+        }
+        match prev_default {
+            Some(v) => std::env::set_var("ZAI_API_KEY", v),
+            None => std::env::remove_var("ZAI_API_KEY"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn warn_level_uses_tightest_window() {
+        let window = |remaining_percent: f64| QuotaWindow {
+            kind: "session".to_string(),
+            used_percent: 100.0 - remaining_percent,
+            remaining_percent,
+            resets_at: None,
+        };
+        // 阈值含等号：30 → warning，10 → critical；取最紧（min）窗口。
+        assert_eq!(warn_of_windows(&[window(30.0)]), "warning");
+        assert_eq!(warn_of_windows(&[window(10.0)]), "critical");
+        assert_eq!(warn_of_windows(&[window(70.0), window(25.0)]), "warning");
+        assert_eq!(warn_of_windows(&[window(80.0), window(9.0)]), "critical");
+        assert_eq!(warn_of_windows(&[window(31.0)]), "none");
+        assert_eq!(warn_of_windows(&[]), "none");
+    }
+
+    #[test]
+    fn known_ids_have_unique_adapters() {
+        // 同一适配器出现两次会按适配器匹配命中同一路由，产生重复查询与
+        // 重复卡片；每个 id 也必须能被 adapter_of 识别。
+        let mut seen: Vec<SubscriptionAdapter> = Vec::new();
+        for (id, adapter) in KNOWN_IDS {
+            assert!(!seen.contains(adapter), "适配器重复：{id}");
+            seen.push(*adapter);
+            assert_eq!(adapter_of(id), Some(*adapter));
+        }
+    }
+
+    #[test]
+    fn guard_rejects_localhost_and_private_hosts() {
+        assert_eq!(
+            guard_url_https("https://localhost/api"),
+            Err("private-network")
+        );
+        assert_eq!(
+            guard_url_https("https://agent.localhost/api"),
+            Err("private-network")
+        );
+        assert_eq!(
+            guard_url_https("https://127.0.0.1/api"),
+            Err("private-network")
+        );
+        assert_eq!(guard_url_https("http://api.z.ai"), Err("insecure-protocol"));
+        assert!(guard_url_https("https://api.z.ai/api/monitor/usage/quota/limit").is_ok());
     }
 
     #[test]

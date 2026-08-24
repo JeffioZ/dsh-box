@@ -22,6 +22,7 @@ fn stats_agent() -> &'static ureq::Agent {
     STATS_AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(2)))
+            .timeout_recv_response(Some(Duration::from_secs(3)))
             .timeout_recv_body(Some(Duration::from_secs(3)))
             .build()
             .new_agent()
