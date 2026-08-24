@@ -52,7 +52,7 @@ pub fn state(app: &AppHandle) -> OnboardingState {
         needs_onboarding: needs_onboarding(&config),
         api_key_set: ["DSH_BOX_API_KEY", "DEEPSEEK_API_KEY"]
             .iter()
-            .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+            .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
             || crate::credentials::has(&config, DEEPSEEK_API_KEY_NAME),
         language: if crate::locale::is_chinese() {
             "zh-CN".to_string()
@@ -81,12 +81,8 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty());
-    if api_key.is_some_and(|key| key.chars().any(char::is_control)) {
-        return Err(crate::locale::text(
-            "API Key 含有不允许的控制字符。",
-            "The API key contains invalid control characters.",
-        )
-        .into());
+    if let Some(key) = api_key {
+        validate_api_key(key)?;
     }
     if !matches!(payload.language.as_str(), "zh-CN" | "en") {
         return Err(crate::locale::text("不支持的界面语言。", "Unsupported UI language.").into());
@@ -113,7 +109,11 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     }
     crate::tray::apply_language(app, &payload.language);
 
-    config.save_dsh_theme(&payload.theme)?;
+    // 与语言同步同一口径：外壳主题已由 apply_theme 即时生效，写入 dsh 配置
+    // 失败不阻断引导收尾（用户稍后可在外壳设置中重新调整并再次同步）。
+    if let Err(e) = config.save_dsh_theme(&payload.theme) {
+        crate::logging::log(&format!("onboarding: 同步 dsh 主题失败：{e}"));
+    }
     crate::tray::apply_theme(app, &payload.theme);
 
     crate::autostart::set_enabled(payload.autostart)?;
@@ -157,6 +157,20 @@ fn persist_onboarding_completion(config: &app_state::Config) -> Result<(), Strin
 /// 与启动状态机共用同一首次引导判定。
 fn needs_onboarding(config: &app_state::Config) -> bool {
     crate::app_state::onboarding_required(&config.root)
+}
+
+/// 用户输入 API Key 的统一格式校验（调用方已 trim 并剔除空值）：拒绝控制
+/// 字符与异常长度（4096 上限）。设置页与首次引导共用同一口径，避免一处
+/// 收紧一处放行。
+pub(crate) fn validate_api_key(key: &str) -> Result<(), String> {
+    if key.len() > 4096 || key.chars().any(char::is_control) {
+        return Err(crate::locale::text(
+            "API Key 含有无效字符或长度异常。",
+            "The API key contains invalid characters or is too long.",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// 行级合并写入 dsh 凭据文件（`DEEPSEEK_API_KEY: <key>`），原子替换。
@@ -210,6 +224,16 @@ mod tests {
         ] {
             assert!(!can_finish_onboarding(phase));
         }
+    }
+
+    #[test]
+    fn api_key_validation_rejects_control_chars_and_excessive_length() {
+        use super::validate_api_key;
+        assert!(validate_api_key("sk-normal-key_123").is_ok());
+        assert!(validate_api_key("line\nbreak").is_err());
+        assert!(validate_api_key("tab\tchar").is_err());
+        assert!(validate_api_key(&"x".repeat(4096)).is_ok());
+        assert!(validate_api_key(&"x".repeat(4097)).is_err());
     }
 
     #[test]

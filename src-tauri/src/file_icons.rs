@@ -31,27 +31,74 @@ pub fn icon_png_16(path: &Path) -> Option<Vec<u8>> {
 /// 无缓存提取（内部实现）。
 #[cfg(windows)]
 fn icon_png_16_uncached(path: &Path) -> Option<Vec<u8>> {
+    // Win11 起 mspaint 等系统工具迁移为 MSIX 应用，System32 原路径已不存在；
+    // 同名应用执行别名仍提供打包图标，原路径失败时兜底再试一次。
+    let hicon = match sh_small_icon(path) {
+        Some(hicon) => hicon,
+        None => sh_small_icon(&windows_apps_alias(path)?)?,
+    };
+    let png = hicon_to_png(hicon);
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon(hicon) };
+    png
+}
+
+/// 取路径的小图标 HICON（调用方负责 DestroyIcon）；失败返回 None。
+/// SHGetFileInfoW 在进程首次并发取图标时会因 shell 图标缓存冷启动竞争
+/// 短暂失败、立即重试即成功（实测 8 线程并发首调大面积失败、二调全过），
+/// 故失败时短歇重试两次再放弃；真正的缺失文件三次都失败，仍返回 None。
+#[cfg(windows)]
+fn sh_small_icon(path: &Path) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HICON> {
     use std::mem::zeroed;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON};
 
     let path_w: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut info: SHFILEINFOW = unsafe { zeroed() };
-    let ok = unsafe {
-        SHGetFileInfoW(
-            path_w.as_ptr(),
-            0,
-            &mut info,
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_SMALLICON,
-        )
-    };
-    if ok == 0 || info.hIcon.is_null() {
+    for attempt in 0..3 {
+        let mut info: SHFILEINFOW = unsafe { zeroed() };
+        let ok = unsafe {
+            SHGetFileInfoW(
+                path_w.as_ptr(),
+                0,
+                &mut info,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_SMALLICON,
+            )
+        };
+        if ok != 0 && !info.hIcon.is_null() {
+            return Some(info.hIcon);
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    None
+}
+
+/// System32 直下且不存在的 exe，可能在 %LOCALAPPDATA%\Microsoft\WindowsApps
+/// 有同名应用执行别名（MSIX 迁移，如 mspaint）。仅限该目录兜底：避免把任意
+/// 缺失路径映射到用户可写的 WindowsApps 目录而被偷换图标。
+#[cfg(windows)]
+pub(crate) fn windows_apps_alias(path: &Path) -> Option<std::path::PathBuf> {
+    if path.exists() {
         return None;
     }
-    let png = hicon_to_png(info.hIcon);
-    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon(info.hIcon) };
-    png
+    let system32 = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)?
+        .join("System32");
+    let parent = path.parent()?;
+    if !parent
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&system32.to_string_lossy())
+    {
+        return None;
+    }
+    let name = path.file_name()?;
+    let alias = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)?
+        .join("Microsoft")
+        .join("WindowsApps")
+        .join(name);
+    alias.is_file().then_some(alias)
 }
 
 #[cfg(not(windows))]
@@ -117,7 +164,10 @@ fn hicon_to_png(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Op
             }
             return None;
         }
-        // 位图需选入 DC 后 GetDIBits 才能可靠取像素（DDB 转 DIB）
+        // 与 MSDN 约定相反但实测可行：MSDN 要求 GetDIBits 调用时位图不得选入
+        // 任何 DC，而对 DDB 图标位图只有先选入兼容 DC 才能可靠取出像素
+        // （DDB 转 DIB）。notepad_icon_encodes_to_png 全链路测试覆盖该用法，
+        // 不要按文档写法“修正”此处。
         let old = SelectObject(dc, ii.hbmColor);
         let lines = GetDIBits(
             dc,
@@ -207,6 +257,36 @@ mod tests {
     #[cfg(windows)]
     use super::icon_png_16;
 
+    /// mspaint 回归：Win11 MSIX 迁移后 System32 原路径可能已不存在，
+    /// 提取必须经 WindowsApps 应用执行别名兜底成功（原路径仍在的旧系统
+    /// 则直接走原路径）。两者都不存在的机器无 Paint 可用，跳过。
+    #[test]
+    #[cfg(windows)]
+    fn mspaint_icon_encodes_to_png() {
+        let system = std::path::PathBuf::from(
+            std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()),
+        )
+        .join(r"System32\mspaint.exe");
+        let alias_available = std::env::var("LOCALAPPDATA")
+            .map(|local| {
+                std::path::PathBuf::from(local)
+                    .join(r"Microsoft\WindowsApps\mspaint.exe")
+                    .is_file()
+            })
+            .unwrap_or(false);
+        if !system.exists() && !alias_available {
+            eprintln!("mspaint 不存在（System32 与别名均缺），跳过回归断言");
+            return;
+        }
+        let png = icon_png_16(&system).expect("mspaint 图标提取失败");
+        assert_eq!(
+            &png[..8],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+            "PNG 签名错误"
+        );
+        assert!(png.len() > 100, "PNG 过小，疑似空图标");
+    }
+
     /// 用系统 notepad.exe 验证 SHGetFileInfo → GetDIBits → PNG 编码全链路。
     #[test]
     #[cfg(windows)]
@@ -219,5 +299,35 @@ mod tests {
             "PNG 签名错误"
         );
         assert!(png.len() > 100, "PNG 过小，疑似空图标");
+    }
+
+    /// 并发冷启动回归：菜单会同时预热多个应用图标（code/notepad/paint），
+    /// 并发的首次 SHGetFileInfoW 可能因 shell 图标缓存竞争短暂失败，
+    /// 经重试必须全部成功。绕过进程内缓存直压提取函数，复现真实竞争。
+    #[test]
+    #[cfg(windows)]
+    fn concurrent_first_extracts_succeed() {
+        let mut paths = vec![std::path::PathBuf::from(r"C:\Windows\System32\notepad.exe")];
+        let mspaint = std::path::PathBuf::from(
+            std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()),
+        )
+        .join(r"System32\mspaint.exe");
+        // MSIX 迁移系统上别名存在才加入（旧系统直接有原路径）
+        if let Some(alias) = super::windows_apps_alias(&mspaint) {
+            paths.push(alias);
+        } else if mspaint.exists() {
+            paths.push(mspaint);
+        }
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            for path in paths.clone() {
+                handles.push(std::thread::spawn(move || {
+                    super::icon_png_16_uncached(&path).is_some()
+                }));
+            }
+        }
+        for handle in handles {
+            assert!(handle.join().unwrap(), "并发首次图标提取失败");
+        }
     }
 }

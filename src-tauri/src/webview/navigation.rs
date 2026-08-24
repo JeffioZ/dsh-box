@@ -48,9 +48,18 @@ pub(crate) fn is_allowed_navigation(app: &AppHandle, url: &url::Url) -> bool {
 /// 注入 dsh 页面的初始化脚本（document start 执行，每次导航生效）：
 /// 深色主题首帧预设：dsh 的 CSS 用 `body[data-ds-dark-theme]` 选择器，消除
 /// “深 loading → 白 dsh → 深 dsh”的首帧闪（dsh 挂载后自行接管主题）。
+/// document-start 时 <body> 尚不存在，用 MutationObserver 等其出现后再设。
 pub(crate) const PAGE_INIT_SCRIPT: &str = r#"
 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-  document.documentElement.dataset.dsDarkTheme = '';
+  var applyDsDark = function () { document.body.setAttribute('data-ds-dark-theme', ''); };
+  if (document.body) {
+    applyDsDark();
+  } else {
+    var dsDarkObs = new MutationObserver(function () {
+      if (document.body) { applyDsDark(); dsDarkObs.disconnect(); }
+    });
+    dsDarkObs.observe(document.documentElement, { childList: true });
+  }
 }
 "#;
 
@@ -201,6 +210,12 @@ if (!window.__dshdHeartbeat) {
 }
 "#;
 
+/// 注入脚本的语言内联值：与 title/token 同帧写入 window.__DSHD_LANG，
+/// 右键菜单（context-menu.js）首帧即按应用语言渲染，不等托盘语言跟随的 eval。
+fn injected_language() -> String {
+    serde_json::to_string(crate::locale::code()).unwrap_or_default()
+}
+
 /// 构造并注入 dsh 页面完整增强脚本。由 page-load 主路径与 navigate 定时
 /// 兜底共用；脚本内部以 __dshdInit 保证同一 document 只安装一次监听器。
 pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Result<(), String> {
@@ -210,8 +225,11 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
         return Ok(());
     }
     let title = serde_json::to_string(APP_TITLE).unwrap_or_default();
+    // 令牌一帧内交给注入脚本后即从全局对象删除；注入端只以 X-DSHd-Token
+    // 请求头回传——任何 URL 都不得携带令牌（resource timing 缓冲区同源可见）
     let protocol_token =
         serde_json::to_string(app.state::<AppState>().protocol_token()).unwrap_or_default();
+    let language = injected_language();
     let hide_tools = if config.hide_tool_calls {
         HIDE_TOOLS_APPLY
     } else {
@@ -227,6 +245,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
          if (window.__dshdInit === 'loading' || window.__dshdInit === 'ready') return; \
          window.__dshdInit = 'loading'; \
          window.__dshdProtocolToken = {protocol_token}; \
+         window.__DSHD_LANG = {language}; \
          try {{ \
            const t = {title}; \
            let dshSessionTitle = ''; \
@@ -317,7 +336,7 @@ pub fn navigate_to_splash(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::local_app_entry_url;
+    use super::{injected_language, local_app_entry_url};
 
     #[test]
     fn local_app_entry_uses_dev_origin_when_configured() {
@@ -331,5 +350,14 @@ mod tests {
     #[test]
     fn local_app_entry_uses_tauri_origin_in_production() {
         assert_eq!(local_app_entry_url(None), crate::SPLASH_ORIGIN);
+    }
+
+    #[test]
+    fn injected_language_is_a_quoted_supported_locale() {
+        // 与 locale::code() 的输出契约一致：右键菜单据此判断中英文
+        assert!(matches!(
+            injected_language().as_str(),
+            "\"zh-CN\"" | "\"en\""
+        ));
     }
 }

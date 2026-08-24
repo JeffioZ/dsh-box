@@ -40,7 +40,8 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     // 输出重定向到临时文件：npm 输出可能远超管道缓冲（64KB），
     // 若不持续读取会让子进程写阻塞，误触 5 分钟超时。
     // 文件名做安全化 + 唯一随机后缀：scope 包名含 @ / 等字符（Windows 文件名
-    // 不允许），同 pid 并发调用不共文件
+    // 不允许），同 pid 并发调用不共文件；长度截断防 Windows MAX_PATH 超限
+    // （临时目录路径 + 长 spec 可能超过 260 字符）。
     let safe_args: String = args
         .join("_")
         .chars()
@@ -51,6 +52,7 @@ fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
                 '_'
             }
         })
+        .take(40)
         .collect();
     let mut nonce = [0u8; 6];
     let _ = getrandom::fill(&mut nonce);
@@ -266,10 +268,7 @@ fn run_dsh_plugin_auto_locked(
     restore_interrupted_virtual_store(config)?;
     match run_dsh_plugin(app, args) {
         Ok(out) => Ok(out),
-        Err(e)
-            if is_virtual_store_error(&e)
-                || virtual_store_stale(&app.state::<AppState>().config()) =>
-        {
+        Err(e) if is_virtual_store_error(&e) || virtual_store_stale(config) => {
             crate::logging::log(
                 "plugins: 检测到 pnpm virtual store 错位，备份并重建 node_modules 后重试",
             );
@@ -446,13 +445,16 @@ fn recover_virtual_store(config: &crate::app_state::Config) -> Result<(), String
                 e,
             )
         })?;
-    std::fs::rename(&nm, &bak).map_err(|e| {
-        crate::locale::error(
+    if let Err(error) = std::fs::rename(&nm, &bak) {
+        // rename 未发生：清掉刚写入的 in-progress 标记（对齐下方 lock 备份
+        // 失败分支），避免遗留标记让下次操作误判存在未完成的自愈事务
+        let _ = std::fs::remove_file(&marker);
+        return Err(crate::locale::error(
             "备份 node_modules 失败",
             "Failed to back up node_modules",
-            e,
-        )
-    })?;
+            error,
+        ));
+    }
     if lock.exists() {
         if let Err(error) = std::fs::rename(&lock, &lock_bak) {
             let _ = std::fs::rename(&bak, &nm);

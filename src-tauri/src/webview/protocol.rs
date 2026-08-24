@@ -3,6 +3,11 @@
 use crate::*;
 use tauri::Manager;
 
+/// 注入端 fetch 携带的令牌请求头（HeaderMap 键统一小写）。
+/// 令牌只走请求头、不进 URL：URL 会进页面 resource timing 缓冲区，同源任意
+/// 脚本可枚举提取（凭令牌可经 content 动作读任意 ≤2MiB 文本文件）。
+const TOKEN_HEADER: &str = "x-dshd-token";
+
 /// 处理注入脚本发来的 dshd:// 请求 —— dsh 页面 JS → Rust 的唯一通道
 /// （页面无法使用 IPC：commands 会拒绝其来源；自定义协议由 WebView 网络层拦截，
 /// 处理时再次校验主 WebView、当前 dsh 来源和进程级随机令牌）。
@@ -11,12 +16,27 @@ use tauri::Manager;
 /// 本地文件，这里只是补充 定位/另存为/指定应用打开/复制内容/图标提取；
 /// 只接受绝对路径，相对路径的工作区解析归 dsh 后端（“打开”菜单项直接复用
 /// 页面按钮自身的点击逻辑）。
-/// 请求形如 `http://dshd.localhost/<动作>?token=…&path=…`（Windows）或
-/// `dshd://localhost/<动作>?token=…&path=…`（macOS/Linux），动作在路径段。
+/// 请求形如 `http://dshd.localhost/<动作>?path=…`（Windows）或
+/// `dshd://localhost/<动作>?path=…`（macOS/Linux），动作在路径段；
+/// 令牌经 X-DSHd-Token 请求头传递，自定义头触发的 CORS 预检见 preflight_response。
 pub(crate) fn handle_dshd_scheme(
     ctx: tauri::UriSchemeContext<'_, tauri::Wry>,
     request: http::Request<Vec<u8>>,
 ) -> http::Response<Vec<u8>> {
+    let state = ctx.app_handle().state::<AppState>();
+    let config = state.config();
+    let allowed_origin = config.web_url();
+
+    // CORS 预检：注入端 fetch 携带自定义令牌头触发；预检本身不携带令牌，
+    // 只按 Origin 精确放行当前 dsh 来源，其余来源与非预检跨源请求一样拒绝
+    if request.method() == http::Method::OPTIONS {
+        let origin = request
+            .headers()
+            .get(http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok());
+        return preflight_response(origin, &allowed_origin);
+    }
+
     let parsed = url::Url::parse(&request.uri().to_string()).ok();
     // 平台 URL 形式不同：Windows 为 http://dshd.localhost/<动作>，
     // macOS/Linux 为 dshd://localhost/<动作>；动作取首个路径段，其余主机形式兼容取 host
@@ -44,17 +64,20 @@ pub(crate) fn handle_dshd_scheme(
     let path = query("path");
     let app = query("app");
 
-    let state = ctx.app_handle().state::<AppState>();
-    let config = state.config();
-    let allowed_origin = config.web_url();
     let respond = |status, mime, body| scheme_response(status, mime, body, &allowed_origin);
     let current_is_dsh = main_webview(ctx.app_handle())
         .and_then(|webview| webview.url().ok())
         .is_some_and(|url| is_dsh_url(&url, &config));
-    let authorized = ctx.webview_label() == MAIN_WINDOW
-        && current_is_dsh
-        && query("token").as_deref() == Some(state.protocol_token());
-    if !authorized {
+    let token = request
+        .headers()
+        .get(TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if !authorized(
+        ctx.webview_label(),
+        current_is_dsh,
+        token,
+        state.protocol_token(),
+    ) {
         logging::log("dshd: 拒绝未授权的自定义协议请求");
         return respond(403, "text/plain; charset=utf-8", b"forbidden".to_vec());
     }
@@ -161,7 +184,15 @@ pub(crate) fn handle_dshd_scheme(
                     .blocking_save_file()
                     .and_then(|d| d.into_path().ok())
                 {
-                    if let Err(e) = std::fs::copy(&src, &dest) {
+                    // 同源防护：std::fs::copy 源与目标为同一文件时会把文件截断
+                    // 清空（std 文档明确约定）；canonicalize 后相等则跳过复制。
+                    // dest 尚不存在时 canonicalize 失败，按不同源处理正常复制。
+                    let same_file = std::fs::canonicalize(&src)
+                        .ok()
+                        .is_some_and(|s| std::fs::canonicalize(&dest).ok().is_some_and(|d| d == s));
+                    if same_file {
+                        logging::log("dshd: 另存为源与目标相同，跳过复制");
+                    } else if let Err(e) = std::fs::copy(&src, &dest) {
                         logging::log(&format!("dshd: 另存为失败：{e}"));
                     }
                 }
@@ -283,4 +314,81 @@ fn scheme_response(
         .header("content-type", mime)
         .body(body)
         .unwrap_or_else(|_| http::Response::new(Vec::new()))
+}
+
+/// 实际请求授权：主 WebView + 当前页面停在 dsh 来源 + 令牌头精确匹配。
+/// 注入端与 Rust 同版本发布，不保留 ?token= URL 旧形式的兼容读取。
+fn authorized(label: &str, current_is_dsh: bool, token: Option<&str>, expected: &str) -> bool {
+    label == MAIN_WINDOW && current_is_dsh && token == Some(expected)
+}
+
+/// CORS 预检响应：Origin 精确等于当前 dsh 来源（http://127.0.0.1:{port}）才放行，
+/// 允许的方法/请求头精确列出；其余来源 403，不下发任何 allow-methods/headers。
+fn preflight_response(origin: Option<&str>, allowed_origin: &str) -> http::Response<Vec<u8>> {
+    if origin != Some(allowed_origin) {
+        logging::log("dshd: 拒绝跨源预检请求");
+        return scheme_response(
+            403,
+            "text/plain; charset=utf-8",
+            b"forbidden".to_vec(),
+            allowed_origin,
+        );
+    }
+    http::Response::builder()
+        .status(204)
+        .header("Access-Control-Allow-Origin", allowed_origin)
+        .header("Access-Control-Allow-Methods", "GET")
+        .header("Access-Control-Allow-Headers", TOKEN_HEADER)
+        // 预检结果缓存：右键动作同方法同头，避免每次点击都多发一轮 OPTIONS
+        .header("Access-Control-Max-Age", "600")
+        .header("Vary", "Origin")
+        .body(Vec::new())
+        .unwrap_or_else(|_| http::Response::new(Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DSH_ORIGIN: &str = "http://127.0.0.1:3080";
+
+    #[test]
+    fn preflight_allows_current_dsh_origin_with_exact_contract() {
+        let response = preflight_response(Some(DSH_ORIGIN), DSH_ORIGIN);
+        assert_eq!(response.status(), 204);
+        let headers = response.headers();
+        // allow-origin 锁定当前 dsh 来源，方法/请求头精确
+        assert_eq!(headers["access-control-allow-origin"], DSH_ORIGIN);
+        assert_eq!(headers["access-control-allow-methods"], "GET");
+        assert_eq!(headers["access-control-allow-headers"], TOKEN_HEADER);
+    }
+
+    #[test]
+    fn preflight_rejects_other_or_missing_origin() {
+        for origin in [
+            Some("https://evil.example"),
+            Some("http://127.0.0.1:9999"),
+            None,
+        ] {
+            let response = preflight_response(origin, DSH_ORIGIN);
+            assert_eq!(response.status(), 403);
+            assert!(!response
+                .headers()
+                .contains_key("access-control-allow-methods"));
+            assert!(!response
+                .headers()
+                .contains_key("access-control-allow-headers"));
+        }
+    }
+
+    #[test]
+    fn token_header_must_match_exactly() {
+        assert!(authorized(MAIN_WINDOW, true, Some("tok"), "tok"));
+        // 无令牌头 / 错误令牌 → 未授权（403）
+        assert!(!authorized(MAIN_WINDOW, true, None, "tok"));
+        assert!(!authorized(MAIN_WINDOW, true, Some("other"), "tok"));
+        // 非主窗口、当前页面不在 dsh 来源同样拒绝
+        assert!(!authorized("titlebar", true, Some("tok"), "tok"));
+        assert!(!authorized(MAIN_WINDOW, false, Some("tok"), "tok"));
+    }
 }

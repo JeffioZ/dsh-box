@@ -113,11 +113,9 @@ fn save_install_marker(
 }
 
 fn clear_install_marker(config: &crate::app_state::Config) -> Result<(), String> {
-    crate::app_state::save_state_value(
-        &config.root,
-        PLUGIN_INSTALL_MARKER_KEY,
-        serde_json::Value::Null,
-    )
+    // 真删键而非写 Null：语义相同（Null 反序列化失败按无标记处理），
+    // 但避免 state.json 永久残留无意义键
+    crate::app_state::remove_state_value(&config.root, PLUGIN_INSTALL_MARKER_KEY)
 }
 
 fn try_mark_user_removed(config: &crate::app_state::Config, package: &str) -> Result<(), String> {
@@ -147,9 +145,9 @@ pub(crate) fn clear_resolved_install_marker(config: &crate::app_state::Config) {
     let Some(marker) = install_marker(config) else {
         return;
     };
-    if matches!(marker.kind, PluginMutationKind::Remove) && marker.user_removal {
-        if let Some(package) = marker.package.as_deref() {
-            if !dependency_installed(config, package) {
+    match marker.kind {
+        PluginMutationKind::Remove if marker.user_removal => match marker.package.as_deref() {
+            Some(package) if !dependency_installed(config, package) => {
                 if let Err(e) = try_mark_user_removed(config, package) {
                     crate::logging::log(&format!(
                         "plugins: 完成中断卸载的用户状态记录失败，保留事务标记：{e}"
@@ -157,7 +155,27 @@ pub(crate) fn clear_resolved_install_marker(config: &crate::app_state::Config) {
                     return;
                 }
             }
+            // 卸载命令未生效（依赖仍在）或包名不可识别：不能记录用户卸载状态
+            // （否则仍在安装的包会失去内置维护身份），仅记日志后按完成收敛。
+            _ => {
+                crate::logging::log(&format!(
+                    "plugins: 中断的卸载事务未生效（{} 仍在安装或包名不可识别），不记录用户卸载状态",
+                    marker.package.as_deref().unwrap_or(marker.spec.as_str())
+                ));
+            }
+        },
+        // 安装命令未生效（依赖未写入）：事务按完成收敛但插件并未装上，记日志
+        // 便于诊断；不在此重跑 CLI（服务已就绪，重跑不属于启动收敛职责）。
+        PluginMutationKind::Add => {
+            if let Some(package) = marker.package.as_deref() {
+                if !dependency_installed(config, package) {
+                    crate::logging::log(&format!(
+                        "plugins: 中断的安装事务未生效（{package} 未写入依赖），按未完成丢弃"
+                    ));
+                }
+            }
         }
+        _ => {}
     }
     if let Err(e) = clear_install_marker(config) {
         crate::logging::log(&format!("plugins: 清理已完成的插件事务标记失败：{e}"));
@@ -453,7 +471,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
     }
     let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let url = format!("https://registry.npmjs.org/-/v1/search?text={encoded}&size=24");
-    let resp = crate::runtime::client()
+    let resp = crate::runtime::check_client()
         .get(&url)
         .header("User-Agent", "DSHBox")
         .call()
@@ -496,14 +514,28 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
     Ok(out)
 }
 
-/// 安装插件（dsh plugin --profile web add <pkg>），成功后等待批量应用。
-pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
+/// 校验用户输入的插件名：非空且不得以 `-` 开头（防止被 dsh CLI 解析成
+/// 命令行 flag 注入）。返回 trim 后的名字。
+fn checked_plugin_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(
             crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
         );
     }
+    if name.starts_with('-') {
+        return Err(crate::locale::text(
+            "插件名不能以「-」开头。",
+            "The package name must not start with '-'.",
+        )
+        .into());
+    }
+    Ok(name)
+}
+
+/// 安装插件（dsh plugin --profile web add <pkg>），成功后等待批量应用。
+pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
+    let name = checked_plugin_name(name)?;
     let config = app.state::<AppState>().config();
     run_dsh_plugin_auto(app, &["add", name])?;
     // 手动重装已下线或被替换的包 = 知情保留：记录标记，下次启动豁免清理
@@ -532,16 +564,11 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
 /// 卸载内置包会记录"用户主动卸载"标记：之后即使重装也不再视为内置
 /// （无内置标签、不自动更新、强制下线豁免）。
 pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(
-            crate::locale::text("插件名不能为空。", "The package name must not be empty.").into(),
-        );
-    }
+    let name = checked_plugin_name(name)?;
     run_dsh_plugin_auto_user_remove(app, &["remove", name])?;
     // 用户管理状态由卸载事务在提交前写入；强制下线清理走普通 runner，
-    // 不会写用户主动卸载标记。
-    if is_market_pkg(name) {
+    // 不会写用户主动卸载标记。判定按解析后的包名（原始输入可能带 @version）。
+    if spec_package_name(name).is_some_and(is_market_pkg) {
         crate::logging::log(&format!(
             "plugins: 已记录 {name} 被用户卸载（重装后不再视为内置）"
         ));
@@ -861,9 +888,15 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
                 ));
                 Ok(UpdateStatus {
                     pkg: pkg.to_string(),
-                    error: Some(format!(
-                        "升级版本不符（实际 {}，预期 {latest}）",
-                        actual.as_deref().unwrap_or("未知")
+                    error: Some(crate::locale::owned(
+                        format!(
+                            "升级版本不符（实际 {}，预期 {latest}）",
+                            actual.as_deref().unwrap_or("未知")
+                        ),
+                        format!(
+                            "The upgraded version does not match (actual {}, expected {latest})",
+                            actual.as_deref().unwrap_or("unknown")
+                        ),
                     )),
                     installed: actual.or(Some(installed)),
                     latest,
@@ -900,7 +933,10 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
             update_available: true,
             builtin,
             cooldown_until: None,
-            error: Some(format!("升级失败：{e}")),
+            error: Some(crate::locale::owned(
+                format!("升级失败：{e}"),
+                format!("Upgrade failed: {e}"),
+            )),
         }),
     }
 }
@@ -1125,6 +1161,70 @@ mod tests {
     }
 
     #[test]
+    fn plugin_name_rejects_empty_and_flag_like_input() {
+        assert!(checked_plugin_name("dshmarket").is_ok());
+        assert_eq!(checked_plugin_name("  plugin  ").unwrap(), "plugin");
+        assert!(checked_plugin_name("").is_err());
+        assert!(checked_plugin_name("   ").is_err());
+        // 以 - 开头的输入会被 dsh CLI 当成 flag（注入风险），必须拒绝
+        assert!(checked_plugin_name("--force").is_err());
+        assert!(checked_plugin_name("-x").is_err());
+        assert!(checked_plugin_name("  --evil  ").is_err());
+    }
+
+    #[test]
+    fn resolved_marker_convergence_marks_removal_only_when_effective() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home().join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+
+        // 卸载未生效（依赖仍在）：不记录用户卸载状态，事务标记仍被收敛清理
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dshmarket":"1.0.0"}}"#,
+        )
+        .unwrap();
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Remove,
+            true,
+            None,
+        )
+        .unwrap();
+        clear_resolved_install_marker(&config);
+        assert!(!market_user_removed(&config, "dshmarket"));
+        assert!(install_marker(&config).is_none());
+
+        // 卸载已生效（依赖不在）：补记用户卸载状态后清理标记
+        std::fs::write(profile.join("package.json"), r#"{"dependencies":{}}"#).unwrap();
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Remove,
+            true,
+            None,
+        )
+        .unwrap();
+        clear_resolved_install_marker(&config);
+        assert!(market_user_removed(&config, "dshmarket"));
+        assert!(install_marker(&config).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn detect_virtual_store_error() {
         // 真实报错（DSH_HOME 迁移后 pnpm 拒绝写操作）
         assert!(is_virtual_store_error(
@@ -1204,6 +1304,9 @@ mod tests {
         assert!(parse_rfc3339_epoch("garbage").is_none());
         assert!(parse_rfc3339_epoch("2026-13-01T00:00:00Z").is_none());
         assert!(parse_rfc3339_epoch("2026-08-19T24:00:00Z").is_none());
+        // 1970 年前：epoch 为负会回绕成巨大 u64，必须拒绝
+        assert!(parse_rfc3339_epoch("1969-12-31T23:59:59Z").is_none());
+        assert!(parse_rfc3339_epoch("0001-01-01T00:00:00Z").is_none());
     }
 
     #[test]

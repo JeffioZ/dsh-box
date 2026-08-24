@@ -47,9 +47,13 @@ var css = [
   '@keyframes dshd-toast-in{from{opacity:0;transform:translate(-50%,3px)}to{opacity:1;transform:translate(-50%,0)}}',
   '@media (prefers-reduced-motion:reduce){.__dshd_cm,.__dshd_cm_toast{animation:none;}}'
 ].join('');
-var styleEl = document.createElement('style');
-styleEl.textContent = css;
-document.documentElement.appendChild(styleEl);
+// 重复注入（page-load 主路径 + navigate 兜底）时样式只挂一次
+if (!document.getElementById('__dshd_cm_style')) {
+  var styleEl = document.createElement('style');
+  styleEl.id = '__dshd_cm_style';
+  styleEl.textContent = css;
+  document.documentElement.appendChild(styleEl);
+}
 
 var menuEl = null;var items = [];
 var subEl = null;
@@ -63,6 +67,8 @@ var SHADOW_TOP = 24;
 var SHADOW_BOTTOM = 48;
 var IS_MAC = /Mac/i.test(navigator.userAgent);
 var IS_WIN = /Windows/i.test(navigator.userAgent);
+// 语言契约：注入 wrapper（navigation.rs inject_dsh_page）与本脚本同帧内联
+// window.__DSHD_LANG；navigator.language 仅是异常兜底
 var UI_ZH = String(window.__DSHD_LANG || navigator.language || '').toLowerCase().indexOf('zh') === 0;
 function T(zh, en) { return UI_ZH ? zh : en; }
 window.__dshdSetInjectedLanguage = function (language) {
@@ -73,14 +79,19 @@ function MOD() { return IS_MAC ? '⌘' : 'Ctrl'; }
 // JS → Rust 通道：自定义协议 dshd。Windows 的注册形式是 http://dshd.localhost/<动作>，
 // macOS/Linux 是 dshd://localhost/<动作>（Tauri 平台差异）。
 var DSH_REQ_BASE = IS_WIN ? 'http://dshd.localhost/' : 'dshd://localhost/';
+// 令牌只走 X-DSHd-Token 请求头、不进 URL：URL 会进页面 resource timing
+// 缓冲区，同源任意脚本可枚举提取（凭令牌可经 content 动作读本地文本文件）
 var DSH_TOKEN = window.__dshdProtocolToken || '';
 function dshdUrl(action, query) {
-  return DSH_REQ_BASE + action + '?token=' + encodeURIComponent(DSH_TOKEN) + (query ? '&' + query : '');
+  return DSH_REQ_BASE + action + (query ? '?' + query : '');
+}
+function dshdFetch(action, query) {
+  return fetch(dshdUrl(action, query), { headers: { 'X-DSHd-Token': DSH_TOKEN } });
 }
 // 探测环境能力（VS Code 是否安装）；未回包前按未安装处理
 var HAS_CODE = false;
 try {
-  fetch(dshdUrl('probe', 'what=vscode')).then(function (r) { return r.text(); })
+  dshdFetch('probe', 'what=vscode').then(function (r) { return r.text(); })
     .then(function (t) { HAS_CODE = t === '1'; }).catch(function () {});
 } catch (e) {}
 
@@ -109,9 +120,16 @@ function hide() {
     }
   }
   items = [];
-  if (focusReturn && document.contains(focusReturn)) {
-    try { focusReturn.focus(); } catch (e) {}
-    focusReturn = null;
+  // 回收文件图标 objectURL（app: 缓存常驻复用，不在此列）；
+  // 已解码的图标不受 revoke 影响，菜单淡出期间不会空白
+  menuIconUrls.forEach(function (url) { URL.revokeObjectURL(url); });
+  menuIconUrls = [];
+  // 焦点归还有失败可能（元素已离文档）：无论是否归还都清掉引用，避免
+  // 失效元素长期挂在外观变量上
+  var focusTarget = focusReturn;
+  focusReturn = null;
+  if (focusTarget && document.contains(focusTarget)) {
+    try { focusTarget.focus(); } catch (e) {}
   }
 }
 
@@ -126,11 +144,14 @@ function looksLikePath(s) {
   if (abs) return true;
   // 相对路径：含分隔符、末段带扩展名、无中文——避免把普通句子误判为路径
   if (/[\u4e00-\u9fff]/.test(s)) return false;
-  if (s.charAt(0) === '.') return true; // ./ ../ 开头
+  if (s === '..' || s.slice(0, 2) === './' || s.slice(0, 3) === '../') return true;
   return /[\\/]/.test(s) && /\.[A-Za-z0-9]{1,8}$/.test(s);
 }
 function isAbsPath(s) {
-  return /^[A-Za-z]:[\\/]/.test(s) || s.slice(0, 2) === '\\\\' || s.charAt(0) === '/';
+  // 与 Rust Path::is_absolute 语义对齐：Windows 上 '/' 前缀不是绝对路径
+  //（/c/ 等 MSYS 形式由 resolveAbsPath 走 normalize），Unix 上 '/' 才是
+  return /^[A-Za-z]:[\\/]/.test(s) || s.slice(0, 2) === '\\\\'
+    || (!IS_WIN && s.charAt(0) === '/');
 }
 function findPathTarget(t) {
   var btn = t && t.closest ? t.closest('button[title]') : null;
@@ -163,19 +184,13 @@ function isImageLike(p) { return IMG_EXTS.indexOf(extOf(p)) >= 0; }
 function isExeLike(p) { return EXE_EXTS.indexOf(extOf(p)) >= 0; }
 
 // —— 动作通道 ——
+// 只发不收；自定义头只能在 CORS 模式携带（no-cors 会丢弃非安全清单外的头），
+// 原来的 <img> 兜底带不了请求头、只能退回 URL 令牌，一并移除
 function req(action, path, app) {
-  var u = dshdUrl(action, 'path=' + encodeURIComponent(path)
-    + (app ? '&app=' + encodeURIComponent(app) : ''));
-  var sent = false;
   try {
-    if (window.fetch) {
-      fetch(u, { mode: 'no-cors' }).catch(function () {});
-      sent = true;
-    }
+    dshdFetch(action, 'path=' + encodeURIComponent(path)
+      + (app ? '&app=' + encodeURIComponent(app) : '')).catch(function () {});
   } catch (e) {}
-  if (!sent) {
-    try { var im = new Image(); im.src = u; } catch (e2) {}
-  }
 }
 function copyToast(ok) {
   var old = document.querySelector('.__dshd_cm_toast');
@@ -284,7 +299,7 @@ function resolvePathBase() {
 function resolveAbsPath(rel) {
   if (rel === '~' || rel.slice(0, 2) === '~/' || rel.slice(0, 2) === '~\\'
       || (IS_WIN && /^\/[A-Za-z]\//.test(rel))) {
-    return fetch(dshdUrl('normalize', 'path=' + encodeURIComponent(rel)))
+    return dshdFetch('normalize', 'path=' + encodeURIComponent(rel))
       .then(function (r) { if (!r.ok) return null; return r.text(); })
       .catch(function () { return null; });
   }
@@ -294,7 +309,7 @@ function resolveAbsPath(rel) {
 setTimeout(function () { resolvePathBase(); }, 300);
 function copyContent(path) {
   try {
-    fetch(dshdUrl('content', 'path=' + encodeURIComponent(path)))
+    dshdFetch('content', 'path=' + encodeURIComponent(path))
       .then(function (r) { if (!r.ok) throw 0; return r.text(); })
       .then(function (t) { writeClip(t); })
       .catch(function () { copyToast(false); });
@@ -304,20 +319,20 @@ function copyImage(img) {
   try {
     var w = img.naturalWidth || img.width || 0;
     var h = img.naturalHeight || img.height || 0;
-    if (!w || !h) return;
+    if (!w || !h) { copyToast(false); return; }
     var c = document.createElement('canvas');
     c.width = w; c.height = h;
     var ctx = c.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) { copyToast(false); return; }
     ctx.drawImage(img, 0, 0, w, h);
     c.toBlob(function (b) {
-      if (!b) return;
+      if (!b) { copyToast(false); return; }
       try {
         navigator.clipboard.write([new ClipboardItem({ 'image/png': b })])
           .then(function () { copyToast(true); }, function () { copyToast(false); });
       } catch (e2) { copyToast(false); }
     }, 'image/png');
-  } catch (e) {}
+  } catch (e) { copyToast(false); }
 }
 
 // —— 菜单渲染（支持图标异步填充 + hover 子菜单）——
@@ -354,14 +369,29 @@ function iconHtml(spec) {
   }
   return '<img class="__dshd_cm_ic" alt="" src="' + placeholderFor(spec) + '" />';
 }
+// <img> 直接加载带不了自定义头：图标统一 fetch（带头）→ blob → objectURL。
+// 文件图标 objectURL 随菜单 hide 回收（见 hide）；app: 图标常驻缓存复用
+//（仅 code/notepad/paint 三个，预热即填满）。
+var menuIconUrls = [];
+var appIconCache = {};
 function loadIcon(img, spec) {
-  var url;
+  var query;
   if (spec.slice(0, 5) === 'file:') {
-    url = dshdUrl('icon', 'path=' + encodeURIComponent(spec.slice(5)));
+    query = 'path=' + encodeURIComponent(spec.slice(5));
   } else if (spec.slice(0, 4) === 'app:') {
-    url = dshdUrl('icon', 'app=' + encodeURIComponent(spec.slice(4)));
+    query = 'app=' + encodeURIComponent(spec.slice(4));
   } else { return; }
-  img.src = url;
+  var cached = appIconCache[spec];
+  if (cached) { img.src = cached; return; }
+  dshdFetch('icon', query).then(function (r) {
+    if (!r.ok) throw 0;
+    return r.blob();
+  }).then(function (blob) {
+    var url = URL.createObjectURL(blob);
+    if (spec.slice(0, 4) === 'app:') { appIconCache[spec] = url; }
+    else { menuIconUrls.push(url); }
+    img.src = url;
+  }).catch(function () {}); // 提取失败保留占位图，不出现空白
 }
 // 注入时预热固定应用图标（VS Code/记事本/画图）：提取+缓存提前完成，子菜单首开即出图
 loadIcon(new Image(), 'app:code');
@@ -565,7 +595,7 @@ function fileMenu(f, p) {
     }
     if (subs.length) {
       subs.push({ sep: true });
-      subs.push({ label: T('选择其他应用…', 'Choose another app…'), icon: 'ic:apps', act: function () { req('openwith', p, ''); } });
+      subs.push({ label: T('选择其他应用…', 'Choose another app…'), icon: 'ic:apps', act: function () { req('openwith', p); } });
       items.push({ label: T('打开方式', 'Open with'), sub: subs });
     }
   }

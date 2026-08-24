@@ -83,6 +83,13 @@ fn dangerous_extension(ext: &str, platform: &str) -> bool {
                 | "appx"
                 | "msix"
                 | "msixbundle"
+                | "hta"
+                | "py"
+                | "pyw"
+                | "jar"
+                | "chm"
+                | "url"
+                | "application"
         ),
         "macos" => matches!(ext, "app" | "command" | "pkg" | "dmg" | "scpt"),
         "linux" => matches!(ext, "appimage" | "desktop" | "run" | "sh"),
@@ -269,7 +276,17 @@ pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
                 crate::locale::text("未找到 VS Code", "VS Code was not found").to_string()
             })?,
             "notepad" => system32("notepad.exe"),
-            "paint" => system32("mspaint.exe"),
+            // Win11 起 Paint 迁移为 MSIX 应用：System32 无此 exe 时回退应用执行别名
+            "paint" => {
+                let mspaint = system32("mspaint.exe");
+                if mspaint.exists() {
+                    mspaint
+                } else {
+                    crate::file_icons::windows_apps_alias(&mspaint).ok_or_else(|| {
+                        crate::locale::text("未找到 Paint", "Paint was not found").to_string()
+                    })?
+                }
+            }
             other => {
                 return Err(crate::locale::owned(
                     format!("未知应用：{other}"),
@@ -291,29 +308,31 @@ pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
     }
 }
 
-/// 定位 VS Code 可执行文件（标准安装路径；结果进程内缓存）。
+/// 定位 VS Code 可执行文件（标准安装路径；命中后进程内缓存，未命中不缓存——
+/// 运行期间新装 VS Code 后下次调用即可识别）。
 pub fn vscode_exe() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use std::sync::OnceLock;
-        static CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let mut candidates = Vec::new();
-                if let Ok(p) = std::env::var("LOCALAPPDATA") {
-                    candidates.push(
-                        PathBuf::from(p)
-                            .join("Programs")
-                            .join("Microsoft VS Code")
-                            .join("Code.exe"),
-                    );
-                }
-                if let Ok(p) = std::env::var("ProgramFiles") {
-                    candidates.push(PathBuf::from(p).join("Microsoft VS Code").join("Code.exe"));
-                }
-                candidates.into_iter().find(|p| p.exists())
-            })
-            .clone()
+        static CACHE: OnceLock<PathBuf> = OnceLock::new();
+        if let Some(cached) = CACHE.get() {
+            return Some(cached.clone());
+        }
+        let mut candidates = Vec::new();
+        if let Ok(p) = std::env::var("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(p)
+                    .join("Programs")
+                    .join("Microsoft VS Code")
+                    .join("Code.exe"),
+            );
+        }
+        if let Ok(p) = std::env::var("ProgramFiles") {
+            candidates.push(PathBuf::from(p).join("Microsoft VS Code").join("Code.exe"));
+        }
+        let found = candidates.into_iter().find(|p| p.exists())?;
+        // 并发调用只保留首个命中；路径一致，无实际差异
+        Some(CACHE.get_or_init(|| found).clone())
     }
     #[cfg(not(windows))]
     {
@@ -457,6 +476,16 @@ mod tests {
         assert!(dangerous_extension("app", "macos"));
         assert!(dangerous_extension("desktop", "linux"));
         assert!(!dangerous_extension("desktop", "other"));
+    }
+
+    #[test]
+    fn windows_dangerous_list_covers_script_and_handler_extensions() {
+        // hta/py/pyw/jar/chm/url/application 默认打开都会执行代码或加载远程内容
+        for ext in ["hta", "py", "pyw", "jar", "chm", "url", "application"] {
+            assert!(dangerous_extension(ext, "windows"), "{ext} 应判为危险");
+            assert!(!dangerous_extension(ext, "macos"));
+            assert!(!dangerous_extension(ext, "linux"));
+        }
     }
 
     #[test]

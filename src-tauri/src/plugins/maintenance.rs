@@ -104,7 +104,14 @@ fn preset_plugins() -> &'static [PresetPlugin] {
     static CACHE: std::sync::OnceLock<Vec<PresetPlugin>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         const JSON: &str = include_str!("../../resources/builtin-plugins.json");
-        serde_json::from_str(JSON).unwrap_or_default()
+        match serde_json::from_str(JSON) {
+            Ok(plugins) => plugins,
+            Err(error) => {
+                // 与 recommended_plugins 同一口径：清单损坏不阻断启动，但必须留痕
+                crate::logging::log(&format!("plugins: 内置清单解析失败：{error}"));
+                Vec::new()
+            }
+        }
     })
 }
 
@@ -384,8 +391,9 @@ pub(super) fn should_bootstrap_market_pkg(state: MarketInstallState, user_remove
 /// 无谓拉起 node（安全软件弹窗/日志噪音）。
 pub(super) fn market_latest_info(pkg: &str) -> Option<(String, u64)> {
     use std::io::Read;
-    // 完整 manifest（默认 Accept）才含 time 字段：install-v1 缩写版没有
-    let resp = crate::runtime::client()
+    // 完整 manifest（默认 Accept）才含 time 字段：install-v1 缩写版没有；
+    // 版本查询属检查类请求，用快失败的 check_client（不拖满 90s 超时）
+    let resp = crate::runtime::check_client()
         .get(&format!("https://registry.npmjs.org/{pkg}"))
         .header("User-Agent", "DSHBox")
         .call()
@@ -425,7 +433,15 @@ pub(super) fn parse_rfc3339_epoch(s: &str) -> Option<u64> {
         .next()?
         .parse()
         .ok()?;
-    if !(1..=12).contains(&month) || day == 0 || day > 31 || hour > 23 || min > 59 || sec > 60 {
+    // year < 1970 时 days 为负，`as u64` 会回绕成巨大值；epoch 秒无负值，直接拒绝
+    if year < 1970
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > 31
+        || hour > 23
+        || min > 59
+        || sec > 60
+    {
         return None;
     }
     // days from civil（Howard Hinnant 算法）
@@ -579,8 +595,13 @@ pub fn start_market_bootstrap(app: AppHandle) {
             std::thread::sleep(std::time::Duration::from_secs(5));
         };
         // 必须等用户明确选择，不能把“尚未提交”误当作默认开启。
+        // state.json 每次读取都要读盘，5s 轮询足够（用户选择本身有引导流程时长）；
+        // 退出中立即放弃，避免关应用后线程仍空转。
         while builtin_plugins_consent(&config).is_none() {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            if app.state::<AppState>().is_quitting() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
         }
         if wait_for_first_onboarding {
             // 首次配置由 boot 线程同步安装并与凭据合并为一次重启。后台线程

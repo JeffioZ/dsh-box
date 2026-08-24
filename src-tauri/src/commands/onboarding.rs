@@ -22,6 +22,8 @@ pub fn save_onboarding(
     payload: crate::onboarding::OnboardingPayload,
 ) -> Result<(), String> {
     ensure_local_origin(&webview)?;
+    // 凭据与 settings.yaml 写入本地 $DSH_HOME，外部服务模式下禁止冒充外部配置
+    ensure_local_service_scope(&app)?;
     crate::onboarding::save(&app, payload)
 }
 
