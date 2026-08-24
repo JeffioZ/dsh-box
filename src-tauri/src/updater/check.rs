@@ -331,8 +331,10 @@ pub fn check(app: &AppHandle) -> CheckResult {
             && installed
                 .as_deref()
                 .map(|cur| {
-                    versions::compare_versions(latest_lts.as_deref().unwrap_or(""), cur)
-                        == std::cmp::Ordering::Greater
+                    versions::compare_versions(
+                        latest_lts.as_deref().expect("上面已判定 is_some"),
+                        cur,
+                    ) == std::cmp::Ordering::Greater
                 })
                 .unwrap_or(false);
         (
@@ -399,34 +401,44 @@ pub fn check(app: &AppHandle) -> CheckResult {
         }
     });
 
-    if let Ok((d, d_err)) = dsh_handle.join() {
-        result.dsh = d;
-        if result.error.is_none() {
-            result.error = d_err;
+    match dsh_handle.join() {
+        Ok((d, d_err)) => {
+            result.dsh = d;
+            if result.error.is_none() {
+                result.error = d_err;
+            }
         }
+        Err(_) => crate::logging::log("updater: dsh 更新检查线程异常终止（panic）"),
     }
-    if let Ok((managed, installed, latest_lts, latest_error, update_available)) = node_handle.join()
-    {
-        result.node = Some(NodeInfo {
-            managed,
-            installed,
-            latest_lts,
-            latest_error,
-            update_available,
-        });
+    match node_handle.join() {
+        Ok((managed, installed, latest_lts, latest_error, update_available)) => {
+            result.node = Some(NodeInfo {
+                managed,
+                installed,
+                latest_lts,
+                latest_error,
+                update_available,
+            });
+        }
+        Err(_) => crate::logging::log("updater: Node.js 更新检查线程异常终止（panic）"),
     }
     #[cfg(windows)]
-    if let Ok(info) = pwsh_handle.join() {
-        result.pwsh = Some(info);
+    match pwsh_handle.join() {
+        Ok(info) => result.pwsh = Some(info),
+        Err(_) => crate::logging::log("updater: PowerShell 更新检查线程异常终止（panic）"),
     }
-    if let Ok(app_info) = app_handle.join() {
-        result.app = app_info;
+    match app_handle.join() {
+        Ok(app_info) => result.app = app_info,
+        Err(_) => crate::logging::log("updater: 应用更新检查线程异常终止（panic）"),
     }
-    if let Ok((npm_info, npm_err)) = npm_handle.join() {
-        result.npm = npm_info;
-        if result.error.is_none() {
-            result.error = npm_err;
+    match npm_handle.join() {
+        Ok((npm_info, npm_err)) => {
+            result.npm = npm_info;
+            if result.error.is_none() {
+                result.error = npm_err;
+            }
         }
+        Err(_) => crate::logging::log("updater: npm 更新检查线程异常终止（panic）"),
     }
     result
 }

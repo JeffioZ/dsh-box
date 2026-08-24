@@ -51,7 +51,7 @@ pub(super) fn parse_pwsh_metadata(json: &serde_json::Value) -> Result<String, St
 
 /// 查询 PowerShell 官方最新稳定版。
 ///
-/// 主用 GitHub Releases 列表（取最高的非预览 tag）：官方 metadata.json 的
+/// 主用 GitHub Releases 列表（按 atom 顺序取首个稳定 tag）：官方 metadata.json 的
 /// StableReleaseTag 更新滞后于发布（实测 7.6.5 发布后仍停留在 7.6.4），
 /// 只在其上兜底会在补丁发布后漏报。GitHub API 失败时回退 metadata。
 #[cfg(windows)]
@@ -89,11 +89,10 @@ pub(super) fn latest_pwsh_version() -> Result<String, String> {
     }
 }
 
-/// 从 GitHub Releases 列表取最高的非预览 tag。
+/// 从 GitHub Releases 列表取按 atom 顺序的首个稳定 tag。
 #[cfg(windows)]
 fn github_latest_stable() -> Result<String, String> {
-    // 用 releases.atom 页面绕开 GitHub API 限流；PowerShell 预览版 tag
-    // 命名规范为 vX.Y.Z-preview.N，按 tag 文本过滤即可
+    // 用 releases.atom 页面绕开 GitHub API 限流；预发布 tag 按文本过滤即可
     let response = runtime::check_client()
         .get("https://github.com/PowerShell/PowerShell/releases.atom")
         .header("User-Agent", "DSHBox")
@@ -105,31 +104,29 @@ fn github_latest_stable() -> Result<String, String> {
         .into_reader()
         .read_to_string(&mut text)
         .map_err(|e| format!("GitHub Releases: {e}"))?;
-    let mut best: Option<semver::Version> = None;
-    let mut best_tag = String::new();
-    for tag in parse_releases_atom(&text) {
-        let tag = tag.trim_start_matches('v');
-        if tag.contains("preview") || tag.contains("-rc") {
-            continue;
-        }
-        let Ok(version) = semver::Version::parse(tag) else {
-            continue;
-        };
-        let newer = best
-            .as_ref()
-            .is_none_or(|current| version.cmp_precedence(current) == std::cmp::Ordering::Greater);
-        if newer {
-            best = Some(version);
-            best_tag = tag.to_string();
-        }
-    }
-    best.map(|_| best_tag).ok_or_else(|| {
+    latest_stable_tag(&parse_releases_atom(&text)).ok_or_else(|| {
         crate::locale::text(
             "GitHub Releases 中未找到稳定版本。",
             "No stable version was found in GitHub Releases.",
         )
         .to_string()
     })
+}
+
+/// 从 releases.atom 的 tag 列表取最新稳定版：过滤 -rc/-preview/-beta/-alpha
+/// 四类预发布 tag，按 atom 顺序（最新发布在前）取首个稳定 tag，不再按
+/// semver 取最大。与 check.rs 应用更新检查同一口径。
+/// （仅 Windows 的生产代码引用；单测跨平台引用，故非 Windows 下仅抑制 dead_code。）
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn latest_stable_tag(tags: &[String]) -> Option<String> {
+    tags.iter()
+        .map(|tag| tag.trim_start_matches('v').to_string())
+        .find(|tag| {
+            !tag.contains("-rc")
+                && !tag.contains("-preview")
+                && !tag.contains("-beta")
+                && !tag.contains("-alpha")
+        })
 }
 
 /// 解析 GitHub releases.atom 页面的 tag 列表（按发布顺序，最新在前）。
@@ -262,11 +259,10 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
         })?;
     if code != 0 {
         let detail = truncate(&err, 400);
-        return Err(if crate::locale::is_chinese() {
-            format!("{action} PowerShell 失败（winget 退出码 {code}）：\n{detail}")
-        } else {
-            format!("PowerShell {action} failed (winget exit code {code}):\n{detail}")
-        });
+        return Err(crate::locale::owned(
+            format!("{action} PowerShell 失败（winget 退出码 {code}）：\n{detail}"),
+            format!("PowerShell {action} failed (winget exit code {code}):\n{detail}"),
+        ));
     }
     match pwsh_version() {
         Some(v) => {
@@ -278,5 +274,46 @@ fn update_pwsh_windows(app: &AppHandle) -> Result<(), String> {
             "winget reported success, but pwsh was not detected. Please retry later or reopen PowerShell to confirm.",
         )
         .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latest_stable_tag;
+
+    fn tags(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn latest_stable_tag_skips_all_prerelease_kinds() {
+        // -beta tag 必须跳过（旧口径只滤 preview/-rc，会把 7.6.0-beta 当成最新）
+        assert_eq!(
+            latest_stable_tag(&tags(&["v7.6.0-beta.1", "v7.5.3", "v7.5.2"])),
+            Some("7.5.3".to_string())
+        );
+        // 四类预发布（-rc/-preview/-beta/-alpha）全部过滤
+        assert_eq!(
+            latest_stable_tag(&tags(&[
+                "v7.6.0-rc.1",
+                "v7.6.0-preview.2",
+                "v7.6.0-beta.1",
+                "v7.5.0-alpha.3",
+                "v7.5.3"
+            ])),
+            Some("7.5.3".to_string())
+        );
+        // 全是预发布时无稳定版
+        assert_eq!(latest_stable_tag(&tags(&["v7.6.0-beta.1"])), None);
+    }
+
+    #[test]
+    fn latest_stable_tag_takes_first_stable_in_atom_order() {
+        // 旧补丁线版本列在稳定版之后时不误判为最新（按 atom 顺序取首个稳定 tag，
+        // 不再扫描 semver 最大）
+        assert_eq!(
+            latest_stable_tag(&tags(&["v7.5.3", "v7.4.9"])),
+            Some("7.5.3".to_string())
+        );
     }
 }

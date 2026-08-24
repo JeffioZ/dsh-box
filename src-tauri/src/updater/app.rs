@@ -111,8 +111,20 @@ pub(super) fn parse_app_release_asset(
     let asset_url = asset
         .get("browser_download_url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "Release asset has no download URL".to_string())?;
-    let parsed = url::Url::parse(asset_url).map_err(|_| "Invalid release asset URL".to_string())?;
+        .ok_or_else(|| {
+            crate::locale::text(
+                "Release 资产没有下载地址。",
+                "The release asset has no download URL.",
+            )
+            .to_string()
+        })?;
+    let parsed = url::Url::parse(asset_url).map_err(|_| {
+        crate::locale::text(
+            "Release 资产下载地址无效。",
+            "The release asset download URL is invalid.",
+        )
+        .to_string()
+    })?;
     let expected_path = format!("/{APP_REPO}/releases/download/{expected_tag}/{APP_WINDOWS_ASSET}");
     if parsed.scheme() != "https"
         || parsed.host_str() != Some("github.com")
@@ -193,7 +205,7 @@ pub(super) fn update_app_exe(
         }
         app.state::<AppState>()
             .set_app_update_ready(Some((expected.version.clone(), expected.sha256.clone())));
-        apply_downloaded_exe(app, &target, &expected.sha256)
+        apply_downloaded_exe(app, &target, &expected)
     }
 }
 
@@ -205,16 +217,28 @@ fn verify_downloaded_exe(target: &std::path::Path, expected_sha256: &str) -> Res
     use std::io::Seek as _;
 
     let Ok(meta) = target.metadata() else {
-        return Err("Downloaded executable is missing".into());
+        return Err(crate::locale::text(
+            "已下载的程序文件不存在。",
+            "The downloaded executable is missing.",
+        )
+        .into());
     };
     if meta.len() < 1024 * 1024 {
-        return Err("Downloaded executable is too small".into());
+        return Err(crate::locale::text(
+            "已下载的程序文件过小，不是有效的更新包。",
+            "The downloaded executable is too small to be a valid update.",
+        )
+        .into());
     }
     let mut file = std::fs::File::open(target).map_err(|e| e.to_string())?;
     let mut mz = [0u8; 2];
     file.read_exact(&mut mz).map_err(|e| e.to_string())?;
     if &mz != b"MZ" {
-        return Err("Downloaded executable has no MZ header".into());
+        return Err(crate::locale::text(
+            "已下载的程序文件缺少 MZ 头。",
+            "The downloaded executable has no MZ header.",
+        )
+        .into());
     }
     file.rewind().map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
@@ -367,11 +391,11 @@ pub(super) fn windows_replace_script(
 fn apply_downloaded_exe(
     app: &AppHandle,
     target: &std::path::Path,
-    expected_sha256: &str,
+    release: &AppReleaseAsset,
 ) -> Result<(), String> {
-    // 确认前再次校验，覆盖“预下载完成后文件被替换”的窗口。
-    verify_downloaded_exe(target, expected_sha256)?;
-    // 3) 确认：更新需要退出并自动重启
+    // 1) 确认前再次校验，覆盖“预下载完成后文件被替换”的窗口。
+    verify_downloaded_exe(target, &release.sha256)?;
+    // 2) 确认：更新需要退出并自动重启
     use tauri_plugin_dialog::MessageDialogKind;
     if !crate::native_dialog::ask(
         app,
@@ -388,7 +412,7 @@ fn apply_downloaded_exe(
         return Ok(());
     }
 
-    // 4) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
+    // 3) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
     // File.Replace 原子替换；断电发生在提交前时旧 exe 始终保持可启动。
     let exe = std::env::current_exe().map_err(|e| {
         crate::locale::error(
@@ -399,8 +423,10 @@ fn apply_downloaded_exe(
     })?;
     let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
     let script = dir.join("replace.ps1");
-    let script_text = windows_replace_script(target, &exe, expected_sha256);
-    std::fs::write(&script, script_text).map_err(|e| {
+    let script_text = windows_replace_script(target, &exe, &release.sha256);
+    // 写入 BOM：Windows PowerShell 5.1 对无 BOM 的 .ps1 按 ANSI 解码，
+    // 脚本内含中文路径时会解码错乱导致替换失败
+    std::fs::write(&script, format!("\u{FEFF}{script_text}")).map_err(|e| {
         crate::locale::error(
             "写入替换脚本失败",
             "Failed to write the replacement script",
@@ -408,7 +434,7 @@ fn apply_downloaded_exe(
         )
     })?;
 
-    // 5) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
+    // 4) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
     let mut replace_cmd = std::process::Command::new("powershell");
     replace_cmd
         .args([
@@ -429,12 +455,73 @@ fn apply_downloaded_exe(
         )
         .into());
     }
+    // 记录本轮替换目标版本：新版启动后据此确认上一轮更新成功，再回收
+    // exe-update 暂存与 .old 备份（见 cleanup_applied_app_update）。
+    // 写失败不阻断更新——残留只是留待下一轮成功更新后清理。
+    if let Err(e) = std::fs::write(dir.join(PENDING_APPLY_MARKER), &release.version) {
+        crate::logging::log(&format!("updater: 写入应用更新确认标记失败：{e}"));
+    }
     crate::logging::log(&format!("updater: 应用更新已就绪，退出并重启（{exe:?}）"));
     // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）
     crate::window::save_window_state_now(app);
     crate::dsh::shutdown(app);
     app.exit(0);
     Ok(())
+}
+
+/// 替换流程目标版本标记（exe-update 目录下，纯文本版本号）：
+/// apply_downloaded_exe 启动替换脚本后写入；下次启动由
+/// cleanup_applied_app_update 读取并判断上一轮应用更新是否成功。
+#[cfg(any(windows, test))]
+const PENDING_APPLY_MARKER: &str = "pending-apply";
+
+/// 启动时回收上一轮已成功的应用更新残留（仅 Windows 有该替换流程）：
+/// exe-update/ 暂存目录（新 exe 副本与 replace.ps1）整体删除；安装目录的
+/// .old 备份在确认当前运行版本==目标版本后删除。标记缺失或版本不匹配
+/// （替换失败/等待重试）时一律不动，当轮回滚所需文件全部保留。
+/// 失败只记日志，不影响启动恢复流程。
+#[cfg(windows)]
+pub(crate) fn cleanup_applied_app_update(config: &crate::app_state::Config) {
+    let dir = config.root.join("exe-update");
+    let exe_old = std::env::current_exe().ok().map(|exe| {
+        let mut old = exe.into_os_string();
+        old.push(".old");
+        std::path::PathBuf::from(old)
+    });
+    if cleanup_applied_update_in(&dir, env!("CARGO_PKG_VERSION"), exe_old.as_deref()) {
+        crate::logging::log("updater: 上一轮应用更新已确认成功，暂存目录与旧版备份已回收");
+    }
+}
+
+/// 按标记与运行版本执行残留清理（纯逻辑，便于单测）：返回是否发生了清理。
+#[cfg(any(windows, test))]
+fn cleanup_applied_update_in(
+    dir: &std::path::Path,
+    running_version: &str,
+    exe_old: Option<&std::path::Path>,
+) -> bool {
+    let marker = dir.join(PENDING_APPLY_MARKER);
+    let Ok(target) = std::fs::read_to_string(&marker) else {
+        return false; // 无标记：上一轮未进入替换流程，不碰任何文件
+    };
+    let target = target.trim();
+    if target.is_empty() || target != running_version {
+        // 替换未完成（脚本失败后旧版仍在运行）或版本已被其他途径覆盖：
+        // 保留暂存与备份供回滚/同版本重试；标记一并保留——若替换脚本仍在
+        // 重试窗口内并最终成功，下次启动仍能完成回收；下一轮更新会重写标记。
+        return false;
+    }
+    if let Err(e) = std::fs::remove_dir_all(dir) {
+        crate::logging::log(&format!("updater: 清理应用更新暂存目录失败：{e}"));
+    }
+    if let Some(old) = exe_old {
+        if old.exists() {
+            if let Err(e) = std::fs::remove_file(old) {
+                crate::logging::log(&format!("updater: 清理应用旧版备份失败：{e}"));
+            }
+        }
+    }
+    true
 }
 
 /// 后台预下载应用更新（无需用户确认）：发现新版且未下载时自动下载，
@@ -525,4 +612,61 @@ fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
             release_url: Some(release_url),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cleanup_applied_update_in, PENDING_APPLY_MARKER};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "dshbox-appupdate-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cleanup_only_runs_with_a_matching_success_marker() {
+        // 无标记：上一轮未进入替换流程，暂存文件原样保留
+        let dir = temp_dir("nomarker");
+        let staged = dir.join("DSHBox.exe");
+        std::fs::write(&staged, b"new").unwrap();
+        assert!(!cleanup_applied_update_in(&dir, "1.2.3", None));
+        assert!(staged.exists());
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 标记版本与运行版本不一致（替换失败/已回滚）：暂存、备份与标记全部保留
+        let dir = temp_dir("mismatch");
+        let staged = dir.join("DSHBox.exe");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(dir.join(PENDING_APPLY_MARKER), "1.9.9").unwrap();
+        let old = temp_dir("mismatch-old").join("DSHBox.exe.old");
+        std::fs::write(&old, b"old").unwrap();
+        assert!(!cleanup_applied_update_in(&dir, "1.2.3", Some(&old)));
+        assert!(staged.exists());
+        assert!(dir.join(PENDING_APPLY_MARKER).exists());
+        assert!(old.exists());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(old.parent().unwrap()).ok();
+
+        // 标记匹配（当前运行版本==目标版本）：回收暂存目录与 .old 备份，且幂等
+        let dir = temp_dir("match");
+        std::fs::write(dir.join("DSHBox.exe"), b"new").unwrap();
+        std::fs::write(dir.join("replace.ps1"), b"script").unwrap();
+        std::fs::write(dir.join(PENDING_APPLY_MARKER), "1.2.3").unwrap();
+        let old = temp_dir("match-old").join("DSHBox.exe.old");
+        std::fs::write(&old, b"old").unwrap();
+        assert!(cleanup_applied_update_in(&dir, "1.2.3", Some(&old)));
+        assert!(!dir.exists());
+        assert!(!old.exists());
+        // 标记随目录删除，再次运行不再动作
+        assert!(!cleanup_applied_update_in(&dir, "1.2.3", Some(&old)));
+        std::fs::remove_dir_all(old.parent().unwrap()).ok();
+    }
 }

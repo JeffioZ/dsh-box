@@ -8,19 +8,48 @@ pub(crate) const NODE_BACKUP_DIR: &str = "node-old";
 pub(crate) const NODE_UPDATE_MARKER: &str = "node-update-in-progress";
 
 /// 启动时恢复上次被强杀/断电打断的目录切换。
+/// dsh 与 Node 的恢复互不影响：任一失败仍继续恢复另一个，错误汇总返回。
 pub(crate) fn recover_interrupted_updates(config: &Config) -> Result<(), String> {
-    recover_directory(
-        &config.dsh_dir(),
-        &config.root.join(DSH_BACKUP_DIR),
-        &config.root.join(DSH_UPDATE_MARKER),
-        "dsh",
-    )?;
-    recover_directory(
-        &config.node_dir(),
-        &config.root.join(NODE_BACKUP_DIR),
-        &config.root.join(NODE_UPDATE_MARKER),
-        "Node",
-    )
+    // 上一轮应用本体替换已成功的残留回收（exe-update 暂存与 .old 备份）；
+    // 内部只记日志，不影响目录恢复结果
+    #[cfg(windows)]
+    super::app::cleanup_applied_app_update(config);
+    recover_all(&[
+        (
+            config.dsh_dir(),
+            config.root.join(DSH_BACKUP_DIR),
+            config.root.join(DSH_UPDATE_MARKER),
+            "dsh",
+        ),
+        (
+            config.node_dir(),
+            config.root.join(NODE_BACKUP_DIR),
+            config.root.join(NODE_UPDATE_MARKER),
+            "Node",
+        ),
+    ])
+}
+
+fn recover_all(
+    items: &[(
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        &str,
+    )],
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for (current, backup, marker, name) in items {
+        if let Err(e) = recover_directory(current, backup, marker, name) {
+            crate::logging::log(&format!("updater: 恢复中断的 {name} 更新失败：{e}"));
+            errors.push(e);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// 删除失败的新目录并原子恢复同卷备份；恢复失败时保留备份供人工处理。
@@ -131,7 +160,7 @@ fn recover_directory(
                     format!("Failed to restore {name} to its pre-update state: {e}"),
                 )
             })?;
-            crate::logging::log(&format!("update: 检测到中断的 {name} 更新，已恢复旧版本"));
+            crate::logging::log(&format!("updater: 检测到中断的 {name} 更新，已恢复旧版本"));
         } else if !current.exists() {
             return Err(crate::locale::owned(
                 format!("{name} 更新中断，且当前目录和备份均不存在"),
@@ -144,7 +173,7 @@ fn recover_directory(
     } else if backup.exists() {
         if current.exists() {
             if let Err(e) = std::fs::remove_dir_all(backup) {
-                crate::logging::log(&format!("update: 清理已提交的 {name} 备份失败：{e}"));
+                crate::logging::log(&format!("updater: 清理已提交的 {name} 备份失败：{e}"));
             }
         } else {
             std::fs::rename(backup, current).map_err(|e| {
@@ -153,7 +182,7 @@ fn recover_directory(
                     format!("Failed to restore the remaining {name} backup: {e}"),
                 )
             })?;
-            crate::logging::log(&format!("update: 当前 {name} 目录缺失，已恢复遗留备份"));
+            crate::logging::log(&format!("updater: 当前 {name} 目录缺失，已恢复遗留备份"));
         }
     }
     Ok(())
@@ -241,6 +270,44 @@ mod tests {
     fn removing_a_missing_marker_is_idempotent() {
         let root = temp_dir("missing-marker");
         remove_marker(&root.join("missing")).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_failed_recovery_does_not_block_the_other() {
+        // dsh 项：marker 在、当前与备份都不在 → 恢复必然失败；
+        // Node 项：正常中断现场 → 必须仍被恢复，错误汇总返回。
+        let root = temp_dir("independent-recovery");
+        let dsh_current = root.join("dsh-current");
+        let dsh_backup = root.join("dsh-backup");
+        let dsh_marker = root.join("dsh-marker");
+        std::fs::write(&dsh_marker, "in-progress").unwrap();
+        let node_current = root.join("node-current");
+        let node_backup = root.join("node-backup");
+        let node_marker = root.join("node-marker");
+        std::fs::create_dir_all(&node_current).unwrap();
+        std::fs::create_dir_all(&node_backup).unwrap();
+        std::fs::write(node_current.join("version"), "partial").unwrap();
+        std::fs::write(node_backup.join("version"), "old").unwrap();
+        std::fs::write(&node_marker, "in-progress").unwrap();
+
+        let result = recover_all(&[
+            (dsh_current, dsh_backup, dsh_marker, "dsh"),
+            (
+                node_current.clone(),
+                node_backup.clone(),
+                node_marker.clone(),
+                "Node",
+            ),
+        ]);
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(node_current.join("version")).unwrap(),
+            "old"
+        );
+        assert!(!node_backup.exists());
+        assert!(!node_marker.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

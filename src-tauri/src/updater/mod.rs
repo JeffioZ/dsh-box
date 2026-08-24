@@ -127,14 +127,19 @@ fn with_directory_transaction<T>(
 ) -> Result<(), String> {
     // 1) 先做本地前置检查；不要在明确存在残留事务时仍先联网下载。
     if backup.exists() || marker.exists() {
+        // 残留可能是备份目录、事务标记或两者兼有，文案按实际残留如实描述
+        let mut residue = Vec::new();
+        if backup.exists() {
+            residue.push(format!("{}", backup.display()));
+        }
+        if marker.exists() {
+            residue.push(format!("{}", marker.display()));
+        }
+        let residue = residue.join("、");
         return Err(crate::locale::owned(
+            format!("检测到未完成的 {name} 更新，请重启应用后重试：{residue}"),
             format!(
-                "检测到未完成的 {name} 更新，请重启应用后重试：{}",
-                backup.display()
-            ),
-            format!(
-                "An unfinished {name} update was found. Restart the app before trying again: {}",
-                backup.display()
+                "An unfinished {name} update was found. Restart the app before trying again: {residue}"
             ),
         ));
     }
@@ -281,7 +286,7 @@ fn emit_progress(app: &AppHandle, message: &str) {
 
 // ---------- 应用更新 ----------
 
-/// 应用更新（which: "dsh" | "node" | "pwsh"）。
+/// 应用更新（which: "dsh" | "node" | "pwsh" | "app" | "npm"）。
 pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.service_ownership().is_external() && matches!(which, "dsh" | "node" | "npm") {
