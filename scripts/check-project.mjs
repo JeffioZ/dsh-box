@@ -8,13 +8,28 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const failures = [];
 const fail = (message) => failures.push(message);
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
-const tracked = execFileSync(
-  'git',
-  ['ls-files', '--cached', '--others', '--exclude-standard'],
-  { cwd: root, encoding: 'utf8' },
-)
-  .split(/\r?\n/)
-  .filter((file) => file && fs.existsSync(path.join(root, file)));
+// 硬编码关键文件：读前检查存在性，缺失时记为可读 fail 项并返回 null，而不是 ENOENT 栈
+const readExisting = (file) => {
+  if (!fs.existsSync(path.join(root, file))) {
+    fail(`缺少必要文件: ${file}`);
+    return null;
+  }
+  return read(file);
+};
+// 非 git 检出（或 git 不可用）时给可读报错，而不是 execFileSync 异常栈
+let tracked;
+try {
+  tracked = execFileSync(
+    'git',
+    ['ls-files', '--cached', '--others', '--exclude-standard'],
+    { cwd: root, encoding: 'utf8' },
+  )
+    .split(/\r?\n/)
+    .filter((file) => file && fs.existsSync(path.join(root, file)));
+} catch {
+  console.error('项目检查失败：无法列出受控文件，请在 git 检出中运行本脚本（且 git 可用）。');
+  process.exit(1);
+}
 
 const knownText = new Set([
   '', '.css', '.html', '.js', '.json', '.lock', '.md', '.mjs', '.ps1', '.rs',
@@ -37,6 +52,21 @@ for (const file of tracked) {
       fail(`${file}: 不是有效的 UTF-8 文本`);
     }
     if (text.includes('\0')) fail(`${file}: 文本中包含 NUL 字节`);
+  }
+}
+
+// .gitattributes 声明 eol=lf 的类型不得含 CR 字节（只识别本仓库用到的 *.ext 声明形式）
+const gitattributes = readExisting('.gitattributes');
+if (gitattributes !== null) {
+  const lfEolExts = new Set(
+    [...gitattributes.matchAll(/^\*\.(\S+)\s+[^\n]*\beol=lf\b/gm)]
+      .map((match) => `.${match[1].toLowerCase()}`),
+  );
+  for (const file of tracked) {
+    if (!lfEolExts.has(path.extname(file).toLowerCase())) continue;
+    if (fs.readFileSync(path.join(root, file)).includes(0x0d)) {
+      fail(`${file}: .gitattributes 声明 eol=lf，不得包含 CR/CRLF`);
+    }
   }
 }
 
@@ -90,9 +120,11 @@ for (const file of tracked.filter((file) => file.endsWith('.html'))) {
   }
 }
 
-const i18n = read('ui/i18n.js');
-const messageMatch = i18n.match(/const DSHD_MESSAGES = (\{[\s\S]*?\n\});/);
-if (!messageMatch) {
+const i18n = readExisting('ui/i18n.js');
+const messageMatch = i18n === null ? null : i18n.match(/const DSHD_MESSAGES = (\{[\s\S]*?\n\});/);
+if (i18n === null) {
+  // 缺失 fail 已由 readExisting 记录，跳过后续 i18n 契约检查
+} else if (!messageMatch) {
   fail('ui/i18n.js: 找不到 DSHD_MESSAGES');
 } else {
   const keyLines = [...messageMatch[1].matchAll(/^\s{2}([A-Za-z_$][\w$]*):/gm)].map((match) => match[1]);
@@ -380,12 +412,25 @@ if (!navigation.includes('include_str!("../../resources/injections/context-menu.
     "T('复制路径', 'Copy path')",
     "T('复制文件内容', 'Copy file contents')",
     'contextSequence',
-    "dshdUrl('normalize'",
+    "dshdFetch('normalize'",
+    "'X-DSHd-Token'",
+    'URL.createObjectURL',
+    'URL.revokeObjectURL',
     'prefers-reduced-motion',
     "document.addEventListener('contextmenu', onCtx)",
   ]) {
     if (!menuScript.includes(contract)) fail(`MENU_INJECT 缺少兼容契约: ${contract}`);
   }
+  // 令牌只走 X-DSHd-Token 请求头：URL（resource timing 缓冲区同源可见）与
+  // no-cors/Image 通道（带不了自定义头，只能退回 URL 令牌）一律禁止
+  if (/[?&]token=/.test(menuScript) || menuScript.includes("mode: 'no-cors'")) {
+    fail('MENU_INJECT 不得以 URL query 或 no-cors/Image 形式传递协议令牌');
+  }
+  const dshdProtocol = read('src-tauri/src/webview/protocol.rs');
+  for (const contract of ['Method::OPTIONS', 'Access-Control-Allow-Headers', 'x-dshd-token']) {
+    if (!dshdProtocol.includes(contract)) fail(`dshd 协议缺少预检/令牌头契约: ${contract}`);
+  }
+  if (dshdProtocol.includes('query("token")')) fail('dshd 协议不得再从 URL query 读取令牌');
   if (!navigation.includes('delete window.__dshdProtocolToken')) fail('注入后未清除全局协议令牌');
 }
 
@@ -418,8 +463,18 @@ if (!buildWorkflow.includes('^v[0-9]+\\.[0-9]+\\.[0-9]+$')
     || !buildWorkflow.includes('startsWith(github.ref, \'refs/tags/\')')) {
   fail('.github/workflows/build.yml: 发布必须受严格版本 tag 与 tag-only 条件约束');
 }
-if (read('dev-run.ps1').includes('<title>DeepSeek Harness Box</title>')) {
+// build.yml 发布流程以 body_path 挂载该文件，缺失会让 release 创建失败
+if (!fs.existsSync(path.join(root, 'RELEASE_NOTES.md'))) {
+  fail('缺少 RELEASE_NOTES.md：build.yml 发布流程以 body_path 依赖该文件');
+}
+const devRun = readExisting('dev-run.ps1');
+if (devRun !== null && devRun.includes('<title>DeepSeek Harness Box</title>')) {
   fail('dev-run.ps1: 开发服务器健康检查仍引用旧产品标题');
+}
+// 正向一致性：健康检查标题必须与 ui/index.html 当前 title 完全一致
+const indexTitle = startupHtml.match(/<title>([^<]+)<\/title>/)?.[1];
+if (devRun !== null && indexTitle && !devRun.includes(`<title>${indexTitle}</title>`)) {
+  fail('dev-run.ps1: 开发服务器健康检查标题与 ui/index.html 当前 title 不一致');
 }
 
 function packageNameFromSpec(spec) {
@@ -523,8 +578,18 @@ const pngExpectations = new Map([
   ['src-tauri/icons/tray-24.png', [24, 24]],
   ['src-tauri/icons/tray-32.png', [32, 32]],
 ]);
+// 图标产物缺失时给可读 fail 项（提示重新生成），而不是 ENOENT 栈
+const readBinaryExisting = (file) => {
+  const filePath = path.join(root, file);
+  if (!fs.existsSync(filePath)) {
+    fail(`缺少图标产物: ${file}（修改品牌源后需运行 npm run icons）`);
+    return null;
+  }
+  return fs.readFileSync(filePath);
+};
 for (const [file, [expectedWidth, expectedHeight]] of pngExpectations) {
-  const bytes = fs.readFileSync(path.join(root, file));
+  const bytes = readBinaryExisting(file);
+  if (bytes === null) continue;
   const signature = bytes.subarray(0, 8).toString('hex');
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
@@ -535,10 +600,18 @@ for (const [file, [expectedWidth, expectedHeight]] of pngExpectations) {
 if (!read('scripts/gen-icons.mjs').includes("assets', 'brand', 'deepseek-mark.svg")) {
   fail('图标生成脚本未使用统一品牌源 assets/brand/deepseek-mark.svg');
 }
-const ico = fs.readFileSync(path.join(root, 'src-tauri/icons/icon.ico'));
-if (ico.subarray(0, 4).toString('hex') !== '00000100') fail('src-tauri/icons/icon.ico: ICO 文件头异常');
-const icns = fs.readFileSync(path.join(root, 'src-tauri/icons/icon.icns'));
-if (icns.subarray(0, 4).toString('ascii') !== 'icns') fail('src-tauri/icons/icon.icns: ICNS 文件头异常');
+const ico = readBinaryExisting('src-tauri/icons/icon.ico');
+if (ico !== null && ico.subarray(0, 4).toString('hex') !== '00000100') fail('src-tauri/icons/icon.ico: ICO 文件头异常');
+const icns = readBinaryExisting('src-tauri/icons/icon.icns');
+if (icns !== null && icns.subarray(0, 4).toString('ascii') !== 'icns') fail('src-tauri/icons/icon.icns: ICNS 文件头异常');
+
+// bundle.icon 必须是 gen-icons.mjs 实际生成产物清单的子集（打包只引用生成物）
+const generatedIcons = new Set([...pngExpectations.keys(), 'src-tauri/icons/icon.ico', 'src-tauri/icons/icon.icns']);
+for (const icon of tauri.bundle?.icon ?? []) {
+  if (!generatedIcons.has(`src-tauri/${icon}`)) {
+    fail(`tauri.conf.json: bundle.icon 引用了非图标生成产物: ${icon}`);
+  }
+}
 
 if (failures.length) {
   console.error(`项目检查失败（${failures.length} 项）：`);
@@ -546,4 +619,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`项目检查通过：${tracked.length} 个受控文件，JS/HTML/i18n/版本/配置/文档链接/图标/右键契约均有效。`);
+console.log(`项目检查通过：${tracked.length} 个受控文件，JS/HTML/i18n/行尾/版本/配置/文档链接/图标/右键契约均有效。`);

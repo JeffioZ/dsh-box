@@ -12,16 +12,17 @@ const root = path.resolve(__dirname, '..');
 const iconDir = path.join(root, 'src-tauri', 'icons');
 
 // 官方 DeepSeek 鲸鱼标志源文件
-const favicon = fs.readFileSync(path.join(root, 'assets', 'brand', 'deepseek-mark.svg'), 'utf8');
-const m = favicon.match(/<path[^>]*d="([^"]+)"[^>]*>/);
-if (!m) throw new Error('favicon path not found');
+const brandSvg = fs.readFileSync(path.join(root, 'assets', 'brand', 'deepseek-mark.svg'), 'utf8');
+// 注意：只正则提取第一个 <path> 的 d 属性——品牌源当前是单 path；
+// 若未来改为多 path 图形，这里会取错路径，必须重写提取逻辑
+const m = brandSvg.match(/<path[^>]*d="([^"]+)"[^>]*>/);
+if (!m) throw new Error('brand mark path not found');
 const logoPath = m[1];
 
 // 深蓝底 + 白色 logo（应用图标）。
 // 鲸鱼占比随尺寸自适应：小图标放大鲸鱼保证可辨识度，大图标保持官方比例。
 function appIconSvg(size) {
   const ratio = size <= 24 ? 0.74 : size <= 48 ? 0.7 : 0.62;
-  const pad = size * 0.08;
   const logoSize = size * ratio;
   const ox = (size - logoSize) / 2;
   const oy = ox;

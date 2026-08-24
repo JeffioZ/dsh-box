@@ -26,12 +26,12 @@ pwsh -NoLogo -NoProfile -File .\dev-build.ps1
 pwsh -NoLogo -NoProfile -File .\dev-run.ps1
 ```
 
-`dev-run.ps1` 在 4321 端口提供 `ui/`；只改 UI 可刷新页面，改 Rust 后需重新执行 `dev-build.ps1`。开发版使用独立的 `src-tauri/target/dev/` 构建缓存，不会覆盖或锁住正式版产物。
+`dev-run.ps1` 在 4321 端口提供 `ui/`；只改 UI 可刷新页面，改 Rust 后需重新执行 `dev-build.ps1`。开发版使用独立的 `src-tauri/target/dev/` 构建缓存，不会覆盖或锁住正式版产物。UI 服务器在脚本退出后仍常驻，PID 记录在 `%TEMP%\dshbox-dev-ui-server.pid`，可用 `Stop-Process -Id <PID>` 停止（重复运行 `dev-run.ps1` 时也会提示）。
 `build.ps1` 与 `dev-build.ps1` 会先运行完整项目一致性检查，避免把 UI 语法、资源引用或配置错误编进产物。
 
 ## CI 与跨平台检查
 
-GitHub Actions 在 Windows x64、macOS arm64、Linux x64/arm64 原生任务上运行格式检查、Clippy 与单测；macOS x64 另做交叉编译检查和 Clippy。`main` push 与 PR 只做验证；只有格式为 `vX.Y.Z` 且与项目版本一致的 tag 才执行 release 构建并上传附件。
+GitHub Actions 在 Windows x64、macOS arm64、Linux x64/arm64 原生任务上运行 Clippy 与单测；macOS x64 另做交叉编译检查和 Clippy。格式检查与项目一致性在单独的 `version-check` 任务只跑一次（与平台无关）。`main` push 与 PR 只做验证；只有格式为 `vX.Y.Z` 且与项目版本一致的 tag 才执行 release 构建并上传附件。
 
 本地 Windows 编译不会检查 Unix 专属分支。修改 `#[cfg(windows)]`、`#[cfg(target_os = "macos")]` 或 Unix 代码时，同时检查以下内容：
 
@@ -63,7 +63,7 @@ npm run icons
 ## 版本与发布
 
 1. 更新 `RELEASE_NOTES.md`。
-2. 执行 `pwsh -File scripts/bump-version.ps1`，确认 `Cargo.toml`、`Cargo.lock`、`package.json` 和 `tauri.conf.json` 一致。
+2. 执行 `pwsh -File scripts/bump-version.ps1`，确认 `Cargo.toml`、`Cargo.lock`、`package.json`、`package-lock.json` 和 `tauri.conf.json` 一致。
 3. 运行全部本地检查并提交 `chore: release x.y.z——…`。
 4. 创建并推送 `vx.y.z` tag。
 5. GitHub Actions 先创建 draft Release、构建五个平台、校验附件与 digest，全部成功后发布。
@@ -79,4 +79,4 @@ npm run icons
 - `npm run check` 失败时先处理其给出的具体文件；该脚本不会抽样。
 - 更新失败时不要手工删除 `*-old`、`.part` 或事务标记，先让下一次启动执行恢复。
 
-常见用户侧问题与日志位置见[故障排查](troubleshooting.md)。
+常见用户侧问题与日志位置见[故障排查](troubleshooting.md)。「用量与余额」模块与上游 dsh-usage-stats 的同步规程见[用量同步](usage-sync.md)。

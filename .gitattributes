@@ -1,5 +1,7 @@
 # 统一换行符：文本文件入库为 LF（GitHub 标准），Windows 检出时按需转换
 * text=auto
+# 无扩展名文件单独钉住行尾，避免 Windows 检出转 CRLF
+.gitignore text eol=lf
 
 *.rs    text eol=lf
 *.toml  text eol=lf

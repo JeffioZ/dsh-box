@@ -33,7 +33,9 @@ The executable is written to `dist\DSHBox.exe`. See the [development guide](docs
 - Uses transactional dsh/Node updates; Windows app updates require an exact release tag and SHA-256 digest.
 - Keeps the full local-file context menu: default open, editor open, reveal, copy path, and copy UTF-8 contents.
 - Manages plugins only through the official `dsh plugin` CLI. Built-in first-run plugins are disclosed and optional.
+- Tracks token usage by day and model with a month heatmap, recent-14-days list, and model drill-down; shows provider balance and subscription cards with background monitoring, stale-on-error retention, and low-balance warnings.
 - Validates `llm-pi-ai` imports with a typed YAML parser and stores credentials separately from settings.
+- Portable mode: placing `portable.txt` next to the Windows exe keeps the runtime and configuration in an adjacent `data/` directory.
 
 ## Platforms
 
@@ -43,17 +45,39 @@ The executable is written to `dist\DSHBox.exe`. See the [development guide](docs
 | macOS | arm64 / x64 | macOS 13.5+ | Unsigned dmg |
 | Linux | x64 / arm64 | WebKitGTK 4.1 environment such as Ubuntu 22.04 or Debian 12 | zip |
 
-Once the first public version is available, download the appropriate artifact from [Releases](https://github.com/JeffioZ/dsh-box/releases). Windows is the primary locally tested platform; GitHub Actions builds all five targets.
+Once the first public version is available, download the appropriate artifact from [Releases](https://github.com/JeffioZ/dsh-box/releases). Windows is the primary locally tested platform; GitHub Actions builds all five targets. On Linux, dsh's Landlock sandboxing requires kernel 5.13+; dsh itself degrades when the kernel is older.
 
 ## First run and data
 
-The first-run page is optional. API keys are written to dsh's `$DSH_HOME/.credentials.yaml`, while language and theme preferences are merged into `$DSH_HOME/settings.yaml`. The built-in-plugin switch is enabled by default but can be turned off; skipping setup does not consent to automatic plugin installation.
+The first-run page is optional: every choice can be left at its default and the DeepSeek API key can be left blank; all of them can be changed later in Settings. API keys are written to dsh's `$DSH_HOME/.credentials.yaml`, while language and theme preferences are merged into `$DSH_HOME/settings.yaml`. The built-in-plugin switch is enabled by default but can be turned off; skipping setup does not consent to automatic plugin installation.
 
 The key can later be replaced or cleared under **Settings → Service → DeepSeek API key**. When an environment variable supplies the key, that section is read-only and identifies the external owner.
 
 DSHBox stores user-editable shell settings in `config.json` and internal window/onboarding/maintenance state in `state.json`. Those files have strict ownership boundaries and are not used as fallbacks for each other. API keys are never read from or written to `config.json`.
 
 Default app-data roots are `%LOCALAPPDATA%\DSHBox` on Windows, `~/Library/Application Support/com.deepseek.dsh-box` on macOS, and `$XDG_DATA_HOME/com.deepseek.dsh-box` on Linux. dsh data remains in the official `$DSH_HOME` location, normally `~/.dsh`.
+
+`config.json` supports the following keys:
+
+```json
+{
+  "port": 18080,
+  "api_base": "https://api.deepseek.com",
+  "language": "zh-CN",
+  "hide_tool_calls": false,
+  "hide_stats_line": true,
+  "hide_statusbar": false,
+  "hide_balance": false,
+  "auto_update_plugins": true,
+  "task_notifications": true,
+  "dsh_update_channel": "latest",
+  "close_behavior": "tray",
+  "launch_behavior": "window",
+  "download_source": "auto"
+}
+```
+
+`dsh_update_channel` is `latest` or the riskier preview channel `next`; `close_behavior` is `tray` or `quit`; `launch_behavior` is `window` or `tray`; `download_source` is `auto`, `official`, or `mirror`.
 
 Environment overrides: `DSH_BOX_ROOT`, `DSH_BOX_PORT`, `DSH_BOX_API_KEY`, `DSH_BOX_API_BASE`, `DSH_HOME`, and `DSHD_LANG`. API key precedence is `DSH_BOX_API_KEY`, `DEEPSEEK_API_KEY`, then dsh credentials.
 
@@ -62,6 +86,8 @@ Environment overrides: `DSH_BOX_ROOT`, `DSH_BOX_PORT`, `DSH_BOX_API_KEY`, `DSH_B
 If a verified dsh service is found on the preferred port or dsh's official default port `3080`, DSHBox asks before connecting and remembers that service fingerprint. On first run, this choice comes before local setup; choosing the external service defers credential and plugin onboarding that only applies to the local runtime. That setup appears if the user later switches to the local service for the first time. An external service is display-only from DSHBox's perspective: the app never stops, restarts, updates, or rewrites its credentials, models, or plugins. If it disappears, the app offers retry or a deliberate switch to the local service.
 
 The settings page also controls whether closing hides to the tray or quits and whether a normal launch opens the window or stays in the tray. Installation can be cancelled without terminating the app. Managed-runtime downloads use the `download_source` policy in `config.json`: automatic fallback, official sources only, or mirrors only.
+
+The first-run offer includes [DSH Market](https://github.com/dsh-market/dsh-market) (`dshmarket`) and [DSH File Upload](https://github.com/HongMing-Huang/dsh-file-upload) (`dsh-file-upload`); agreed built-ins are installed once dsh is ready, and installed plugins that keep their built-in identity are checked for updates every 24 hours.
 
 Removing a built-in plugin stops DSHBox from reinstalling or updating it automatically. The plugin page keeps a manual reinstall entry; once restored, the plugin remains user-managed and does not regain its built-in badge or automatic updates.
 

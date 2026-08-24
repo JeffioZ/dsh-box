@@ -14,38 +14,37 @@ env:
   # 与 dsh 官方支持范围的最低稳定版本一致，避免 runner 自带 Node 漂移。
   NODE_VERSION: 22.19.0
 
-# 同一分支/PR 的并发构建自动取消旧的，避免排队浪费
+# 同一分支/PR 的并发构建自动取消旧的，避免排队浪费；
+# tag 发布不取消进行中的构建，重推 tag 不会打断已在跑的发布
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  # 版本号一致性：Cargo.toml / package.json / tauri.conf.json 三处必须同步，
-  # 漏改任何一处都会在构建前拦下。
+  # 发布前置：格式检查与项目一致性（含六处版本号同步）都在这个单 job 跑一次
+  # （cargo fmt 与平台无关）；此处只额外校验 tag 格式与 tag ↔ 项目版本一致性。
   version-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Project consistency checks
         run: npm run check
-      - name: Check version consistency
+      - name: Check release tag
         run: |
-          cargo_ver=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-          pkg_ver=$(node -p "require('./package.json').version")
-          tauri_ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          echo "Cargo.toml=$cargo_ver  package.json=$pkg_ver  tauri.conf.json=$tauri_ver"
-          if [ -z "$cargo_ver" ] || [ "$cargo_ver" != "$pkg_ver" ] || [ "$pkg_ver" != "$tauri_ver" ]; then
-            echo "::error::三处版本号不一致，请同步后再提交"
-            exit 1
-          fi
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::发布 tag 必须使用严格的 vX.Y.Z 格式"
               exit 1
             fi
+            cargo_ver=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
             if [ "${GITHUB_REF_NAME#v}" != "$cargo_ver" ]; then
               echo "::error::tag ${GITHUB_REF_NAME} 与项目版本 $cargo_ver 不一致"
               exit 1
@@ -117,11 +116,8 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev
 
-      - name: Format check
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
       - name: Unit tests
-        run: cargo test --locked --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml --lib
+        run: cargo test --locked --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml --all-targets
 
       - name: Clippy (warnings as errors)
         run: cargo clippy --locked --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
