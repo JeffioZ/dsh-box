@@ -1,21 +1,64 @@
-//! dsh `.credentials.yaml` 的最小行级读写工具。
+//! dsh `.credentials.yaml` 的最小行级读写工具（v1 布局）。
+//!
+//! 与 dsh 官方凭据服务（`@deepseek-ai/dsh-credentials-local`）同一格式：
+//! 顶层 `version: 1`，apiKeyEnv 凭据统一放在 `refs:` 段（`records:` 段用于
+//! OAuth 等记录，本工具不触碰）。只有如此，设置弹窗 / 模型导入里填的 key
+//! 才会被 dsh 真正读取——扁平顶层布局是 dsh 的 pre-release 旧格式，其解析
+//! 直接抛错（MISSING_CREDENTIAL）。本仓库从未发布过写扁平布局的正式版，
+//! 因此只按 v1 布局读写，不做旧格式迁移。
 //!
 //! 凭据文件不经过通用 YAML 序列化，避免重排或改写用户的其他条目；所有写入仍
 //! 由 `app_state::update_text_file` 串行并原子替换。
 
 use crate::app_state::Config;
 
+/// 是否匹配 `key:`（`key` 后紧跟 `:` 即命中，值可为空、标量或注释；
+/// content 已去首空白）。`version: 1`、`refs:`、`records:` 均命中。
+fn is_section_key(content: &str, key: &str) -> bool {
+    content
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.trim_start().starts_with(':'))
+}
+
 pub(crate) fn value(config: &Config, name: &str) -> Option<String> {
     let text = std::fs::read_to_string(config.dsh_home().join(".credentials.yaml")).ok()?;
-    text.lines().find_map(|line| {
-        line.split_once(':').and_then(|(candidate, value)| {
-            if candidate.trim().eq_ignore_ascii_case(name) {
-                decode_scalar(value)
-            } else {
-                None
+    value_from_text(&text, name)
+}
+
+/// 从凭据文档文本取引用值：只读 v1 布局的 `refs:.NAME`（扁平布局为已废弃
+/// 的 pre-release 格式，不做兼容读取）。
+fn value_from_text(text: &str, name: &str) -> Option<String> {
+    let mut in_refs = false;
+    for line in text.lines() {
+        let content = line.trim_start_matches('\u{feff}').trim_start();
+        let indent = line.len() - line.trim_start().len();
+        if in_refs {
+            // 遇到下一个顶层键（非注释非空）即 refs 段结束
+            if indent == 0 && !content.is_empty() && !content.starts_with('#') {
+                break;
             }
-        })
-    })
+            if indent > 0 && !content.starts_with('#') {
+                if let Some(v) = key_scalar(content, name) {
+                    return Some(v);
+                }
+            }
+            continue;
+        }
+        if indent == 0 && is_section_key(content, "refs") {
+            in_refs = true;
+        }
+    }
+    None
+}
+
+/// 解析一行 `NAME: value`，命中 name（忽略大小写）则解码标量。
+fn key_scalar(content: &str, name: &str) -> Option<String> {
+    let (candidate, value) = content.split_once(':')?;
+    if candidate.trim().eq_ignore_ascii_case(name) {
+        decode_scalar(value)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn has(config: &Config, name: &str) -> bool {
@@ -42,40 +85,152 @@ pub(crate) fn resolve_api_key(config: &Config, route_env: Option<&str>) -> Optio
     value(config, route_env.unwrap_or("DEEPSEEK_API_KEY"))
 }
 
+/// 行级新增或更新 `refs:.NAME`（v1 布局）。文档缺 `version`（补 `version: 1`）
+/// 或 `refs:` 段时自动补全；`records` 等其它顶层键与 refs 内顺带注释原样保留。
 pub(crate) fn upsert(text: &str, name: &str, value: &str) -> String {
-    let encoded = encode_scalar(value);
+    let target_line = format!("  {name}: {}", encode_scalar(value));
     let mut out = String::new();
+    let mut in_refs = false;
     let mut wrote = false;
+    let mut wrote_version = false;
+    let mut has_refs = false;
+    let append_target = |out: &mut String, wrote: &mut bool| {
+        if !*wrote {
+            out.push_str(&target_line);
+            out.push('\n');
+            *wrote = true;
+        }
+    };
     for line in text.lines() {
-        let is_target = line
-            .split_once(':')
-            .is_some_and(|(candidate, _)| key_matches(candidate, name));
-        if is_target {
-            if !wrote {
-                out.push_str(&format!("{name}: {encoded}\n"));
-                wrote = true;
+        let content = line.trim_start_matches('\u{feff}');
+        let stripped = content.trim_start();
+        let indent = content.len() - stripped.len();
+        let is_blank = stripped.is_empty();
+        let is_comment = stripped.starts_with('#');
+        let top = indent == 0
+            && !is_blank
+            && !is_comment
+            && !stripped.starts_with('%')
+            && !stripped.starts_with("---")
+            && !stripped.starts_with("...");
+        if in_refs {
+            if top {
+                // refs 段边界：本段内未写入目标行时在段尾补一行
+                append_target(&mut out, &mut wrote);
+                in_refs = false;
+                // 边界行若是 version：这条路径不会落到下方专门的 version 分支，
+                // 需在此标记已存在，避免文件头再补一个重复的 version。
+                if is_section_key(stripped, "version") {
+                    wrote_version = true;
+                }
+                out.push_str(line);
+                out.push('\n');
+                continue;
             }
+            if !is_blank
+                && !is_comment
+                && key_matches(stripped.split_once(':').map_or(stripped, |(k, _)| k), name)
+            {
+                if !wrote {
+                    out.push_str(&target_line);
+                    out.push('\n');
+                    wrote = true;
+                }
+                continue; // 丢弃旧行
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if top {
+            if is_section_key(stripped, "refs") {
+                has_refs = true;
+                // 保留原行（含可能的行内注释），与 `version:` 处理一致；仅记录
+                // 已存在 refs 段，接下来进入段内扫描。
+                out.push_str(line);
+                out.push('\n');
+                in_refs = true;
+                continue;
+            }
+            if is_section_key(stripped, "version") {
+                // 保留文档既有 version 值（可能是未来版本号），绝不改写；
+                // 仅当文档无 version 时在末尾补 `version: 1`（dsh 当前读取版本）。
+                wrote_version = true;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
             continue;
         }
         out.push_str(line);
         out.push('\n');
     }
-    if !wrote {
-        out.push_str(&format!("{name}: {encoded}\n"));
+    if in_refs {
+        append_target(&mut out, &mut wrote);
+    }
+    // 文件头补 `version: 1`（若文档确实没有 version）与 refs 段（若整份文档都没有
+    // refs 段）。version 缺失才补：已有（无论位于哪个顶层位置）都保留原样。
+    if !wrote_version {
+        out = format!("version: 1\n{out}");
+    }
+    if !has_refs {
+        // 补 refs 段；目标行若还没写，则一并补进 refs。仅当 out 恰好是刚补
+        // 的 `version: 1\n`（fresh 文件）时 refs 直接紧随；否则前面已有其它
+        // 顶层内容，用空行把 refs 段分隔开。
+        if !out.ends_with("version: 1\n") {
+            out.push('\n');
+        }
+        out.push_str("refs:\n");
+        if !wrote {
+            out.push_str(&target_line);
+            out.push('\n');
+        }
     }
     out
 }
 
 pub(crate) fn remove(text: &str, name: &str) -> String {
     let mut out = String::new();
+    let mut in_refs = false;
     for line in text.lines() {
-        let is_target = line
-            .split_once(':')
-            .is_some_and(|(candidate, _)| key_matches(candidate, name));
-        if !is_target {
+        let content = line.trim_start_matches('\u{feff}');
+        let stripped = content.trim_start();
+        let indent = content.len() - stripped.len();
+        let is_blank = stripped.is_empty();
+        let is_comment = stripped.starts_with('#');
+        let top = indent == 0
+            && !is_blank
+            && !is_comment
+            && !stripped.starts_with('%')
+            && !stripped.starts_with("---")
+            && !stripped.starts_with("...");
+        if in_refs {
+            if top {
+                in_refs = false;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if !is_blank
+                && !is_comment
+                && key_matches(stripped.split_once(':').map_or(stripped, |(k, _)| k), name)
+            {
+                continue; // 删除该行
+            }
             out.push_str(line);
             out.push('\n');
+            continue;
         }
+        if top && is_section_key(stripped, "refs") {
+            in_refs = true;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }
@@ -169,7 +324,7 @@ mod tests {
         const ROUTE: &str = "DSHBOX_TEST_ROUTE_KEY_7Q2Z";
         let (config, root) = temp_config(
             "chain",
-            "DEEPSEEK_API_KEY: file-deep\nDSHBOX_TEST_ROUTE_KEY_7Q2Z: file-route\n",
+            "version: 1\nrefs:\n  DEEPSEEK_API_KEY: file-deep\n  DSHBOX_TEST_ROUTE_KEY_7Q2Z: file-route\n",
         );
         // 逐级撤掉更高优先级，验证顺序 DSH_BOX → DEEPSEEK → 路由 env → 凭据文件。
         let r1 = set_env("DSH_BOX_API_KEY", Some("box"));
@@ -205,7 +360,10 @@ mod tests {
     #[test]
     fn resolve_api_key_treats_blank_env_as_unset() {
         let _guard = super::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (config, root) = temp_config("blank", "DEEPSEEK_API_KEY: file-deep\n");
+        let (config, root) = temp_config(
+            "blank",
+            "version: 1\nrefs:\n  DEEPSEEK_API_KEY: file-deep\n",
+        );
         let r1 = set_env("DSH_BOX_API_KEY", Some("   "));
         let r2 = set_env("DEEPSEEK_API_KEY", None);
         assert_eq!(
@@ -218,19 +376,76 @@ mod tests {
     }
 
     #[test]
-    fn upsert_replaces_duplicates_without_touching_neighbors() {
-        let text = "DEEPSEEK_API_KEY: keep\ncorp_key: old\nCORP_KEY: duplicate\n";
+    fn upsert_writes_v1_layout_with_refs_section() {
+        // 空文档：补 version 头与 refs 段，目标键缩进两格
+        let out = upsert("", "CORP_KEY", "v");
+        assert!(
+            out.starts_with("version: 1\nrefs:\n  CORP_KEY: 'v'\n"),
+            "actual: {out}"
+        );
+    }
+
+    #[test]
+    fn upsert_replaces_duplicate_refs_without_touching_neighbors() {
+        let text =
+            "version: 1\nrefs:\n  DEEPSEEK_API_KEY: keep\n  corp_key: old\n  CORP_KEY: duplicate\n";
         let out = upsert(text, "CORP_KEY", "new: value # exact");
         assert_eq!(out.matches("CORP_KEY:").count(), 1);
         assert!(!out.contains("corp_key:"));
-        assert!(out.contains("CORP_KEY: 'new: value # exact'"));
-        assert!(out.contains("DEEPSEEK_API_KEY: keep"));
+        assert!(out.contains("  CORP_KEY: 'new: value # exact'"));
+        assert!(out.contains("  DEEPSEEK_API_KEY: keep"));
+        assert!(out.starts_with("version: 1"));
+    }
+
+    #[test]
+    fn upsert_preserves_refs_inline_comment() {
+        // refs 段键行若带行内注释应原样保留（与 version 处理一致）
+        let text = "version: 1\nrefs: # 凭据引用\n  A: a\n";
+        let out = upsert(text, "B", "b");
+        assert!(out.contains("refs: # 凭据引用"));
+        assert!(out.contains("  A: a"));
+        assert!(out.contains("  B: 'b'"));
+    }
+
+    #[test]
+    fn upsert_does_not_duplicate_version_when_refs_precedes_version() {
+        // 文档里 refs 段在 version 之前：version 行经 refs 边界路径保留，但不应
+        // 在文件头再补一个重复的 version（回归：此前会 prepend 重复 version）。
+        let text = "refs:\n  A: a\nversion: 1\n";
+        let out = upsert(text, "B", "b");
+        assert_eq!(out.matches("version: 1").count(), 1);
+        assert!(out.contains("  A: a"));
+        assert!(out.contains("  B: 'b'"));
+    }
+
+    #[test]
+    fn upsert_preserves_records_and_other_top_level_keys() {
+        let text = "version: 1\nrecords:\n  scope/id:\n    type: oauth\nrefs:\n  A: a\n";
+        let out = upsert(text, "B", "b");
+        assert!(
+            out.contains("records:\n  scope/id:\n    type: oauth"),
+            "actual: {out}"
+        );
+        assert!(out.contains("  A: a"));
+        assert!(out.contains("  B: 'b'"));
+        assert!(out.starts_with("version: 1"));
+    }
+
+    #[test]
+    fn upsert_creates_refs_when_only_records_exist() {
+        // 已是 v1 但无 refs 段（只有 records 等）：追加 refs 段并用空行分隔。
+        let text = "version: 1\nrecords:\n  scope/id:\n    type: oauth\n";
+        let out = upsert(text, "CORP_KEY", "v");
+        assert!(out.contains("records:\n  scope/id:\n    type: oauth"));
+        assert!(out.contains("refs:\n  CORP_KEY: 'v'"));
+        assert!(out.starts_with("version: 1"));
     }
 
     #[test]
     fn yaml_scalar_round_trip_preserves_special_characters() {
         let out = upsert("", "KEY", " leading: value # 'quoted' ");
-        let raw = out.split_once(':').unwrap().1.trim();
+        let refs_line = out.lines().find(|l| l.starts_with("  KEY:")).unwrap();
+        let raw = refs_line.split_once(':').unwrap().1.trim();
         assert_eq!(
             decode_scalar(raw).as_deref(),
             Some(" leading: value # 'quoted' ")
@@ -242,9 +457,12 @@ mod tests {
     }
 
     #[test]
-    fn remove_drops_all_matching_entries_only() {
-        let text = "KEEP: one\nDeepSeek_API_Key: old\nDEEPSEEK_API_KEY: duplicate\nTAIL: two\n";
-        assert_eq!(remove(text, "DEEPSEEK_API_KEY"), "KEEP: one\nTAIL: two\n");
+    fn remove_drops_matching_refs_entries_only() {
+        let text = "version: 1\nrefs:\n  KEEP: one\n  DeepSeek_API_Key: old\n  DEEPSEEK_API_KEY: duplicate\n";
+        assert_eq!(
+            remove(text, "DEEPSEEK_API_KEY"),
+            "version: 1\nrefs:\n  KEEP: one\n"
+        );
     }
 
     #[test]
@@ -261,18 +479,44 @@ mod tests {
     }
 
     #[test]
+    fn read_refs_only_ignores_flat_layout() {
+        // 只读 v1 的 refs 段；扁平布局是已废弃的 pre-release 格式，不再兼容读取
+        let v1 = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: v1val\n";
+        assert_eq!(
+            super::value_from_text(v1, "DEEPSEEK_API_KEY").as_deref(),
+            Some("v1val")
+        );
+        // 扁平顶层键不再被读取
+        let flat = "DEEPSEEK_API_KEY: flat-should-not-be-read\n";
+        assert_eq!(
+            super::value_from_text(flat, "DEEPSEEK_API_KEY").as_deref(),
+            None
+        );
+        // 文档起始 BOM 容错：v1 首行（version）前带 BOM 也能正常读取
+        let bom = "\u{feff}version: 1\nrefs:\n  DEEPSEEK_API_KEY: b\n";
+        assert_eq!(
+            super::value_from_text(bom, "DEEPSEEK_API_KEY").as_deref(),
+            Some("b")
+        );
+    }
+
+    #[test]
     fn upsert_tolerates_bom_on_first_key() {
-        // BOM 文件首键失配会导致同名键重复追加
-        let text = "\u{feff}CORP_KEY: old\nKEEP: one\n";
+        // v1 文档首键（version 行）带 BOM 时读写仍容错，不会产生同名重复键
+        let text = "\u{feff}version: 1\nrefs:\n  CORP_KEY: old\n  KEEP: one\n";
         let out = upsert(text, "CORP_KEY", "new");
         assert_eq!(out.matches("CORP_KEY:").count(), 1);
         assert!(!out.contains("old"));
-        assert!(out.contains("CORP_KEY: 'new'"));
+        assert!(out.contains("  CORP_KEY: 'new'"));
+        assert!(out.contains("  KEEP: one"));
     }
 
     #[test]
     fn remove_tolerates_bom_on_first_key() {
-        let text = "\u{feff}DEEPSEEK_API_KEY: old\nKEEP: one\n";
-        assert_eq!(remove(text, "DEEPSEEK_API_KEY"), "KEEP: one\n");
+        let text = "\u{feff}version: 1\nrefs:\n  DEEPSEEK_API_KEY: old\n  KEEP: one\n";
+        let out = remove(text, "DEEPSEEK_API_KEY");
+        assert!(!out.contains("DEEPSEEK_API_KEY"));
+        assert!(out.contains("KEEP: one"));
+        assert_eq!(out.matches("version: 1").count(), 1);
     }
 }

@@ -29,6 +29,7 @@ unstable = []
 tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 粘贴的模型配置属于不可信输入：只启用反序列化，利用默认重复键拒绝与解析预算。

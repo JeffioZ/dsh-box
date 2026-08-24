@@ -550,19 +550,22 @@ llm-pi-ai:
 
     #[test]
     fn credential_upsert_merges_by_name() {
-        let text = "DEEPSEEK_API_KEY: keep-me\nCORP_GATEWAY_KEY: old-key\n";
+        // 凭据以 v1 布局（version + refs）写入，与 dsh 读取格式一致
+        let text = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: keep-me\n  CORP_GATEWAY_KEY: old-key\n";
         let out = upsert_credential(text, "CORP_GATEWAY_KEY", "new-key");
-        assert!(out.contains("CORP_GATEWAY_KEY: 'new-key'"));
-        assert!(out.contains("DEEPSEEK_API_KEY: keep-me"));
+        assert!(out.starts_with("version: 1"));
+        assert!(out.contains("  CORP_GATEWAY_KEY: 'new-key'"));
+        assert!(out.contains("  DEEPSEEK_API_KEY: keep-me"));
         assert!(!out.contains("old-key"));
     }
 
     #[test]
     fn credential_upsert_appends_when_missing() {
-        let text = "DEEPSEEK_API_KEY: keep-me\n";
+        let text = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: keep-me\n";
         let out = upsert_credential(text, "CORP_GATEWAY_KEY", "k");
-        assert!(out.contains("DEEPSEEK_API_KEY: keep-me"));
-        assert!(out.contains("CORP_GATEWAY_KEY: 'k'"));
+        assert!(out.contains("  DEEPSEEK_API_KEY: keep-me"));
+        assert!(out.contains("  CORP_GATEWAY_KEY: 'k'"));
+        assert!(out.starts_with("version: 1"));
     }
 
     #[test]

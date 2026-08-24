@@ -305,13 +305,13 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
             home.join(".credentials.yaml"),
-            "IBRAIN_API_KEY: keep-me\nDEEPSEEK_API_KEY: old-key\n",
+            "version: 1\nrefs:\n  IBRAIN_API_KEY: keep-me\n  DEEPSEEK_API_KEY: old-key\n",
         )
         .unwrap();
         save_credentials_api_key(&cfg, "new-key").unwrap();
         let text = std::fs::read_to_string(home.join(".credentials.yaml")).unwrap();
-        assert!(text.contains("DEEPSEEK_API_KEY: 'new-key'"));
-        assert!(text.contains("IBRAIN_API_KEY: keep-me"));
+        assert!(text.contains("  DEEPSEEK_API_KEY: 'new-key'"));
+        assert!(text.contains("  IBRAIN_API_KEY: keep-me"));
         assert!(!text.contains("old-key"));
         assert!(crate::credentials::has(&cfg, DEEPSEEK_API_KEY_NAME));
         let _ = std::fs::remove_dir_all(&dir);

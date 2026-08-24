@@ -229,9 +229,13 @@ function initModelImport() {
   const textarea = $('mi-textarea');
   const previewBtn = $('mi-preview');
   if (!textarea || !previewBtn) return;
-  previewBtn.addEventListener('click', async () => {
+  // 解析当前输入框文本，成功后渲染结果。
+  async function runPreview() {
     const yaml = textarea.value;
-    if (!yaml.trim()) { miFeedback(dshdT('modelImportEmpty'), false); return; }
+    if (!yaml.trim()) {
+      miFeedback(dshdT('modelImportEmpty'), false);
+      return;
+    }
     miClearFeedback();
     $('mi-result').hidden = true;
     previewBtn.disabled = true;
@@ -245,6 +249,24 @@ function initModelImport() {
       previewBtn.disabled = false;
       previewBtn.textContent = dshdT('modelImportPreview');
     }
+  }
+  previewBtn.addEventListener('click', async () => {
+    // “粘贴并解析”：仅当输入框为空时才读取剪贴板填入并解析；输入框已有
+    // 内容（手动粘贴）时不覆盖，直接用现有内容解析，避免误删手输配置。
+    if (!textarea.value.trim()) {
+      let clipboard = '';
+      // 走 Tauri 原生命令读剪贴板，避免 WebView 的浏览器剪贴板权限弹窗；
+      // 权限由 capability 声明，读取失败时当作空剪贴板回退。
+      try {
+        clipboard = (await invoke('plugin:clipboard-manager|read_text') || '').trim();
+      } catch {
+        clipboard = ''; // 无权限或读取失败时当作空剪贴板
+      }
+      if (clipboard) {
+        textarea.value = clipboard;
+      }
+    }
+    await runPreview();
   });
   textarea.addEventListener('input', () => {
     miClearFeedback();
