@@ -40,7 +40,8 @@ function dshdCreateMenu(container, options) {
   let lastItemsKey = '';
 
   function rows() {
-    return [...container.querySelectorAll('.dshd-row:not(:disabled)')];
+    // role=note 的纯提示行（如托盘菜单 IPC 失败兜底）不参与键盘导航
+    return [...container.querySelectorAll('.dshd-row:not(:disabled):not([role="note"])')];
   }
 
   function focusFirst() {
@@ -56,6 +57,8 @@ function dshdCreateMenu(container, options) {
 
   function makeRow(item) {
     const row = document.createElement('button');
+    // id 为 'quit' 的条目显示危险色：该 id 与 Rust 侧菜单模型（tray_menu.rs /
+    // 菜单构建）耦合，改 id 需两端同步
     row.className = 'dshd-row' + (item.id === 'quit' ? ' danger' : '');
     row.type = 'button';
     row.dataset.id = item.id;
@@ -88,8 +91,9 @@ function dshdCreateMenu(container, options) {
       row.append(key);
     }
 
-    row.addEventListener('mousedown', () => { if (!row.disabled) row.classList.add('pressed'); });
-    row.addEventListener('mouseup', () => { if (!row.disabled) activate(item); });
+    // 仅主键参与按压/激活：右键/中键按下不得触发菜单项
+    row.addEventListener('mousedown', (event) => { if (event.button === 0 && !row.disabled) row.classList.add('pressed'); });
+    row.addEventListener('mouseup', (event) => { if (event.button === 0 && !row.disabled) activate(item); });
     row.addEventListener('click', (event) => {
       if (event.detail === 0 && !row.disabled) activate(item);
     });
@@ -97,7 +101,7 @@ function dshdCreateMenu(container, options) {
     return row;
   }
 
-  function render(preserveFocus, focusId) {
+  function render() {
     container.textContent = '';
     for (const item of items) {
       if (item.sep) {
@@ -117,13 +121,8 @@ function dshdCreateMenu(container, options) {
 
     const visibleRows = rows();
     visibleRows.forEach((row) => { row.tabIndex = -1; });
-    const focusTarget = preserveFocus && focusId
-      ? visibleRows.find((row) => row.dataset.id === focusId)
-      : visibleRows[0];
-    if (focusTarget) {
-      focusTarget.tabIndex = 0;
-      if (preserveFocus && document.visibilityState === 'visible') focusTarget.focus();
-    }
+    // 重建后 roving tabindex 回到首行；焦点是否进入由 focusFirst/键盘导航决定
+    if (visibleRows[0]) visibleRows[0].tabIndex = 0;
   }
 
   function setItems(nextItems, forceRender = false) {
@@ -135,7 +134,7 @@ function dshdCreateMenu(container, options) {
     }
     lastItemsKey = key;
     items = normalized;
-    render(false);
+    render();
   }
 
   container.addEventListener('pointerdown', () => container.classList.remove('dshd-menu-keyboard'));

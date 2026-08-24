@@ -5,6 +5,8 @@
 
   const NON_TEXT_INPUT_TYPES = new Set([
     'button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit',
+    // 日期时间类：有文本外观但 selectionStart 等文本选区 API 不可用/语义不同
+    'date', 'time', 'datetime-local', 'month', 'week',
   ]);
   const IS_MAC = /Mac/i.test(navigator.userAgent);
 

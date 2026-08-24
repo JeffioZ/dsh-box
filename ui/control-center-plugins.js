@@ -172,7 +172,10 @@ async function doPluginApply() {
 let updateBusy = false;
 // 检查更新序号：连点/并发时旧结果不覆盖新结果（仿 pluginSearchSeq）
 let updateCheckSeq = 0;
-// pkg → UpdateStatus：plugin_updates 的结果缓存，渲染已安装列表时使用
+// pkg → UpdateStatus：plugin_updates 的结果缓存，渲染已安装列表时使用。
+// 键的契约：一律为 npm 依赖包名（与 UpdateStatus.pkg 相同）。三个来源的
+// 取法：已装列表与搜索结果取 p.name（PluginInfo.name 即依赖名）；内置重装/
+// 社区推荐目录项取 p.id（目录项 name 是非唯一展示名，id 才是依赖名）。
 let updateStatus = new Map();
 // silent=true：自动检查（进入页面/安装后刷新），不显示结果提示——
 // 行内版本状态已表达检查结果；手动点击“检查更新”才显示汇总提示
@@ -276,7 +279,9 @@ function catalogPluginRow(p, actionKey) {
   installBtn.className = 'dshd-btn small plugin-action';
   installBtn.textContent = dshdT(actionKey);
   installBtn.disabled = pluginsBusy;
-  const description = dshdLocale() === 'zh-CN' ? p.description_zh : p.description_en;
+  const description = dshdLocale() === 'zh-CN'
+    ? p.description_zh || p.description_en
+    : p.description_en || p.description_zh;
   const li = pluginItemRow(p, actions, null, description || '');
   const rowStatus = document.createElement('div');
   rowStatus.className = 'pitem-status';
@@ -300,6 +305,7 @@ function catalogPluginRow(p, actionKey) {
     installBtn.innerHTML = '<span class="spin" aria-hidden="true"></span>' + esc(dshdT('processing'));
     try {
       await invoke('plugin_install', { name: p.spec });
+      // 目录项 id 即依赖包名（键契约见 updateStatus 声明处）
       updateStatus.delete(p.id);
       pluginStatus(dshdT('pluginInstalled', { name: p.name }), 'ok');
       await refreshPlugins();
@@ -569,12 +575,6 @@ function renderResults(list) {
   const sec = $('p-results-sec');
   const ul = $('p-results');
   if (!sec || !ul) return;
-  // 未搜索（null）：整个结果区隐藏，恢复已装区（搜索态覆盖浏览态）
-  if (list === null || list === undefined) {
-    sec.classList.add('hidden');
-    $('p-directory').classList.remove('hidden');
-    return;
-  }
   // 搜索态只保留结果，避免目录与搜索结果同时出现造成信息拥挤。
   sec.classList.remove('hidden');
   $('p-directory').classList.add('hidden');

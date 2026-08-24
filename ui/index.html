@@ -16,7 +16,7 @@
         <img class="logo" src="assets/app-icon.svg" alt="" />
       </div>
       <h1 class="title">DSHBox</h1>
-      <p class="tagline" data-i18n="tagline">本地智能体 · 一键启航</p>
+      <p class="tagline" data-i18n="tagline">DeepSeek Harness 桌面端</p>
 
       <div id="ob-box" class="ob-box hidden">
         <div class="ob-head">
@@ -30,7 +30,7 @@
               <input id="ob-apikey" class="dshd-input ob-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" aria-describedby="ob-apikey-hint ob-error" />
               <button type="button" id="ob-apikey-toggle" class="dshd-x dshd-password-action" aria-controls="ob-apikey" aria-pressed="false" hidden></button>
             </span>
-            <span id="ob-apikey-hint" class="ob-hint" data-i18n="apiKeyHint">留空则之后可在桌面端设置中配置</span>
+            <span id="ob-apikey-hint" class="ob-hint" data-i18n="apiKeyHint">可暂时留空，之后在设置中填写。</span>
           </div>
         </div>
         <div class="ob-section">
@@ -63,7 +63,7 @@
             </div>
           </div>
           <label class="ob-row ob-switch-row">
-            <span class="ob-label" data-i18n="autostart">开机自启动</span>
+            <span class="ob-label" data-i18n="autostart">开机时启动 DSHBox</span>
             <span class="ob-switch">
               <input id="ob-autostart" type="checkbox" role="switch" />
               <span class="ob-track" aria-hidden="true"></span>
@@ -151,7 +151,7 @@
       </div>
 
       <div id="update-box" class="update-box hidden">
-        <div class="update-line"><span id="update-text" aria-live="polite" data-i18n="checkingUpdates">检查更新中…</span></div>
+        <div class="update-line"><span id="update-text" aria-live="polite" data-i18n="checkingUpdates">正在检查更新…</span></div>
         <div class="update-actions">
           <button type="button" id="btn-update-check" class="btn small" data-i18n="checkUpdates">检查更新</button>
           <button type="button" id="btn-update-apply" class="btn small primary hidden" data-i18n="updateDsh">更新 dsh</button>

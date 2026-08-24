@@ -130,8 +130,6 @@ body.linux .win-buttons .css-restore { display: none; }
 body.linux .win-buttons .tb-btn.maximized .css-max { display: none; }
 body.linux .win-buttons .tb-btn.maximized .css-restore { display: block; }
 
-.hidden { display: none !important; }
-
 /* macOS：系统红绿灯悬浮于左侧，标题栏内容让位 */
 body.macos .titlebar { padding-left: 82px; }
 
@@ -147,7 +145,6 @@ body.macos .titlebar { padding-left: 82px; }
 /* 系统“减弱动态效果”：关闭动画 */
 @media (prefers-reduced-motion: reduce) {
   .tb-btn { transition: none; }
-  .pop-refresh.refreshing .refresh-glyph { animation: none; }
 }
 </style>
 </head>
