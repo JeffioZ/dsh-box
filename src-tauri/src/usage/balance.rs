@@ -33,6 +33,10 @@ pub struct AccountSnapshot {
     /// 查询完成时刻（Unix 秒），前端显示「更新于 HH:MM」。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<u64>,
+    /// 瞬错保旧标记：true 表示本快照是上次成功数据（updated_at 保留旧值）。
+    pub stale: bool,
+    /// 预警级别："none" | "warning" | "critical"。
+    pub warn_level: &'static str,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -196,6 +200,29 @@ fn num_field(value: &serde_json::Value, field: &str) -> Option<f64> {
     })
 }
 
+/// 余额预警级别（与前端 warnLevelOf 同阈值）：remaining 与 total 均已知、
+/// total > 0 且非 unlimited 时，remaining/total ≤ 0.1 → "critical"，
+/// ≤ 0.3 → "warning"；其余（含字段缺失）一律 "none"。
+pub(crate) fn warn_of_balance(balance: &Balance) -> &'static str {
+    if balance.unlimited {
+        return "none";
+    }
+    let (Some(remaining), Some(total)) = (balance.remaining, balance.total) else {
+        return "none";
+    };
+    if total <= 0.0 {
+        return "none";
+    }
+    let ratio = remaining / total;
+    if ratio <= 0.1 {
+        "critical"
+    } else if ratio <= 0.3 {
+        "warning"
+    } else {
+        "none"
+    }
+}
+
 /// 私有/回环网段的判定（IPv4 与 IPv6 简化版，覆盖上游 `isPrivateAddress` 的
 /// 主要网段）。仅用于拒绝直连目标；不做代理 fake-IP 例外（本壳不跑代理）。
 pub(crate) fn is_private_address(host: &str) -> bool {
@@ -290,6 +317,8 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
                 .into(),
             ),
             updated_at: Some(unix_now()),
+            stale: false,
+            warn_level: "none",
         };
     };
     let Some(key_env) = route.api_key_env.as_deref() else {
@@ -360,10 +389,12 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
             mode: "balance",
             adapter: Some(adapter_name(scheme)),
             status: "ok",
+            warn_level: warn_of_balance(&balance),
             balance: Some(balance),
             windows: Vec::new(),
             error: None,
             updated_at: Some(unix_now()),
+            stale: false,
         },
         Err(e) => snapshot_error(route, "invalid-response", e.to_string()),
     }
@@ -378,11 +409,11 @@ fn adapter_name(scheme: BalanceScheme) -> &'static str {
     }
 }
 
+/// 凭据解析走统一链（credentials::resolve_api_key）：DSH_BOX_API_KEY →
+/// DEEPSEEK_API_KEY → 路由声明 env → 凭据文件。DeepSeek 官方路由因此同样
+/// 响应壳级 DSH_BOX_API_KEY 覆盖，与状态栏余额口径一致。
 fn resolve_credential(config: &Config, name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| crate::credentials::value(config, name))
+    crate::credentials::resolve_api_key(config, Some(name))
 }
 
 fn snapshot_error(
@@ -400,6 +431,8 @@ fn snapshot_error(
         windows: Vec::new(),
         error: Some(error.into()),
         updated_at: Some(unix_now()),
+        stale: false,
+        warn_level: "none",
     }
 }
 
@@ -416,6 +449,7 @@ static BALANCE_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::ne
 fn balance_agent() -> &'static ureq::Agent {
     BALANCE_AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
+            .tls_config(crate::default_tls_config())
             .timeout_connect(Some(Duration::from_secs(5)))
             .timeout_recv_response(Some(Duration::from_secs(10)))
             .timeout_recv_body(Some(Duration::from_secs(10)))
@@ -491,5 +525,95 @@ mod tests {
         assert!(is_private_address("[::ffff:127.0.0.1]"));
         assert!(!is_private_address("1.1.1.1"));
         assert!(!is_private_address("8.8.8.8"));
+    }
+
+    fn balance_of(remaining: Option<f64>, total: Option<f64>, unlimited: bool) -> Balance {
+        Balance {
+            remaining,
+            used: None,
+            total,
+            currency: "CNY".to_string(),
+            unlimited,
+            granted: None,
+            topped_up: None,
+        }
+    }
+
+    #[test]
+    fn warn_level_thresholds_at_ratio_boundaries() {
+        // 边界：恰为 0.3 → warning，恰为 0.1 → critical（阈值含等号）。
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(30.0), Some(100.0), false)),
+            "warning"
+        );
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(10.0), Some(100.0), false)),
+            "critical"
+        );
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(31.0), Some(100.0), false)),
+            "none"
+        );
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(10.5), Some(100.0), false)),
+            "warning"
+        );
+        // 字段缺失 / total 非正 / unlimited：一律 none。
+        assert_eq!(warn_of_balance(&balance_of(Some(5.0), None, false)), "none");
+        assert_eq!(
+            warn_of_balance(&balance_of(None, Some(100.0), false)),
+            "none"
+        );
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(5.0), Some(0.0), false)),
+            "none"
+        );
+        assert_eq!(
+            warn_of_balance(&balance_of(Some(5.0), Some(100.0), true)),
+            "none"
+        );
+    }
+
+    #[test]
+    fn resolve_credential_lets_shell_override_route_env() {
+        let _guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        const ROUTE: &str = "DSHBOX_TEST_BAL_ROUTE_KEY_4M8D";
+        let prev_box = std::env::var("DSH_BOX_API_KEY").ok();
+        let prev_deep = std::env::var("DEEPSEEK_API_KEY").ok();
+        let prev_route = std::env::var(ROUTE).ok();
+        std::env::set_var(ROUTE, "route-key");
+        std::env::set_var("DEEPSEEK_API_KEY", "deep-key");
+        std::env::set_var("DSH_BOX_API_KEY", "box-key");
+        let mut config = Config::load();
+        config.dsh_home = std::env::temp_dir().join("dshbox-usage-bal-cred-nonexistent");
+        // DSH_BOX_API_KEY 覆盖一切（DeepSeek 官方路由与状态栏同口径）。
+        assert_eq!(
+            resolve_credential(&config, ROUTE).as_deref(),
+            Some("box-key")
+        );
+        std::env::remove_var("DSH_BOX_API_KEY");
+        assert_eq!(
+            resolve_credential(&config, ROUTE).as_deref(),
+            Some("deep-key")
+        );
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        assert_eq!(
+            resolve_credential(&config, ROUTE).as_deref(),
+            Some("route-key")
+        );
+        match prev_box {
+            Some(v) => std::env::set_var("DSH_BOX_API_KEY", v),
+            None => std::env::remove_var("DSH_BOX_API_KEY"),
+        }
+        match prev_deep {
+            Some(v) => std::env::set_var("DEEPSEEK_API_KEY", v),
+            None => std::env::remove_var("DEEPSEEK_API_KEY"),
+        }
+        match prev_route {
+            Some(v) => std::env::set_var(ROUTE, v),
+            None => std::env::remove_var(ROUTE),
+        }
     }
 }

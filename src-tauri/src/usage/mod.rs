@@ -9,15 +9,24 @@ mod balance;
 mod cache;
 mod live;
 mod log;
+mod monitor;
 mod providers;
 mod subscriptions;
 
 pub use aggregate::{render, FoldState, UsageReport};
 pub use balance::AccountSnapshot;
+#[cfg(test)]
+pub(crate) use balance::Balance;
 pub(crate) use live::{
     current_session_id, refresh_once, session_activity, snapshot, start_live_rate, start_periodic,
     StatsPayload,
 };
+pub(crate) use monitor::{
+    cached_accounts, cached_deepseek, cached_subscriptions, request_account_refresh,
+    start_account_monitor,
+};
+#[cfg(test)]
+pub(crate) use monitor::{set_cache_for_test, CACHE_TEST_LOCK};
 pub use subscriptions::SubscriptionSnapshot;
 
 /// 枚举已配置供应商路由并查询各账户余额（阶段 2 入口）。
@@ -38,16 +47,20 @@ pub fn subscriptions(config: &crate::app_state::Config) -> Vec<SubscriptionSnaps
 /// 会话日志为追加式：全量解码后只折叠游标之后的事件；游标前的样本已经
 /// 计入 `state.days`。`last_sample` 跨折叠边界保留，保证同一 `(turn, step)`
 /// 的替换语义在分次折叠时仍然精确。
+///
+/// IO 增量：文件长度与上次折叠一致即无新事件，直接跳过全量解码
+/// （`state.file_len`；只省 IO，不改变折叠语义）。
 pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), String> {
+    let file_len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if state.file_len == file_len {
+        return Ok(());
+    }
     let text = log::read_full(path)?;
     let events: Vec<aggregate::Event> = text.lines().filter_map(aggregate::Event::parse).collect();
     // 日志被截断/重建（事件数少于游标）——退回整段重折。
     let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
     if max_seq < state.consumed {
-        state.days.clear();
-        state.last_sample = None;
-        state.current_model = None;
-        state.consumed = 0;
+        state.reset_fold();
     }
     let fresh: Vec<aggregate::Event> = events
         .into_iter()
@@ -57,12 +70,80 @@ pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), Str
     if let Some(last) = fresh.last() {
         state.consumed = last.seq;
     }
+    // 本壳唯一的数据来源是持久化会话日志（对齐上游 state.kind 的
+    // live/persisted 标记；无 live 内存事件源，恒为 Persisted）。
+    state.kind = aggregate::FoldKind::Persisted;
+    state.file_len = file_len;
     Ok(())
 }
 
 /// 枚举所有本地会话日志路径。
 pub fn list_session_logs(config: &crate::app_state::Config) -> Vec<(String, std::path::PathBuf)> {
     log::list_sessions(config)
+}
+
+/// 当前会话上下文（序列化给前端）。三个字段名是前端契约（snake_case），
+/// 不得更改；无活动会话或会话尚无路由归因时全部为 null。
+#[derive(serde::Serialize)]
+pub struct SessionContext {
+    pub route_id: Option<String>,
+    pub display_name: Option<String>,
+    pub model: Option<String>,
+}
+
+/// 读取当前会话的路由上下文（只读入口）。
+///
+/// 数据路径：live RPC 推断当前会话 id → 增量折叠该会话日志拿到最新
+/// `current_route`（缓存命中时代价极小）→ 按已配置路由解析展示名
+/// （对齐上游 v0.3 session-context 端点：折叠状态是唯一依据，无路由
+/// 归因时返回全 null，不猜、不伪造）。
+pub fn session_context(config: &crate::app_state::Config) -> SessionContext {
+    let Some(session_id) = live::current_session_id(config) else {
+        return empty_context();
+    };
+    let mut sessions = cache::load(config);
+    if let Some((_, path)) = list_session_logs(config)
+        .into_iter()
+        .find(|(id, _)| *id == session_id)
+    {
+        let state = sessions.entry(session_id.clone()).or_default();
+        if let Err(e) = fold_log(state, &path) {
+            crate::logging::log(&format!("usage: 会话 {session_id} 上下文折叠失败：{e}"));
+        }
+    }
+    let route = sessions
+        .get(&session_id)
+        .and_then(|s| s.current_route.as_ref());
+    context_of(route, &providers::configured_routes(config))
+}
+
+fn empty_context() -> SessionContext {
+    SessionContext {
+        route_id: None,
+        display_name: None,
+        model: None,
+    }
+}
+
+/// 由路由归因组装上下文：展示名优先取已配置路由的 display_name，未配置
+/// 的路由回落 provider id（对齐上游 provider 缺省 `displayName: id`）。
+fn context_of(
+    route: Option<&aggregate::CurrentRoute>,
+    routes: &[providers::ProviderRoute],
+) -> SessionContext {
+    let Some(route) = route else {
+        return empty_context();
+    };
+    let display_name = routes
+        .iter()
+        .find(|r| r.id == route.provider_id)
+        .map(|r| r.display_name.clone())
+        .unwrap_or_else(|| route.provider_id.clone());
+    SessionContext {
+        route_id: Some(route.provider_id.clone()),
+        display_name: Some(display_name),
+        model: Some(route.model.clone()),
+    }
 }
 
 /// 聚合全部本地会话并渲染当前用量报告（只读入口）。
@@ -112,5 +193,194 @@ fn merge_days(
         for (model, b) in &entry.models {
             t.models.entry(model.clone()).or_default().add_into(*b);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_log(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-fold-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root.join("session.jsonl.zstd")
+    }
+
+    /// 一条 usage chunk 事件行（seq 递增、固定时间戳）。
+    fn usage_line(seq: u64, turn: u64, input: u64, output: u64) -> String {
+        serde_json::json!({
+            "seq": seq, "time": 1_780_000_000_000i64, "type": "assistant/chunk",
+            "data": {"turn": turn, "step": 1, "chunk": {
+                "type": "usage", "usage": {"inputTokens": input, "outputTokens": output}
+            }}
+        })
+        .to_string()
+            + "\n"
+    }
+
+    fn frames(lines: &[String]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for line in lines {
+            out.extend_from_slice(&zstd::encode_all(line.as_bytes(), 3).unwrap());
+        }
+        out
+    }
+
+    fn total_tokens(state: &FoldState) -> u64 {
+        state.days.values().map(|d| d.totals.total()).sum()
+    }
+
+    #[test]
+    fn skips_decode_when_file_len_unchanged() {
+        let path = temp_log("skip");
+        std::fs::write(&path, frames(&[usage_line(1, 1, 10, 5)])).unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 1);
+        assert_eq!(total_tokens(&state), 15);
+        // 等长改写为非 zstd 字节：若真去解码，空事件流会触发
+        // 「max_seq < consumed」整段重折清空 days；跳过解码则保持原样。
+        let len = std::fs::metadata(&path).unwrap().len();
+        std::fs::write(&path, vec![b'x'; len as usize]).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 1);
+        assert_eq!(total_tokens(&state), 15);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn refolds_incrementally_when_file_grows() {
+        let path = temp_log("grow");
+        std::fs::write(&path, frames(&[usage_line(1, 1, 10, 5)])).unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        // 追加一帧后 len 变化：只折新增事件，不重复计入游标前的样本。
+        std::fs::write(
+            &path,
+            frames(&[usage_line(1, 1, 10, 5), usage_line(2, 2, 20, 0)]),
+        )
+        .unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 2);
+        assert_eq!(total_tokens(&state), 35);
+        // 无变化再折一次：结果不变（幂等）。
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(total_tokens(&state), 35);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn refolds_from_scratch_when_log_truncated() {
+        let path = temp_log("trunc");
+        std::fs::write(
+            &path,
+            frames(&[usage_line(1, 1, 10, 5), usage_line(2, 2, 20, 0)]),
+        )
+        .unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 2);
+        // 截断重建为更短的日志：整段重折，旧聚合不得残留。
+        std::fs::write(&path, frames(&[usage_line(1, 1, 7, 3)])).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 1);
+        assert_eq!(total_tokens(&state), 10);
+        assert_eq!(state.file_len, std::fs::metadata(&path).unwrap().len());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// 一条 request/header 事件行（推进 current_route / current_model）。
+    fn header_line(seq: u64, provider: &str, model: &str) -> String {
+        serde_json::json!({
+            "seq": seq, "time": 1_780_000_000_000i64, "type": "request/header",
+            "data": {"header": {"config": {"provider": provider, "model": model}}}
+        })
+        .to_string()
+            + "\n"
+    }
+
+    #[test]
+    fn fold_marks_persisted_kind_and_refold_clears_current_route() {
+        let path = temp_log("kind");
+        std::fs::write(
+            &path,
+            frames(&[header_line(1, "oz", "gpt-x"), usage_line(2, 1, 10, 5)]),
+        )
+        .unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        // 本壳唯一来源是持久化日志：kind 恒为 Persisted（对齐上游 state.kind）。
+        assert_eq!(state.kind, aggregate::FoldKind::Persisted);
+        assert_eq!(
+            state.current_route.as_ref().map(|r| r.model.as_str()),
+            Some("gpt-x")
+        );
+        // 截断重建为无 header 的日志：整段重折必须清掉旧的路由归因，
+        // 不得把已失效的 current_route 继续报给「当前会话上下文」。
+        std::fs::write(&path, frames(&[usage_line(1, 1, 7, 3)])).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert!(state.current_route.is_none());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn session_context_serializes_contract_fields_with_explicit_nulls() {
+        // 前端契约定死：route_id / display_name / model 三字段（snake_case），
+        // 无值时序列化为 null 而非省略。
+        let json = serde_json::to_value(empty_context()).unwrap();
+        assert!(json.get("route_id").is_some());
+        assert!(json.get("display_name").is_some());
+        assert!(json.get("model").is_some());
+        assert!(json["route_id"].is_null());
+        assert!(json["display_name"].is_null());
+        assert!(json["model"].is_null());
+        assert!(json.get("routeId").is_none());
+        assert!(json.get("displayName").is_none());
+    }
+
+    #[test]
+    fn context_of_resolves_display_name_and_falls_back_to_provider_id() {
+        let routes = vec![providers::ProviderRoute {
+            id: "deepseek-official".to_string(),
+            display_name: "DeepSeek".to_string(),
+            api_key_env: None,
+            base_url: None,
+        }];
+        let known = aggregate::CurrentRoute {
+            provider_id: "deepseek-official".to_string(),
+            model: "deepseek-chat".to_string(),
+            updated_at: None,
+        };
+        let ctx = context_of(Some(&known), &routes);
+        assert_eq!(ctx.route_id.as_deref(), Some("deepseek-official"));
+        assert_eq!(ctx.display_name.as_deref(), Some("DeepSeek"));
+        assert_eq!(ctx.model.as_deref(), Some("deepseek-chat"));
+        // 未配置的路由：展示名回落 provider id（上游 provider 缺省同口径）。
+        let unknown = aggregate::CurrentRoute {
+            provider_id: "my-gateway".to_string(),
+            model: "m".to_string(),
+            updated_at: None,
+        };
+        let ctx = context_of(Some(&unknown), &routes);
+        assert_eq!(ctx.display_name.as_deref(), Some("my-gateway"));
+        // 无路由归因：全 null。
+        let ctx = context_of(None, &routes);
+        assert!(ctx.route_id.is_none() && ctx.display_name.is_none() && ctx.model.is_none());
+    }
+
+    #[test]
+    fn session_context_returns_all_null_without_live_session() {
+        // RPC 不可达（回环未用端口）= 无活动会话：全 null，不报错。
+        let mut config = crate::app_state::Config::load();
+        config.port = 1;
+        let ctx = session_context(&config);
+        assert!(ctx.route_id.is_none() && ctx.display_name.is_none() && ctx.model.is_none());
     }
 }
