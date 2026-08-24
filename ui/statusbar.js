@@ -25,11 +25,7 @@ let currentSettings = null; // 设置状态（hide_balance 控制余额 chip 显
 let serviceMode = 'none';
 let serviceReady = false;
 
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
+const esc = dshdEsc;
 
 // ---------- 会话统计 ----------
 
@@ -118,6 +114,16 @@ function onLiveRate(payload) {
 
 // ---------- 余额 chip（点击入口 + 系统默认悬停提示） ----------
 
+// 余额预警：remaining/total ≤30% warning、≤10% critical；total 未知不加色
+// （字段由后端扩展，缺失时比率不可算——不渲染假预警，IPC 契约不变）
+function chipLowLevel(entry) {
+  const remaining = entry ? Number(entry.remaining) : NaN;
+  const total = entry ? Number(entry.total) : NaN;
+  if (!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) return 'none';
+  const ratio = remaining / total;
+  return ratio <= 0.1 ? 'critical' : ratio <= 0.3 ? 'warning' : 'none';
+}
+
 function balanceChipState() {
   const b = lastBalance;
   if (!b) return { text: '--', dot: 'err', kind: 'unavailable' };
@@ -128,12 +134,14 @@ function balanceChipState() {
   if (!b.balances || !b.balances.length) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
   const first = b.balances[0];
   const cur = dshdCurrency(first.currency);
+  const low = chipLowLevel(first);
   // chip 只显示金额（币种符号足够，currency 代码与拆分明细留给详情弹窗）；
   // stale：保留上次金额但状态点转 warn，悬停提示刷新失败
   return {
     text: cur + dshdBalanceValue(first.total_balance),
-    dot: b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
+    dot: low === 'critical' ? 'err' : low === 'warning' ? 'warn' : b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
     kind: 'ok',
+    low,
   };
 }
 
@@ -149,6 +157,7 @@ function renderBalance() {
   updateEdgeSeparator();
   if (serviceMode === 'external' || serviceMode === 'external-disconnected') {
     chip.disabled = true;
+    chip.classList.remove('low-warning', 'low-critical');
     chip.innerHTML = WALLET_ICON + '<span id="balance-text">--</span>';
     chip.dataset.credentialIssue = '';
     chip.title = dshdT('balanceExternalHint');
@@ -158,6 +167,8 @@ function renderBalance() {
   chip.disabled = false;
   const state = balanceChipState();
   const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
+  chip.classList.toggle('low-warning', state.low === 'warning');
+  chip.classList.toggle('low-critical', state.low === 'critical');
   chip.innerHTML =
     WALLET_ICON +
     '<span class="' + dotClass + '" aria-hidden="true"></span>' +
@@ -171,6 +182,9 @@ function renderBalance() {
   } else {
     hints.push(dshdT('balanceChipHint'));
   }
+  // 预警不只靠颜色：悬停文字给出阈值语义
+  if (state.low === 'critical') hints.push(dshdT('usageWarnCritical'));
+  else if (state.low === 'warning') hints.push(dshdT('usageWarnLow'));
   if (lastBalance && lastBalance.stale) hints.push(dshdT('staleBalance'));
   chip.title = hints.join('\n');
   const credentialIssue = state.kind === 'no_key' || state.kind === 'invalid_key';
@@ -208,7 +222,6 @@ const GROUP_HINTS = {
   speeds: 'statsSpeedsHint',
   cache: 'statsCacheHint',
   tokens: 'statsTokensHint',
-  balance: 'balanceChipHint',
 };
 function groupTipText(key) {
   const lines = [dshdT(GROUP_HINTS[key] || 'statsCountsHint')];

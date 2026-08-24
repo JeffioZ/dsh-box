@@ -1,6 +1,6 @@
-const tauri = window.__TAURI__;
-const invoke = tauri ? tauri.core.invoke : async () => null;
-const listen = tauri ? tauri.event.listen : async () => () => {};
+// common.js 已把 window.__TAURI__ 兜底为「响亮抛错」的 polyfill，此处直接用
+const invoke = window.__TAURI__.core.invoke;
+const listen = window.__TAURI__.event.listen;
 
 dshdApplyI18n();
 
@@ -41,7 +41,7 @@ function meaningfulAccounts(accounts, subs) {
   for (const s of (subs || [])) {
     // 订阅：未配置凭据的不展示。
     if (s.status === 'not-configured') continue;
-    out.push({ id: s.id, display_name: s.display_name, mode: s.mode, status: s.status, windows: s.windows, adapter: s.adapter });
+    out.push({ ...s });
   }
   return out;
 }
@@ -52,7 +52,7 @@ async function renderUsagePage() {
   body.innerHTML =
     '<div class="usage-wrap">' +
     '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
-    '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTitle') + '</h3>' +
+    '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTokenSection') + '</h3>' +
     '<div class="usage-summary" id="usage-summary"></div>' +
     '</section>' +
     '<div class="usage-load" id="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
@@ -60,7 +60,7 @@ async function renderUsagePage() {
   try {
     const report = await invoke('usage_report_get');
     if (openKind !== 'usage' || seq !== usageSeq) return;
-    renderUsageReport(report);
+    renderUsageReport(report, seq);
   } catch (e) {
     if (openKind !== 'usage' || seq !== usageSeq) return;
     const load = $('usage-load');
@@ -79,7 +79,7 @@ function formatPercent(p) {
   return (p === null || p === undefined) ? '—' : String(p) + '%';
 }
 
-function renderUsageReport(report) {
+function renderUsageReport(report, seq) {
   const wrap = document.querySelector('.usage-wrap');
   const summary = $('usage-summary');
   if (!wrap || !summary) return;
@@ -92,9 +92,10 @@ function renderUsageReport(report) {
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageCacheHit') + '</span><b>' + formatPercent(hit) + '</b></div>';
   const load = $('usage-load');
   if (load) load.remove();
-  // 区块顺序：账户（余额/订阅）最常看 → 每日用量热图 → 模型下钻。
-  renderAccountsSection(wrap);
+  // 区块顺序：账户（余额/订阅）最常看 → 每日用量热图 → 最近 14 天 → 模型下钻。
+  renderAccountsSection(wrap, seq);
   renderHeatmap(wrap, report);
+  renderRecentDays(wrap, report);
   renderModelBreakdown(wrap, report);
 }
 
@@ -114,6 +115,107 @@ function localDayKey(ms) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return d.getFullYear() + '-' + m + '-' + day;
+}
+
+// 本地 HH:MM（updated_at 为秒级时间戳；「更新于」与 stale 标记共用）
+function fmtClockTime(sec) {
+  return new Date(sec * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' });
+}
+
+// 最近 14 天行日期：今天/昨天语义化，其余本地短日期
+function usageDayLabel(key) {
+  if (key === localDayKey(Date.now())) return dshdT('usageTodayBtn');
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (key === localDayKey(yesterday.getTime())) return dshdT('usageYesterday');
+  const [y, m, d] = key.split('-').map(Number);
+  try { return new Date(y, m - 1, d).toLocaleDateString(dshdLocale(), { month: 'short', day: 'numeric' }); }
+  catch (e) { return key; }
+}
+
+// 百分比数值守卫：IPC 数据先钳制再进 style/文本，异常值不得进 DOM
+function clampPct(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0;
+}
+
+// 预警等级：以 Rust 快照字段为准；旧内核无该字段时按同一阈值在 UI 侧推导
+// （余额按 剩余/总额，订阅按最紧窗口剩余%），与 Rust 并行开发期间也可用。
+function warnLevelOf(item) {
+  if (item.warn_level === 'none' || item.warn_level === 'warning' || item.warn_level === 'critical') {
+    return item.warn_level;
+  }
+  const b = item.balance;
+  if (b && !b.unlimited && b.remaining !== null && b.remaining !== undefined
+      && b.total !== null && b.total !== undefined && Number(b.total) > 0) {
+    const ratio = Number(b.remaining) / Number(b.total);
+    return ratio <= 0.1 ? 'critical' : ratio <= 0.3 ? 'warning' : 'none';
+  }
+  const pcts = (item.windows || []).map((w) => Number(w.remaining_percent)).filter(Number.isFinite);
+  if (pcts.length) {
+    const min = Math.min(...pcts);
+    return min <= 10 ? 'critical' : min <= 30 ? 'warning' : 'none';
+  }
+  return 'none';
+}
+
+// 供应商字母徽标：已知供应商固定缩写，未知取名称前两位字母数字
+const PROVIDER_MARKS = {
+  deepseek: 'DS', 'deepseek-official': 'DS',
+  zai: 'Z', 'zai-coding-cn': 'Z',
+  kimi: 'K', 'kimi-coding': 'K', moonshotai: 'K', 'moonshotai-cn': 'K',
+  openrouter: 'OR', ollama: 'OL', 'opencode-go': 'GO', minimax: 'MM',
+};
+function providerMark(item) {
+  const known = PROVIDER_MARKS[item.id] || PROVIDER_MARKS[item.adapter];
+  if (known) return known;
+  const letters = String(item.display_name || item.id || '').replace(/[^A-Za-z0-9]/g, '');
+  return (letters.slice(0, 2) || '?').toUpperCase();
+}
+
+const WARN_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
+const CRIT_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9L7.9 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>';
+const CLOCK_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>';
+
+// —— 最近 14 天：本地日历窗口，只列有用量的日期（无用量省略、未来日不计）——
+function renderRecentDays(wrap, report) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 13);
+  const cutoffKey = localDayKey(cutoff.getTime());
+  const todayKey = localDayKey(Date.now());
+  const rows = (report.days || [])
+    .filter((d) => d.date >= cutoffKey && d.date <= todayKey && (d.tokens || 0) > 0)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const section = document.createElement('section');
+  section.className = 'usage-card';
+  section.setAttribute('aria-labelledby', 'usage-recent-heading');
+  section.innerHTML = '<h3 id="usage-recent-heading" class="usage-h">' + dshdT('usageRecent14') + '</h3>';
+  if (!rows.length) {
+    const empty = document.createElement('span');
+    empty.className = 'usage-empty';
+    empty.textContent = dshdT('usageEmpty');
+    section.appendChild(empty);
+    wrap.appendChild(section);
+    return;
+  }
+  const max = Math.max(1, ...rows.map((d) => d.tokens || 0));
+  const ul = document.createElement('ul');
+  ul.className = 'usage-models usage-recent';
+  for (const d of rows) {
+    const hitRaw = d.cache_hit_rate;
+    const hit = hitRaw === null || hitRaw === undefined ? null : Number(hitRaw);
+    const li = document.createElement('li');
+    li.className = 'usage-model';
+    // 与按天下钻行同构：日期 + 命中率 + token + 分布条
+    li.innerHTML =
+      '<span class="usage-model-name usage-recent-date">' + esc(usageDayLabel(d.date)) + '</span>' +
+      '<span class="usage-model-hit">' + (hit !== null && Number.isFinite(hit) ? hit + '%' : '—') + '</span>' +
+      '<b>' + fmtTokens(d.tokens || 0) + '</b>' +
+      '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * (d.tokens || 0) / max)) + '%"></span></span>';
+    ul.appendChild(li);
+  }
+  section.appendChild(ul);
+  wrap.appendChild(section);
 }
 
 // —— 月历热图：月份导航 + 周一起始网格 + 选中日下钻 ——
@@ -153,7 +255,7 @@ function renderHeatmap(wrap, report) {
     '<button type="button" class="usage-month-btn" data-usage-prev aria-label="' + dshdT('usagePrevMonth') + '"' + (prevDisabled ? ' disabled' : '') + '>' + CHEV_LEFT + '</button>' +
     '<span class="usage-month-title">' + esc(usageMonthLabel(usageViewMonth)) + '</span>' +
     '<button type="button" class="usage-month-btn" data-usage-next aria-label="' + dshdT('usageNextMonth') + '"' + (nextDisabled ? ' disabled' : '') + '>' + CHEV_RIGHT + '</button>' +
-    '<button type="button" class="usage-month-btn usage-month-today" data-usage-today hidden>' + dshdT('usageTodayBtn') + '</button>' +
+    '<button type="button" class="usage-month-btn usage-month-today" data-usage-today title="' + dshdT('usageBackToToday') + '">' + dshdT('usageTodayBtn') + '</button>' +
     '</div></div>' +
     '<div class="usage-cal" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>' +
     '<div class="usage-day-detail" hidden></div>';
@@ -164,8 +266,8 @@ function renderHeatmap(wrap, report) {
   const draw = () => {
     if (usageViewMonth === null) usageViewMonth = curMonth;
     usageRenderCalendar(cal, detail, usageViewMonth, dayMap, report);
-    // 同步月份标题与「今天」按钮显隐（此前只更新按钮禁用态，标题不动，
-    // 导致翻页看似「月份不变」）
+    // 同步月份标题与「今天」按钮禁用态（此前只更新按钮禁用态，标题不动，
+    // 导致翻页看似「月份不变」）；「今天」常显，当前月时禁用
     const title = section.querySelector('.usage-month-title');
     if (title) title.textContent = usageMonthLabel(usageViewMonth);
     const prev = section.querySelector('[data-usage-prev]');
@@ -173,7 +275,7 @@ function renderHeatmap(wrap, report) {
     if (prev) prev.disabled = usageViewMonth <= '1970-01';
     if (next) next.disabled = usageViewMonth >= usageCurrentMonthKey();
     const today = section.querySelector('[data-usage-today]');
-    if (today) today.hidden = usageViewMonth === usageCurrentMonthKey();
+    if (today) today.disabled = usageViewMonth === usageCurrentMonthKey();
   };
   section.querySelector('[data-usage-prev]').addEventListener('click', () => {
     usageViewMonth = usageShiftMonth(usageViewMonth, -1);
@@ -227,7 +329,8 @@ function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
     btn.type = 'button';
     btn.className = 'usage-day' + (usageSelectedDay === key ? ' selected' : '') + (today ? ' today' : '');
     btn.dataset.lv = String(lv);
-    btn.setAttribute('aria-label', key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : ''));
+    // aria-label 与格内视觉信息对齐：日期（今天标注）+ token + 命中率
+    btn.setAttribute('aria-label', (today ? dshdT('usageTodayBtn') + '，' : '') + key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : ''));
     btn.innerHTML = '<span>' + d + '</span>' +
       (tokens > 0 ? '<span class="usage-day-tok">' + fmtTokens(tokens) + '</span>' : '') +
       (hit !== null && hit !== undefined ? '<span class="usage-day-hit">' + hit + '%</span>' : '');
@@ -283,9 +386,10 @@ function renderModelBreakdown(wrap, report) {
   for (const [model, tokens] of rows) {
     const li = document.createElement('li');
     li.className = 'usage-model';
+    // 不显示命中率列：Rust 聚合只提供按天/总计命中率，跨天按模型的
+    // 聚合命中率没有来源，占位列只会误导（按天下钻行有真实命中率）
     li.innerHTML =
       '<span class="usage-model-name" data-trunc-tip>' + esc(model) + '</span>' +
-      '<span class="usage-model-hit">' + dshdT('usageCacheHit') + ' —</span>' +
       '<b>' + fmtTokens(tokens) + '</b>' +
       '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * tokens / maxTokens)) + '%"></span></span>';
     ul.appendChild(li);
@@ -294,7 +398,7 @@ function renderModelBreakdown(wrap, report) {
   applyTruncationTips(wrap);
 }
 
-async function renderAccountsSection(wrap) {
+async function renderAccountsSection(wrap, seq) {
   const section = document.createElement('section');
   section.className = 'usage-card';
   section.setAttribute('aria-labelledby', 'usage-accounts-heading');
@@ -304,29 +408,86 @@ async function renderAccountsSection(wrap) {
     '<span class="usage-upd" id="usage-upd"></span>' +
     '</div><div class="usage-accounts" role="status" aria-live="polite"></div>';
   wrap.appendChild(section);
+  ensureUsageAccountsListener();
   const box = section.querySelector('.usage-accounts');
   box.innerHTML = '<span class="usage-empty"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
   try {
-    const accounts = await invoke('usage_accounts_get');
-    if (openKind !== 'usage') return;
-    const subs = await invoke('usage_subscriptions_get');
-    if (openKind !== 'usage') return;
-    const upd = latestUpdatedAt(accounts || [], subs || []);
-    const updEl = section.querySelector('#usage-upd');
-    if (updEl && upd) {
-      updEl.textContent = dshdT('updatedAt', { time: new Date(upd * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' }) });
-    }
-    renderAccountCards(box, meaningfulAccounts(accounts, subs));
+    // 当前会话上下文与账户/订阅并行拉取：单次渲染无竞态（若先渲染快照再
+    // 异步补标注，晚到的事件推送会被旧快照回写覆盖）；命令失败静默为 null
+    const [accounts, subs, ctx] = await Promise.all([
+      invoke('usage_accounts_get'),
+      invoke('usage_subscriptions_get'),
+      invoke('usage_session_context_get').catch(() => null),
+    ]);
+    if (openKind !== 'usage' || seq !== usageSeq) return;
+    usageSessionContext = ctx && (ctx.route_id || ctx.display_name || ctx.model) ? ctx : null;
+    applyAccountsSnapshot(section, accounts || [], subs || []);
   } catch (e) {
-    if (openKind !== 'usage') return;
+    if (openKind !== 'usage' || seq !== usageSeq) return;
     box.innerHTML = '<span class="usage-empty err" role="alert">' + esc(dshdT('usageFailed')) + ': ' + esc(String(e)) + '</span>';
   }
+}
+
+// 账户区唯一渲染出口：缓存快照（get）与后台推送（事件）走同一路径
+function applyAccountsSnapshot(section, accounts, subs) {
+  const box = section.querySelector('.usage-accounts');
+  if (!box) return;
+  renderAccountCards(box, meaningfulAccounts(accounts, subs));
+  const upd = latestUpdatedAt(accounts, subs);
+  const updEl = section.querySelector('#usage-upd');
+  if (updEl) updEl.textContent = upd ? dshdT('updatedAt', { time: fmtClockTime(upd) }) : '';
 }
 
 function latestUpdatedAt(accounts, subs) {
   let latest = 0;
   for (const a of accounts || []) if (a.updated_at && a.updated_at > latest) latest = a.updated_at;
+  for (const s of subs || []) if (s.updated_at && s.updated_at > latest) latest = s.updated_at;
   return latest || null;
+}
+
+// —— 当前会话：加载账户区时并行拉取活动会话上下文（route_id/display_name/model，
+// 全 null = 无活动会话）；匹配到账户卡则置顶并加「当前会话」徽标。
+// 命令不存在或失败一律静默为 null，不影响账户区主流程。——
+let usageSessionContext = null;
+// 会话与账户卡的匹配：route_id 优先、display_name 兜底；都匹配不到则不留痕迹
+function matchSessionAccount(items) {
+  const ctx = usageSessionContext;
+  if (!ctx) return null;
+  if (ctx.route_id) {
+    const byId = items.find((a) => a.id === ctx.route_id);
+    if (byId) return byId;
+  }
+  if (ctx.display_name) {
+    return items.find((a) => a.display_name === ctx.display_name) || null;
+  }
+  return null;
+}
+
+// 账户推送事件：用量页打开期间常驻，切走/关闭弹窗时卸载
+let usageAccountsUnlisten = null;
+async function ensureUsageAccountsListener() {
+  if (usageAccountsUnlisten) return;
+  try {
+    usageAccountsUnlisten = await listen('usage-accounts-updated', (e) => {
+      if (openKind !== 'usage' || !e.payload) return;
+      const box = document.querySelector('.usage-accounts');
+      const section = box ? box.closest('.usage-card') : null;
+      if (!section) return;
+      applyAccountsSnapshot(section, e.payload.accounts || [], e.payload.subscriptions || []);
+      // 后台刷新完成：若标题栏仍在转圈则收尾（900ms 最小转圈在 finish 内保证）
+      finishUsageRefresh();
+    });
+  } catch (err) {
+    usageAccountsUnlisten = null;
+  }
+}
+function dropUsageAccountsListener() {
+  if (usageAccountsUnlisten) { usageAccountsUnlisten(); usageAccountsUnlisten = null; }
+  // 切走/关闭时复位标题栏刷新态与会话上下文（防残留到下次打开）
+  clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = null;
+  setUsageRefreshBusy(false);
+  usageSessionContext = null;
 }
 
 function renderAccountCards(box, items) {
@@ -335,9 +496,19 @@ function renderAccountCards(box, items) {
     box.innerHTML = '<span class="usage-empty" role="status">' + dshdT('accountNotConfiguredHint') + '</span>';
     return;
   }
+  // 当前会话账户卡置顶；匹配不到会话则保持原顺序、不留任何痕迹
+  const sessionItem = matchSessionAccount(items);
+  if (sessionItem && items[0] !== sessionItem) {
+    items = [sessionItem].concat(items.filter((a) => a !== sessionItem));
+  }
   for (const a of items) {
     const card = document.createElement('div');
     card.className = 'usage-account';
+    // accent 由 CSS 按 data-provider/data-adapter 映射（未知供应商回退 --dshd-accent）
+    card.dataset.provider = a.id || '';
+    card.dataset.adapter = a.adapter || '';
+    const warn = warnLevelOf(a);
+    if (warn !== 'none') card.dataset.warn = warn;
     const statusKey = ACCOUNT_STATUS_KEY[a.status] || 'accountUnavailable';
     const statusText = dshdT(statusKey);
     const statusTone = a.status === 'ok' ? 'ok' : (a.status === 'not-configured' ? 'dim' : 'err');
@@ -345,23 +516,75 @@ function renderAccountCards(box, items) {
     if (a.status === 'not-configured') {
       detail = '<span class="usage-acc-hint">' + dshdT('accountNotConfiguredHint') + '</span>';
     } else if (a.balance && a.balance.remaining !== null && a.balance.remaining !== undefined) {
-      const cur = a.balance.currency || '';
-      detail = '<b class="usage-acc-amount">' + esc(cur) + ' ' + (a.balance.unlimited ? '∞' : fmtTokens(a.balance.remaining)) + '</b>';
+      // 金额与状态栏 chip 同一格式化（dshdCurrency + dshdBalanceValue），
+      // token 简写不适用于钱；unlimited 显示 ∞
+      detail = '<b class="usage-acc-amount">' + cur(a.balance.currency || '') + (a.balance.unlimited ? '∞' : dshdBalanceValue(a.balance.remaining)) + '</b>'
+        + balanceRowsHtml(a.balance);
     } else if (a.windows && a.windows.length) {
-      detail = a.windows.map((w) =>
-        '<span class="usage-acc-window" role="status" aria-label="' + esc(w.kind) + ' ' + w.remaining_percent + '%">' +
-        '<span class="usage-acc-wl">' + esc(w.kind) + '</span>' +
-        '<span class="usage-acc-bar" aria-hidden="true"><span style="width:' + w.remaining_percent + '%"></span></span>' +
-        '<span class="usage-acc-wv">' + w.remaining_percent + '%</span></span>'
-      ).join('');
+      detail = a.windows.map((w) => usageWindowHtml(w)).join('');
+    }
+    // 标记行：当前会话徽标（pill 同体系，徽标旁附模型名）、
+    // stale（上次成功时间）与预警（图标+文字，不得只靠颜色传信息）
+    let flags = '';
+    if (a === sessionItem) {
+      flags += '<span class="usage-acc-session">' + esc(dshdT('usageCurrentSession')) + '</span>';
+      if (usageSessionContext && usageSessionContext.model) {
+        flags += '<span class="usage-acc-session-model" data-trunc-tip>' + esc(usageSessionContext.model) + '</span>';
+      }
+    }
+    if (a.stale) {
+      flags += '<span class="usage-acc-stale">' + CLOCK_ICON + esc(a.updated_at
+        ? dshdT('usageLastSuccessAt', { time: fmtClockTime(a.updated_at) })
+        : dshdT('usageStaleGeneric')) + '</span>';
+    }
+    if (warn !== 'none') {
+      const crit = warn === 'critical';
+      flags += '<span class="usage-acc-warn" data-level="' + warn + '">' + (crit ? CRIT_ICON : WARN_ICON) + esc(dshdT(crit ? 'usageWarnCritical' : 'usageWarnLow')) + '</span>';
     }
     card.innerHTML =
-      '<div class="usage-acc-head"><span class="usage-acc-name" data-trunc-tip>' + esc(a.display_name || a.id) + '</span>' +
+      '<div class="usage-acc-head"><span class="usage-acc-mark" aria-hidden="true">' + esc(providerMark(a)) + '</span>' +
+      '<span class="usage-acc-name" data-trunc-tip>' + esc(a.display_name || a.id) + '</span>' +
       '<span class="usage-acc-status ' + statusTone + '">' + esc(statusText) + '</span></div>' +
-      (detail ? '<div class="usage-acc-detail">' + detail + '</div>' : '');
+      (detail ? '<div class="usage-acc-detail">' + detail + '</div>' : '') +
+      (flags ? '<div class="usage-acc-flags">' + flags + '</div>' : '');
     box.appendChild(card);
   }
   applyTruncationTips(box);
+}
+
+// 余额拆分行：已用/总额/赠送/充值，有值才显示（与参考面板同构）
+function balanceRowsHtml(balance) {
+  const rows = [
+    ['usageUsed', balance.used],
+    ['usageBalanceTotal', balance.total],
+    ['grantedBalance', balance.granted],
+    ['toppedUpBalance', balance.topped_up],
+  ].filter((pair) => pair[1] !== null && pair[1] !== undefined);
+  if (!rows.length) return '';
+  return '<div class="usage-acc-rows">' + rows.map((pair) =>
+    '<div class="usage-acc-row"><span>' + dshdT(pair[0]) + '</span><span>' + cur(balance.currency || '') + dshdBalanceValue(pair[1]) + '</span></div>'
+  ).join('') + '</div>';
+}
+
+// 订阅窗口行：剩余% 进度条 + 重置时间（resets_at 有则显示本地短日期）
+function usageWindowHtml(w) {
+  const pct = clampPct(w.remaining_percent);
+  const resets = usageResetLabel(w.resets_at);
+  return '<span class="usage-acc-window" role="status" aria-label="' + esc(w.kind) + ' ' + pct + '%">' +
+    '<span class="usage-acc-wl" data-trunc-tip>' + esc(w.kind) + '</span>' +
+    '<span class="usage-acc-bar" aria-hidden="true"><span style="width:' + pct + '%"></span></span>' +
+    '<span class="usage-acc-wv">' + pct + '%</span></span>' +
+    (resets ? '<span class="usage-acc-wreset">' + esc(resets) + '</span>' : '');
+}
+function usageResetLabel(resetsAt) {
+  if (typeof resetsAt !== 'string' || !resetsAt) return '';
+  const date = new Date(resetsAt);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return dshdT('usageResetsAt', {
+      time: date.toLocaleString(dshdLocale(), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    });
+  } catch (e) { return ''; }
 }
 
 const ACCOUNT_STATUS_KEY = {
@@ -377,6 +600,9 @@ const ACCOUNT_STATUS_KEY = {
 
 // —— 检查更新 ——
 function renderCheckLoading(message) {
+  // 占位文案记入 lastProgress：后续进度事件与占位相同则不再重复渲染
+  // （不做跨语言文案相等判断——语言切换后旧比较会失效）
+  lastProgress = message || dshdT('checkingUpdates');
   $('body').innerHTML = '<div class="msg" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + (message || dshdT('checkingUpdates')) + '</div>';
   // 无底部操作区（dsh 设置弹窗无 footer）
 }
@@ -460,16 +686,15 @@ function renderCheckResult(r) {
   // npm 是 Node 自带但可独立维护的工具，版本与操作入口单列，避免把它
   // 误解成 Node 版本的一部分。
   if (r.npm) {
-    const v = r.npm.installed;
+    const v = r.npm.installed || dshdT('notInstalled');
     const hint = r.npm.latest_error ? ' data-tip-extra="' + esc(r.npm.latest_error) + '"' : '';
-    const label = !r.npm.latest ? dshdT('versionServiceUnavailable')
-      : (r.npm.update_available
-        ? ''
-        : dshdT('upToDate'));
+    const label = !r.npm.installed ? dshdT('notInstalled')
+      : !r.npm.latest ? dshdT('versionServiceUnavailable')
+      : dshdT('upToDate');
     html += '<div class="uprow"><div class="info"><div class="name">npm</div>' +
       '<div class="ver" data-trunc-tip' + hint + '>' + (r.npm.update_available
         ? verHtml(v, r.npm.latest || dshdT('latestVersion'), true)
-        : esc(v) + '<span class="v-ok">' + label + '</span>') + '</div></div>' +
+        : (r.npm.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
       '<span id="u-npm"></span></div>';
   }
   // GitHub 查询失败时 r.app 为空，但应用本机版本仍应始终可见；
@@ -502,11 +727,13 @@ function renderCheckResult(r) {
   if (r.npm && r.npm.update_available) updBtn('u-npm', dshdT('update'), 'npm', false);
   if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
   const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
-  if (!any && !r.error && r.app && (r.dsh || r.node || r.pwsh || r.npm)) {
+  if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
     const message = document.createElement('div');
     message.className = 'msg';
     message.setAttribute('role', 'status');
-    message.textContent = dshdT('noUpdates');
+    // r.app 为空 = GitHub 查询失败：其余全最新也不能宣称「没有可用更新」，
+    // 明确区分部分检查未完成（DSHBox 行内已标注「暂无法获取版本信息」）
+    message.textContent = r.app ? dshdT('noUpdates') : dshdT('noUpdatesPartial');
     body.append(message);
   }
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
@@ -516,7 +743,7 @@ function renderCheckResult(r) {
 let lastProgress = '';
 function renderProgress(message) {
   if (openKind !== 'check') return;
-  if (!message || message === dshdT('checkingUpdates') || message === lastProgress) return;
+  if (!message || message === lastProgress) return;
   lastProgress = message;
   const body = $('body');
   const line = body.querySelector('.msg');
@@ -760,6 +987,8 @@ function navigateTo(kind) {
   if (!currentOpen || openKind === kind) return;
   const item = NAV_ITEMS.find((candidate) => candidate.kind === kind);
   if (!navCapability(item).enabled) return;
+  // 离开用量页：卸载账户推送监听并复位刷新态（避免后台事件打靶到已切走的页）
+  if (openKind === 'usage') dropUsageAccountsListener();
   openKind = kind;
   currentOpen = { kind, title: '', initial: currentOpen.initial };
   document.body.classList.toggle('update-prompt-mode', kind === 'update-prompt');
@@ -845,6 +1074,7 @@ window.__dshdReset = () => {
   lastResultKey = '';
   lastProgress = '';
   openKind = '';
+  dropUsageAccountsListener();
   document.body.classList.remove('update-prompt-mode');
   checkStamp = '';
   pwshPromptShown = false;
@@ -945,8 +1175,12 @@ setInterval(async () => {
 }, 1500);
 
 $('btn-x').addEventListener('click', close);
-// 用量页刷新：重查用量 + 账户（转圈至少 900ms 防抖）
+// 用量页刷新（唯一刷新入口）：先触发 Rust 账户后台全量刷新（失败静默），
+// 再整页重载；转圈至 usage-accounts-updated 事件到达（至少 900ms 防抖），
+// 命令失败立即收尾，事件丢失或后台异常时 30s 超时兜底，期间禁用防连点。
 let usageRefreshBusy = false;
+let usageRefreshTimer = null;
+let usageRefreshStart = 0;
 function setUsageRefreshBusy(busy) {
   usageRefreshBusy = busy;
   const button = $('btn-refresh');
@@ -955,14 +1189,21 @@ function setUsageRefreshBusy(busy) {
   button.disabled = busy;
   button.toggleAttribute('aria-busy', busy);
 }
+function finishUsageRefresh() {
+  if (!usageRefreshBusy) return;
+  clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = null;
+  const wait = Math.max(0, 900 - (Date.now() - usageRefreshStart));
+  setTimeout(() => setUsageRefreshBusy(false), wait);
+}
 $('btn-refresh').addEventListener('click', () => {
   if (usageRefreshBusy) return;
   setUsageRefreshBusy(true);
-  const start = Date.now();
-  renderUsagePage().finally(() => {
-    const wait = Math.max(0, 900 - (Date.now() - start));
-    setTimeout(() => setUsageRefreshBusy(false), wait);
-  });
+  usageRefreshStart = Date.now();
+  clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = setTimeout(finishUsageRefresh, 30000);
+  invoke('usage_accounts_refresh').catch(() => finishUsageRefresh());
+  renderUsagePage();
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') close();
