@@ -61,16 +61,16 @@ body.fade-out { opacity: 0; }
 }
 .install-actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 28px; }
 .bar { height: 4px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
-.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), #679efe); transition: width .45s ease; animation: slide 1.4s linear infinite; }
+.bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), var(--blue-dim)); transition: width .45s ease; animation: slide 1.4s linear infinite; }
 .bar-fill.determinate { animation: none; }
 .bar-fill.done { width: 100%; animation: none; }
 .bar-fill.err { width: 100%; background: var(--red); animation: none; }
-@keyframes slide { 0% { margin-left: -20%; } 100% { margin-left: 110%; } }
+/* 位移用 transform 而非 margin-left：不触发布局，动画只走合成层 */
+@keyframes slide { 0% { transform: translateX(-167%); } 100% { transform: translateX(917%); } }
 
 .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin var(--dshd-anim-spin); }
 /* 用 visibility 而非 display 隐藏：占位保留，就绪/失败切换时文字不跳动 */
 .spinner.hidden { visibility: hidden; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .error-box { width: 100%; background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .35); border-radius: 12px; padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
 .error-box.reveal { animation: error-in .11s ease-out; }
@@ -135,7 +135,6 @@ body.fade-out { opacity: 0; }
 .btn:disabled:hover { background: #23232b; border-color: var(--line); }
 .btn.primary:disabled:hover { background: var(--blue-surface); border-color: var(--blue-surface); }
 .btn.small { min-height: 28px; padding: 0 12px; font-size: 12px; }
-.hidden { display: none !important; }
 
 .footer { position: fixed; z-index: 2; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .versions { opacity: .75; }
@@ -229,7 +228,9 @@ body.fade-out { opacity: 0; }
 }
 /* 选中：dsh ghost-active-fill（bluish-750 深色） + label-primary */
 .dshd-select-list li[aria-selected="true"] { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
-.ob-switch { position: relative; width: 40px; height: 24px; flex: none; }
+/* 开关统一为 dshmarket 规范 38×22（与设置页 .sswitch 及 common.css 的
+   switch token 注释一致；knob 16px、行程 18px） */
+.ob-switch { position: relative; width: 38px; height: 22px; flex: none; }
 .ob-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .ob-track {
   display: block; width: 100%; height: 100%; border-radius: 999px;
@@ -239,7 +240,7 @@ body.fade-out { opacity: 0; }
 }
 .ob-track::before {
   content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
   transition: var(--dshd-anim-state);
 }
@@ -350,9 +351,12 @@ body.fade-out { opacity: 0; }
   body { background: radial-gradient(1200px 600px at 50% -10%, #e9edff 0%, var(--bg) 60%); }
   .btn { background: #f0f1f5; border-color: var(--line); color: var(--text); }
   .btn:hover { background: #e6e8ef; }
+  /* 浅色下禁用按钮悬停保持浅色禁用态（基础规则的深色 #23232b 会变黑块） */
+  .btn:disabled:hover { background: #f0f1f5; border-color: var(--line); }
   .btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
   .btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
-  .error-box { background: rgba(248, 81, 73, .06); }
+  .error-box { background: rgba(180, 35, 24, .06); border-color: rgba(180, 35, 24, .3); }
+  .error-details { border-top-color: rgba(180, 35, 24, .18); }
   .error-msg { background: rgba(38, 49, 72, .05); }
   .spinner { border-color: var(--line); border-top-color: var(--blue); }
 }
@@ -360,6 +364,7 @@ body.fade-out { opacity: 0; }
 /* 系统“减弱动态效果”：关闭全部动画 */
 @media (prefers-reduced-motion: reduce) {
   body { transition: none; }
+  .btn { transition: none; }
   .spinner { animation: none; }
   .bar-fill { animation: none; transition: none; }
   .error-box.reveal { animation: none; }

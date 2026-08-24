@@ -7,8 +7,8 @@ function settingsRow(key, nameKey, descKey, className) {
   return (
     '<label class="srow' + (className ? ' ' + className : '') + '">' +
     '<span class="srow-txt">' +
-    '<span class="srow-name">' + dshdT(nameKey) + '</span>' +
-    '<span class="srow-desc">' + dshdT(descKey) + '</span>' +
+    '<span class="srow-name">' + esc(dshdT(nameKey)) + '</span>' +
+    '<span class="srow-desc">' + esc(dshdT(descKey)) + '</span>' +
     '</span>' +
     '<input type="checkbox" class="sswitch" role="switch" data-key="' + key + '">' +
     '</label>'
@@ -102,18 +102,21 @@ function renderSettings() {
     el.addEventListener('change', onSettingToggle);
   });
   body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
-    el.addEventListener('change', () => {
-      if (!el.checked) return;
-      invoke('set_dsh_channel', { channel: el.value })
-        .then((state) => {
-          applySettingState(state);
-          dshChannelChanged = true;
-        })
-        .catch((e) => {
-          showSettingError(e);
-          // 失败回滚：重新拉取真实状态回填 checked（radio 已乐观选中新值）
-          invoke('settings_get').then(applySettingState).catch(() => {});
-        });
+    el.addEventListener('change', async () => {
+      if (!el.checked || settingsBusy) return;
+      settingsBusy = true;
+      hideSettingError();
+      try {
+        const state = await invoke('set_dsh_channel', { channel: el.value });
+        applySettingState(state);
+        dshChannelChanged = true;
+      } catch (e) {
+        showSettingError(dshdT('settingsFailed', { message: String(e) }));
+        // 失败回滚：重新拉取真实状态回填 checked（radio 已乐观选中新值）
+        invoke('settings_get').then(applySettingState).catch(() => {});
+      } finally {
+        settingsBusy = false;
+      }
     });
   });
   body.querySelectorAll('input[name="close_behavior"], input[name="launch_behavior"]').forEach((el) => {
@@ -333,24 +336,28 @@ function miRenderResult(preview) {
     miClearFeedback();
     applyBtn.disabled = true;
     applyBtn.textContent = dshdT('modelImportApplying');
+    let applied = false;
     try {
       await invoke('apply_model_import', { payload: { yaml, keys } });
-      box.querySelectorAll('input[data-ref]').forEach((input) => {
-        input.value = '';
-        input.type = 'password';
-        const toggle = input.parentElement && input.parentElement.querySelector('[data-dshd-password-toggle]');
-        if (toggle && toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
-      });
+      applied = true;
+      // 成功后收尾：清空粘贴区与凭据行（连同密码可见性按钮），已填 key
+      // 不留残态；结果区只保留摘要与成功消息
+      $('mi-textarea').value = '';
+      miPreviewRefs = [];
+      box.querySelectorAll('.mi-key-row').forEach((row) => row.remove());
       const ok = document.createElement('div');
       ok.className = 'mi-ok';
       ok.textContent = dshdT('modelImportSuccess');
       box.appendChild(ok);
-      applyBtn.remove();
+      actions.remove();
     } catch (e) {
       miFeedback(String(e), false);
     } finally {
-      applyBtn.disabled = false;
-      applyBtn.textContent = dshdT('modelImportApply');
+      // 成功时按钮已随操作区移除，不再复位其状态
+      if (!applied) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = dshdT('modelImportApply');
+      }
     }
   });
   actions.appendChild(applyBtn);

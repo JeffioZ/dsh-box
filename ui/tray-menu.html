@@ -6,8 +6,9 @@
   <link rel="stylesheet" href="common.css" />
   <style>
     /* 与普通弹窗相同：透明宿主窗口只负责承载，卡片背景、圆角、阴影与
-       动效均由内容层绘制。阴影余量须与 tray_menu.rs 的常量同步；DPI
-       取整产生的纵向余量留在透明区，避免拉伸卡片并改变菜单内边距。 */
+       动效均由内容层绘制。阴影余量须与 window.rs 的 OVERLAY_SHADOW_*
+       常量同步；DPI 取整产生的纵向余量留在透明区，避免拉伸卡片并改变
+       菜单内边距。 */
     html, body { height: 100%; overflow: hidden; }
     * { box-sizing: border-box; }
     body {
@@ -71,11 +72,13 @@
         menu.setItems(await invoke('menu_get', { traySurface: true }));
       } catch (e) {
         // IPC 不可用等致命失败：至少给出可见提示，而不是只剩窗口底色
-        // （common.js 的 __TAURI__ 兜底已向控制台打印具体原因）
+        // （common.js 的 __TAURI__ 兜底已向控制台打印具体原因）。
+        // role=note 纯提示行：不参与 .dshd-row 键盘导航（见 menu.js rows()）
         const list = document.getElementById('list');
         if (list.children.length === 0) {
           const row = document.createElement('div');
           row.className = 'dshd-row';
+          row.setAttribute('role', 'note');
           row.style.opacity = '0.55';
           row.style.cursor = 'default';
           row.textContent = dshdT('menuLoadFailed');

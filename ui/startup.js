@@ -44,10 +44,23 @@ function notifyReadyTransition() {
   const sequence = ++readyTransitionSequence;
   let sent = false;
   let onEnd = null;
+  let timer = 0;
+  // 序列失效（新一轮过渡已开始）同样要清理：旧监听器/定时器不得残留
+  const cleanup = () => {
+    if (onEnd) {
+      document.body.removeEventListener('transitionend', onEnd);
+      onEnd = null;
+    }
+    if (timer) {
+      clearTimeout(timer);
+      timer = 0;
+    }
+  };
   const finish = () => {
-    if (sent || sequence !== readyTransitionSequence) return;
+    if (sent) return;
+    cleanup();
+    if (sequence !== readyTransitionSequence) return;
     sent = true;
-    if (onEnd) document.body.removeEventListener('transitionend', onEnd);
     window.__TAURI__.core.invoke('startup_transition_done').catch(() => {});
   };
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -58,9 +71,9 @@ function notifyReadyTransition() {
   onEnd = (event) => {
     if (event.target === document.body && event.propertyName === 'opacity') finish();
   };
-  document.body.addEventListener('transitionend', onEnd, { once: true });
+  document.body.addEventListener('transitionend', onEnd);
   // transitionend 可能因页面不可见、动画被系统取消而不触发；兜底保证导航必达。
-  setTimeout(finish, 360);
+  timer = setTimeout(finish, 360);
 }
 
 function phaseText(phase) {
@@ -124,6 +137,21 @@ function renderRuntimePresentation(payload, view) {
   return { state, detail };
 }
 
+/** 取消/重新安装按钮显隐：cancellable（下载中）与 cancelled（已取消）互斥，
+    onboarding 面板与普通状态区共用同一套切换。 */
+function syncInstallActionButtons(phase) {
+  const cancellable = installCanCancel
+    && (phase === 'installing-node' || phase === 'installing-dsh');
+  const cancelled = phase === 'cancelled';
+  document.querySelectorAll('[data-install-cancel]').forEach((button) => {
+    button.classList.toggle('hidden', !cancellable);
+  });
+  document.querySelectorAll('[data-install-reinstall]').forEach((button) => {
+    button.classList.toggle('hidden', !cancelled);
+  });
+  return { cancellable, cancelled };
+}
+
 function renderOnboardingRuntime(payload) {
   const box = $('ob-runtime');
   if (!box || !onboardingActive()) return;
@@ -138,16 +166,7 @@ function renderOnboardingRuntime(payload) {
   // 从准备安装到启动服务始终保留这一行；Ready 后来源不再影响本轮启动。
   const showSource = !['ready', 'service-choice'].includes(payload.phase);
   $('ob-runtime-actions').classList.toggle('dshd-hold', !showSource);
-  // 与普通 loading 一致：下载中显示“取消安装”，取消后显示“重新安装”。
-  const cancellable = installCanCancel
-    && (payload.phase === 'installing-node' || payload.phase === 'installing-dsh');
-  const cancelled = payload.phase === 'cancelled';
-  document.querySelectorAll('[data-install-cancel]').forEach((button) => {
-    button.classList.toggle('hidden', !cancellable);
-  });
-  document.querySelectorAll('[data-install-reinstall]').forEach((button) => {
-    button.classList.toggle('hidden', !cancelled);
-  });
+  syncInstallActionButtons(payload.phase);
 }
 
 function setStatus(phaseOrPayload, message, detail) {
@@ -162,15 +181,10 @@ function setStatus(phaseOrPayload, message, detail) {
     progressBar: $('progress-bar'),
     fill: $('bar-fill'),
   });
-  const cancellable = installCanCancel
-    && (phase === 'installing-node' || phase === 'installing-dsh');
-  const cancelled = phase === 'cancelled';
+  const { cancellable, cancelled } = syncInstallActionButtons(phase);
   const installActions = $('install-actions');
   const cancelButtons = document.querySelectorAll('[data-install-cancel]');
-  const reinstallButtons = document.querySelectorAll('[data-install-reinstall]');
   installActions.classList.toggle('dshd-hold', !cancellable && !cancelled);
-  cancelButtons.forEach((button) => button.classList.toggle('hidden', !cancellable));
-  reinstallButtons.forEach((button) => button.classList.toggle('hidden', !cancelled));
   if (!cancellable) installCancelRequested = false;
   if (cancellable) {
     cancelButtons.forEach((button) => {
@@ -316,6 +330,9 @@ function renderStatus(payload) {
   installCanCancel = payload.can_cancel === true;
   if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
     $('update-box').classList.add('hidden');
+  } else if (lastUpdateResult) {
+    // 切回托管服务时按已有结果立即恢复更新区显隐，不等下一次更新事件
+    renderUpdate(lastUpdateResult);
   }
   // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
   // 纯固定文案的 phase 改用当前语言重译；动态消息（下载/安装进度、
@@ -726,7 +743,7 @@ function bind() {
       button.textContent = dshdT('copyFailed');
     }
   });
-  $('btn-quit').addEventListener('click', () => window.__TAURI__.core.invoke('quit'));
+  $('btn-quit').addEventListener('click', () => window.__TAURI__.core.invoke('quit').catch(() => {}));
   $('btn-update-check').addEventListener('click', async () => {
     const button = $('btn-update-check');
     button.disabled = true;

@@ -159,7 +159,7 @@ function bindWindowControls() {
     try {
       applyMaxState(await invoke('titlebar_toggle_maximize'));
     } catch (error) {
-      // 忽略偶发的 IPC 失败：后续 resize/状态轮询会重试
+      // 忽略偶发的 IPC 失败：后续 resize 刷新会重试
     }
   });
   $('btn-close').addEventListener('click', () => invoke('titlebar_close').catch(() => {}));

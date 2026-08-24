@@ -45,7 +45,8 @@ function dshdT(key, values) {
   const pair = DSHD_MESSAGES[key];
   let text = pair ? pair[DSHD_LANGUAGE === 'zh-CN' ? 0 : 1] : key;
   for (const [name, value] of Object.entries(values || {})) {
-    text = text.replaceAll('{' + name + '}', String(value));
+    // 函数形式替换：值里的 $&、$' 等不会被当作特殊替换模式展开
+    text = text.replaceAll('{' + name + '}', () => String(value));
   }
   return text;
 }
