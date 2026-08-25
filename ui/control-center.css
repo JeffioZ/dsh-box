@@ -453,6 +453,18 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   font-size: 12px;
 }
+/* 拖拽调整高度的热区：贴在 textarea 底边，悬停出现 row-resize 光标与分隔线
+   提示（点击/拖拽改高度、双击重置、上下方向键微调，见 control-center-settings.js）。 */
+.mi-textarea-wrap { position: relative; }
+.mi-resize-bar {
+  position: absolute; left: 0; right: 0; bottom: -2px; height: 8px;
+  cursor: row-resize; border-radius: 0 0 8px 8px;
+}
+.mi-resize-bar:hover,
+.mi-resize-bar:focus-visible {
+  background: linear-gradient(to bottom, transparent, var(--dshd-border-strong));
+}
+.mi-resize-bar:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 .mi-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .mi-feedback { font-size: 12px; line-height: 16px; }
 .mi-feedback.ok { color: var(--dshd-success-text); }

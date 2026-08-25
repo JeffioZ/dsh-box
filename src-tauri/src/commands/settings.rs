@@ -10,6 +10,8 @@ pub struct SettingsState {
     pub api_key_set: bool,
     /// 环境变量优先级高于凭据文件；为 true 时设置页只读，避免“保存成功但不生效”。
     pub api_key_external: bool,
+    /// settings.yaml 是否已有自定义模型路由（llm-pi-ai 段含 providers 键）。
+    pub model_config_set: bool,
     pub autostart: bool,
     pub hide_tool_calls: bool,
     pub hide_stats_line: bool,
@@ -34,6 +36,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
     SettingsState {
         api_key_set: api_key_external || crate::credentials::has(&config, "DEEPSEEK_API_KEY"),
         api_key_external,
+        model_config_set: crate::model_config::has_custom_providers(&config),
         autostart: crate::autostart::is_enabled(),
         hide_tool_calls: config.hide_tool_calls,
         hide_stats_line: config.hide_stats_line,

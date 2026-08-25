@@ -39,23 +39,39 @@ function dshChannelRow() {
     '</div>'
   );
 }
-function renderSettings() {
+async function renderSettings() {
   const body = $('body');
-  body.innerHTML =
+  // 先拿到配置状态再一次性渲染，才能决定模型配置板块放在最前还是原位，
+  // 避免「先渲染再挪动」造成闪烁。等候期间给出轻量占位。
+  body.innerHTML = '<div class="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>';
+  let settings = null;
+  try {
+    settings = await invoke('settings_get');
+  } catch (e) {
+    settings = null;
+  }
+  // await 期间用户可能已切走 tab：settings_get 返回后若已不在设置页，
+  // 直接放弃本轮渲染，避免覆盖当前页（对齐其他页面的 openKind 守卫）。
+  if (openKind !== 'settings') return;
+  // 无任何模型配置（无 DeepSeek Key 也无自定义路由）时模型配置板块置顶引导。
+  const modelFirst = !!(settings && !settings.api_key_set && !settings.model_config_set);
+  const desktopSec =
     '<section class="psection settings-section" aria-labelledby="settings-desktop-heading">' +
     '<h3 id="settings-desktop-heading">' + dshdT('settingsDesktopTitle') + '</h3>' +
     settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
     settingsRow('task_notifications', 'settingsTaskNotifications', 'settingsTaskNotificationsDesc') +
     behaviorRow('launch_behavior', 'settingsLaunchBehavior', 'settingsLaunchBehaviorDesc', 'window', 'settingsLaunchWindow', 'tray', 'settingsLaunchTray') +
     behaviorRow('close_behavior', 'settingsCloseBehavior', 'settingsCloseBehaviorDesc', 'tray', 'settingsCloseTray', 'quit', 'settingsCloseQuit') +
-    '</section>' +
+    '</section>';
+  const interfaceSec =
     '<section class="psection settings-section" aria-labelledby="settings-interface-heading">' +
     '<h3 id="settings-interface-heading">' + dshdT('settingsInterfaceTitle') + '</h3>' +
     settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
     settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
     settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
     settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc', 'srow-dependent') +
-    '</section>' +
+    '</section>';
+  const runtimeSec =
     '<section class="psection settings-section" aria-labelledby="settings-runtime-heading">' +
     '<h3 id="settings-runtime-heading">' + dshdT('settingsRuntimeTitle') + '</h3>' +
     '<div id="settings-external-note" class="settings-scope-note" role="status" hidden>' +
@@ -79,8 +95,9 @@ function renderSettings() {
     '</div>' +
     dshChannelRow() +
     settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
-    '</section>' +
-    // 模型配置导入/导出：独立卡片，随时可用
+    '</section>';
+  // 模型配置导入/导出：无任何模型配置时置顶，否则留在末尾。
+  const modelsSec =
     '<section class="psection settings-section mi-box" aria-labelledby="settings-model-heading">' +
     '<h3 id="settings-model-heading">' + dshdT('modelImportTitle') + '</h3>' +
     '<div class="mi-card">' +
@@ -88,7 +105,10 @@ function renderSettings() {
     '<label class="mi-card-name" for="mi-textarea">' + dshdT('modelImportPaste') + '</label>' +
     '<span class="mi-card-desc">' + dshdT('modelImportHint') + '</span>' +
     '</div>' +
+    '<div class="mi-textarea-wrap">' +
     '<textarea id="mi-textarea" class="dshd-input dshd-textarea mi-textarea" rows="5" spellcheck="false" placeholder="' + esc(dshdT('modelImportPlaceholder')) + '"></textarea>' +
+    '<div id="mi-resize-bar" class="mi-resize-bar" role="slider" aria-orientation="vertical" aria-valuemin="72" aria-valuemax="480" aria-valuenow="72" tabindex="0" title="' + esc(dshdT('modelResizeTip')) + '" aria-label="' + esc(dshdT('modelResizeAria')) + '"></div>' +
+    '</div>' +
     '<div class="mi-actions">' +
     '<button type="button" id="mi-preview" class="mi-btn primary">' + dshdT('modelImportPreview') + '</button>' +
     '<button type="button" id="mi-export" class="mi-btn">' + dshdT('modelExport') + '</button>' +
@@ -96,7 +116,12 @@ function renderSettings() {
     '</div>' +
     '<div id="mi-result" class="mi-result" hidden role="status" aria-live="polite"></div>' +
     '</div>' +
-    '</section>' +
+    '</section>';
+  body.innerHTML =
+    (modelFirst ? modelsSec : desktopSec) +
+    (modelFirst ? desktopSec : interfaceSec) +
+    (modelFirst ? interfaceSec : runtimeSec) +
+    (modelFirst ? runtimeSec : modelsSec) +
     '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
   body.querySelectorAll('.sswitch').forEach((el) => {
     el.addEventListener('change', onSettingToggle);
@@ -135,7 +160,9 @@ function renderSettings() {
       }
     });
   });
-  invoke('settings_get').then(applySettingState).catch((e) => showSettingError(e));
+  // 用已从 settings_get 拿到的状态回填（不再二次请求，避免重复拉取）。
+  if (settings) applySettingState(settings);
+  else showSettingError(dshdT('settingsFailed', { message: 'settings_get' }));
   $('settings-use-local').addEventListener('click', async () => {
     const button = $('settings-use-local');
     button.disabled = true;
@@ -225,10 +252,107 @@ function miFeedback(message, ok) {
   el.className = 'mi-feedback' + (ok ? ' ok' : ' err');
 }
 function miClearFeedback() { const el = $('mi-feedback'); if (el) el.textContent = ''; }
+// 高度模式：'auto' 默认自适应（内容多自动长到 60vh 上限出滚动条），
+// 'manual' 用户拖拽/键盘调过的固定高度（不再被 autosize 覆盖）。
+let miResizeMode = 'auto';
+// 高度随内容自适应：内容增长时把高度撑到 scrollHeight，超过 CSS 的
+// max-height(60vh) 后由 overflow-y 出滚动条。供 input 事件与程序赋值
+// （粘贴/清空）后调用；manual 态下不干预。
+function miTextareaAutosize() {
+  const el = $('mi-textarea');
+  if (!el || miResizeMode !== 'auto') return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+// 重置回自适应模式。
+function miTextareaReset() {
+  miResizeMode = 'auto';
+  miTextareaAutosize();
+}
 function initModelImport() {
   const textarea = $('mi-textarea');
   const previewBtn = $('mi-preview');
+  const resizeBar = $('mi-resize-bar');
   if (!textarea || !previewBtn) return;
+  miResizeMode = 'auto';
+  textarea.addEventListener('input', miTextareaAutosize);
+  miTextareaAutosize();
+  // —— 拖拽调整高度（不依赖原生 resizer，避免手柄随滚动条抖动/深浅色问题）——
+  if (resizeBar) {
+    const MIN_H = 72; // 与 .dshd-textarea min-height 对齐
+    const maxH = () => {
+      // 读取 computed max-height(60vh) 转 px；取不到时退回一个合理上限。
+      const px = parseFloat(getComputedStyle(textarea).maxHeight);
+      return Number.isFinite(px) && px > 0 ? px : 480;
+    };
+    const clampH = (h) => Math.max(MIN_H, Math.min(maxH(), h));
+    // 同步 slider 的 aria-valuenow/max（无障碍），随拖拽/键盘/重置更新。
+    const syncAria = (h) => {
+      resizeBar.setAttribute('aria-valuenow', String(Math.round(h)));
+      resizeBar.setAttribute('aria-valuemax', String(Math.round(maxH())));
+    };
+    // 初始同步一次，让 aria-valuemax 反映真实上限（60vh），而非占位的 480。
+    syncAria(textarea.getBoundingClientRect().height);
+    let dragState = null;
+    resizeBar.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault(); // 避免选中文本/拖拽触发原生行为
+      dragState = { startY: ev.clientY, startH: textarea.getBoundingClientRect().height };
+      const onMove = (e) => {
+        if (!dragState) return;
+        miResizeMode = 'manual';
+        const h = clampH(dragState.startH + (e.clientY - dragState.startY));
+        textarea.style.height = h + 'px';
+        syncAria(h);
+      };
+      const onUp = () => {
+        dragState = null;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    // 双击重置回自适应。
+    resizeBar.addEventListener('dblclick', () => {
+      miTextareaReset();
+      syncAria(textarea.getBoundingClientRect().height);
+    });
+    // 键盘可达（WCAG 2.2 AA）：上下方向键微调，Home 重置，End 拉到上限。
+    resizeBar.addEventListener('keydown', (ev) => {
+      const h = parseFloat(textarea.style.height);
+      const cur = Number.isFinite(h) && h > 0 ? h : textarea.getBoundingClientRect().height;
+      let next = null;
+      switch (ev.key) {
+        case 'ArrowUp':
+          ev.preventDefault();
+          miResizeMode = 'manual';
+          // 垂直 slider 惯例：向上增大 value（高度）。
+          next = clampH(cur + 16);
+          break;
+        case 'ArrowDown':
+          ev.preventDefault();
+          miResizeMode = 'manual';
+          // 向下减小 value（高度）。
+          next = clampH(cur - 16);
+          break;
+        case 'Home':
+          ev.preventDefault();
+          miTextareaReset();
+          syncAria(textarea.getBoundingClientRect().height);
+          return;
+        case 'End':
+          ev.preventDefault();
+          miResizeMode = 'manual';
+          next = maxH();
+          break;
+      }
+      if (next !== null) {
+        textarea.style.height = next + 'px';
+        syncAria(next);
+      }
+    });
+  }
   // 解析当前输入框文本，成功后渲染结果。
   async function runPreview() {
     const yaml = textarea.value;
@@ -264,6 +388,7 @@ function initModelImport() {
       }
       if (clipboard) {
         textarea.value = clipboard;
+        miTextareaAutosize();
       }
     }
     await runPreview();
@@ -365,6 +490,7 @@ function miRenderResult(preview) {
       // 成功后收尾：清空粘贴区与凭据行（连同密码可见性按钮），已填 key
       // 不留残态；结果区只保留摘要与成功消息
       $('mi-textarea').value = '';
+      miTextareaReset();
       miPreviewRefs = [];
       box.querySelectorAll('.mi-key-row').forEach((row) => row.remove());
       const ok = document.createElement('div');
@@ -372,6 +498,11 @@ function miRenderResult(preview) {
       ok.textContent = dshdT('modelImportSuccess');
       box.appendChild(ok);
       actions.remove();
+      // 导入成功后内容高度骤减、滚动条可能停在原 key 位置：滚回结果区/成功
+      // 消息可见（无论模型配置板块在顶部还是下部，scrollIntoView 都自适应）。
+      requestAnimationFrame(() => {
+        box.scrollIntoView({ block: 'center', behavior: 'auto' });
+      });
     } catch (e) {
       miFeedback(String(e), false);
     } finally {
@@ -385,6 +516,11 @@ function miRenderResult(preview) {
   actions.appendChild(applyBtn);
   box.appendChild(actions);
   box.hidden = false;
+  // 结果区/API Key 输入框在下方，展开后可能在视口外：滚动到可见，避免被遮挡。
+  // 用 rAF 确保布局完成后滚动；此处在设置页滚动容器（#body）内，scrollIntoView 自动滚动祖先。
+  requestAnimationFrame(() => {
+    box.scrollIntoView({ block: 'center', behavior: 'auto' });
+  });
 }
 function applySettingState(state) {
   const body = $('body');
