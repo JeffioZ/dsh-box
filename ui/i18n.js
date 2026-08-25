@@ -24,6 +24,8 @@ const DSHD_MESSAGES = {
   modelExport: ['导出配置', 'Export configuration'],
   modelExportNone: ['当前没有可导出的自定义路由。', 'No custom routes are available to export.'],
   modelExportCopied: ['配置已复制，不含 API Key。', 'Configuration copied without API keys.'],
+  modelResizeTip: ['拖动调整输入区高度，双击重置', 'Drag to resize the input area. Double-click to reset.'],
+  modelResizeAria: ['拖动调整输入区高度，或使用上下方向键微调，双击重置', 'Drag to resize the input area, use Up/Down to fine-tune, or double-click to reset.'],
   autostart: ['开机时启动 DSHBox', 'Start DSHBox at login'],
   builtinPluginsOptIn: ['安装内置插件', 'Install built-in plugins'],
   builtinPluginsOptInDesc: ['安装 DSH Market 和 File Upload；DSHBox 会每天检查更新。', 'Install DSH Market and File Upload. DSHBox checks for updates daily.'],

@@ -184,7 +184,7 @@ for (const file of ['ui/index.html', 'ui/control-center.html']) {
 const modelUi = read('ui/control-center-settings.js');
 const runtimeHeading = modelUi.indexOf('settings-runtime-heading');
 const apiKeyField = modelUi.indexOf('settings-api-key', runtimeHeading);
-const runtimeSectionEnd = modelUi.indexOf("'</section>' +", apiKeyField);
+const runtimeSectionEnd = modelUi.indexOf("'</section>'", apiKeyField);
 if (runtimeHeading < 0 || apiKeyField < runtimeHeading || runtimeSectionEnd < apiKeyField
     || modelUi.includes('settings-api-heading') || modelUi.includes('api-key-box')) {
   fail('设置页的 DeepSeek API 必须归入“服务管理”，不能保留单独的浅层板块');

@@ -71,6 +71,42 @@ pub struct ImportApplyPayload {
     pub keys: Vec<(String, String)>,
 }
 
+/// settings.yaml 当前是否已有自定义模型路由（`llm-pi-ai` 段含 `providers:` 键）。
+/// 用于设置页在「无任何模型配置」时把模型配置板块置顶引导。
+pub fn has_custom_providers(config: &Config) -> bool {
+    let Ok(text) = std::fs::read_to_string(config.dsh_home().join("settings.yaml")) else {
+        return false;
+    };
+    // 独立扫描 llm-pi-ai 顶层段（容忍段行 `llm-pi-ai:`、`llm-pi-ai: {}`、
+    // `llm-pi-ai: # 注释` 等），在段内查找 providers 键。不依赖
+    // extract_section_text（它对精确 `llm-pi-ai:` 行匹配，会漏判带值/注释的段行）。
+    let mut in_section = false;
+    for line in text.lines() {
+        let stripped = line.trim_start();
+        if !in_section {
+            // 顶层 llm-pi-ai 段起始：无缩进且 `llm-pi-ai` 后紧跟 `:`（值可空/注释/{}）。
+            let is_llm_section = !line.starts_with(' ')
+                && stripped
+                    .strip_prefix(SECTION_KEY)
+                    .is_some_and(|rest| rest.trim_start().starts_with(':'));
+            if is_llm_section {
+                in_section = true;
+            }
+            continue;
+        }
+        // 段内：遇到下一个非空非注释顶层键即结束。
+        let indent = line.len() - line.trim_start().len();
+        let is_comment = stripped.starts_with('#');
+        if indent == 0 && !stripped.is_empty() && !is_comment {
+            break;
+        }
+        if is_providers_key(stripped) {
+            return true;
+        }
+    }
+    false
+}
+
 /// 校验导入文本并返回预览（只读，不写盘）。
 pub fn preview(config: &Config, yaml: &str) -> Result<ImportPreview, String> {
     let providers = parse_providers(yaml)?;
@@ -751,5 +787,52 @@ llm-pi-ai:
         assert!(!out.contains("openai"));
         assert!(out.contains("acme-gw"));
         assert!(out.contains("id: x"));
+    }
+
+    #[test]
+    fn has_custom_providers_detects_providers_in_llm_pi_ai_section() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-mc-hasprov-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = crate::app_state::Config::load();
+        config.dsh_home = root.clone();
+        // 标准块式：有 providers。
+        std::fs::write(
+            root.join("settings.yaml"),
+            "locale:\n  preference: zh\nllm-pi-ai:\n  providers:\n    gw:\n      apiKeyEnv: K\n",
+        )
+        .unwrap();
+        assert!(has_custom_providers(&config));
+        // 无 llm-pi-ai 段：false。
+        std::fs::write(root.join("settings.yaml"), "locale:\n  preference: zh\n").unwrap();
+        assert!(!has_custom_providers(&config));
+        // llm-pi-ai 段存在但无 providers：false。
+        std::fs::write(
+            root.join("settings.yaml"),
+            "llm-pi-ai:\n  other: 1\nlocale:\n  preference: zh\n",
+        )
+        .unwrap();
+        assert!(!has_custom_providers(&config));
+        // 段行带注释：应仍进入段并找到 providers。
+        std::fs::write(
+            root.join("settings.yaml"),
+            "llm-pi-ai: # 模型\n  providers:\n    gw:\n      apiKeyEnv: K\n",
+        )
+        .unwrap();
+        assert!(has_custom_providers(&config));
+        // llm-pi-ai 子串（llm-pi-ai-extra）不应误判为段。
+        std::fs::write(
+            root.join("settings.yaml"),
+            "llm-pi-ai-extra:\n  providers:\n    gw:\n      apiKeyEnv: K\n",
+        )
+        .unwrap();
+        assert!(!has_custom_providers(&config));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

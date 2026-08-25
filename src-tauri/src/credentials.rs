@@ -20,6 +20,60 @@ fn is_section_key(content: &str, key: &str) -> bool {
         .is_some_and(|rest| rest.trim_start().starts_with(':'))
 }
 
+/// 是否为 `refs` 段键行：接受 `refs:`、`refs: {}`、`refs: # 注释`、
+/// `refs: {} # 注释` 等。`{}` 是 YAML 内联空对象，用户/dsh 可能用它表示
+/// 空段；若只按 is_section_key（要求值可空/注释）判断，`refs: {}` 会被
+/// 漏判为「无 refs 段」，导致 upsert 重复建段、value/remove 读不到值、
+/// 或把内联空与后续缩进子键叠成非法缩进。
+fn is_refs_section(content: &str) -> bool {
+    let Some(rest) = content.strip_prefix("refs") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let Some(after) = rest.strip_prefix(':') else {
+        return false;
+    };
+    let value = after.trim_start();
+    value.is_empty() || value.starts_with('#') || refs_value_inline_empty(value)
+}
+
+/// refs 段的值为「内联空对象」`{}`（允许括号内空格与行内注释，`#` 前有无
+/// 空格均可）。`{}` 是 YAML 空对象，用户/dsh 可能用它表示空段。
+fn refs_value_inline_empty(value: &str) -> bool {
+    let no_comment = value.split('#').next().unwrap_or("").trim();
+    let compact: String = no_comment.chars().filter(|c| !c.is_whitespace()).collect();
+    compact == "{}"
+}
+
+/// refs 键行是否为「内联空对象」`refs: {}`（可带行内注释）。若是，写入时
+/// 应归一化为空块 `refs:`，否则内联 `{}` 后跟缩进子键会叠成非法 YAML。
+fn refs_inline_empty(content: &str) -> bool {
+    let Some(rest) = content.strip_prefix("refs") else {
+        return false;
+    };
+    let Some(after) = rest.trim_start().strip_prefix(':') else {
+        return false;
+    };
+    refs_value_inline_empty(after.trim_start())
+}
+
+/// 把 refs 键行归一化为空块并保留行内注释：`refs: {} # c` -> `refs: # c`、
+/// `refs: { }` -> `refs:`。非内联空的行原样返回（含缩进）。用于 upsert/remove
+/// 在向 refs 段写内容前把内联空对象改成块式，避免内联 `{}` 后挂缩进子键。
+fn refs_norm_line(line: &str, stripped: &str) -> String {
+    if !refs_inline_empty(stripped) {
+        return line.to_string();
+    }
+    let indent = &line[..line.len() - stripped.len()];
+    // 保留 # 起的行内注释（若存在）；注释前补一个空格。
+    let comment = stripped
+        .split('#')
+        .nth(1)
+        .map(|c| format!(" #{c}"))
+        .unwrap_or_default();
+    format!("{indent}refs:{comment}")
+}
+
 pub(crate) fn value(config: &Config, name: &str) -> Option<String> {
     let text = std::fs::read_to_string(config.dsh_home().join(".credentials.yaml")).ok()?;
     value_from_text(&text, name)
@@ -44,7 +98,7 @@ fn value_from_text(text: &str, name: &str) -> Option<String> {
             }
             continue;
         }
-        if indent == 0 && is_section_key(content, "refs") {
+        if indent == 0 && is_refs_section(content) {
             in_refs = true;
         }
     }
@@ -143,11 +197,11 @@ pub(crate) fn upsert(text: &str, name: &str, value: &str) -> String {
             continue;
         }
         if top {
-            if is_section_key(stripped, "refs") {
+            if is_refs_section(stripped) {
                 has_refs = true;
-                // 保留原行（含可能的行内注释），与 `version:` 处理一致；仅记录
-                // 已存在 refs 段，接下来进入段内扫描。
-                out.push_str(line);
+                // 保留原行（含可能的行内注释）；内联空 `refs: {}` 归一化为
+                // 空块 `refs:`（保留注释），避免其后的缩进子键叠成非法 YAML。
+                out.push_str(&refs_norm_line(line, stripped));
                 out.push('\n');
                 in_refs = true;
                 continue;
@@ -223,9 +277,9 @@ pub(crate) fn remove(text: &str, name: &str) -> String {
             out.push('\n');
             continue;
         }
-        if top && is_section_key(stripped, "refs") {
+        if top && is_refs_section(stripped) {
             in_refs = true;
-            out.push_str(line);
+            out.push_str(&refs_norm_line(line, stripped));
             out.push('\n');
             continue;
         }
@@ -518,5 +572,67 @@ mod tests {
         assert!(!out.contains("DEEPSEEK_API_KEY"));
         assert!(out.contains("KEEP: one"));
         assert_eq!(out.matches("version: 1").count(), 1);
+    }
+
+    #[test]
+    fn upsert_normalizes_inline_empty_refs() {
+        // refs: {}（内联空对象）应被识别为 refs 段并归一化为空块，写入键后
+        // 形成合法块结构；不会重复建段或残留内联 {}。
+        let text = "version: 1\nrefs: {}\n";
+        let out = upsert(text, "IBRAIN_API_KEY", "v");
+        assert_eq!(out, "version: 1\nrefs:\n  IBRAIN_API_KEY: 'v'\n");
+    }
+
+    #[test]
+    fn upsert_fixes_bad_indent_under_inline_empty_refs() {
+        // 已损坏文件：refs: {} 下带了缩进子键。upsert 更新同名键时应把它
+        // 归一化为合法 refs: 块，并保留其它 refs 内容。
+        let text = "version: 1\nrefs: {}\n  IBRAIN_API_KEY: old\n  KEEP: one\n";
+        let out = upsert(text, "IBRAIN_API_KEY", "new");
+        assert_eq!(
+            out,
+            "version: 1\nrefs:\n  IBRAIN_API_KEY: 'new'\n  KEEP: one\n"
+        );
+        assert_eq!(out.matches("refs:").count(), 1);
+    }
+
+    #[test]
+    fn value_reads_key_under_inline_empty_refs() {
+        // 读取端也要认 refs: {} 进入 refs 段，才能读到其下的缩进子键。
+        let text = "version: 1\nrefs: {}\n  IBRAIN_API_KEY: 'v'\n";
+        assert_eq!(
+            super::value_from_text(text, "IBRAIN_API_KEY").as_deref(),
+            Some("v")
+        );
+    }
+
+    #[test]
+    fn remove_fixes_inline_empty_refs_after_deleting_key() {
+        // remove 识别 refs: {} 并归一化，删除目标键后不残留内联空 + 缩进键的非法结构。
+        let text = "version: 1\nrefs: {}\n  IBRAIN_API_KEY: old\n  KEEP: one\n";
+        let out = remove(text, "IBRAIN_API_KEY");
+        assert_eq!(out, "version: 1\nrefs:\n  KEEP: one\n");
+        assert_eq!(out.matches("refs:").count(), 1);
+    }
+
+    #[test]
+    fn refs_inline_empty_handles_no_space_comment_and_inner_spaces() {
+        // refs: {}#c（# 前无空格）、refs: { }（括号内带空格）都应判定为内联空，
+        // 归一化后写键为合法块结构（不会在 {} 下挂缩进子键）。
+        let t1 = "version: 1\nrefs: {}# keep\n";
+        let out1 = upsert(t1, "K", "v");
+        assert_eq!(out1, "version: 1\nrefs: # keep\n  K: 'v'\n");
+        let t2 = "version: 1\nrefs: { }\n";
+        let out2 = upsert(t2, "K", "v");
+        assert_eq!(out2, "version: 1\nrefs:\n  K: 'v'\n");
+    }
+
+    #[test]
+    fn refs_norm_line_preserves_inline_comment() {
+        // 归一化 refs: {} 时保留其行内注释（`refs: {} # c` -> `refs: # c`）。
+        let text = "version: 1\nrefs: {} # keep\n";
+        let out = upsert(text, "K", "v");
+        assert_eq!(out, "version: 1\nrefs: # keep\n  K: 'v'\n");
+        assert!(out.contains("refs: # keep"));
     }
 }

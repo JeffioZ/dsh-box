@@ -221,6 +221,9 @@
   }
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
+/* 未定义的滚动条组件（按钮/corner）会回退 UA 默认白色方块，在 textarea 等
+   元素上出现与自定义 thumb 不一致的奇怪图形；显式隐藏按钮并透明化 corner。 */
+::-webkit-scrollbar-button { display: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   border-radius: 4px;
@@ -229,7 +232,7 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--dsh-scrollbar-thumb-hover, var(--dshd-scroll-thumb-hover));
 }
-.dshd-scroll::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* 菜单条目：与 dsh Menu_cell 保持 min-h40 / pad 8-10 / r10。 */
 .dshd-row {
@@ -358,7 +361,13 @@
   min-height: 72px;
   padding-top: 7px;
   padding-bottom: 7px;
-  resize: vertical;
+  /* 高度随内容自适应（见 control-center-settings.js 的 auto-grow），
+     超过弹窗 60% 高度后由 overflow-y 出滚动条。不让原生 resizer 出现
+     （textarea UA 默认 resize:both 会绘制右下角手柄，且手柄随有无滚动条
+     变尺寸、不适配深浅色），拖拽/键盘调高度改由 .mi-resize-bar 热区承担。 */
+  resize: none;
+  max-height: 60vh;
+  overflow-y: auto;
   line-height: 1.4;
 }
 .dshd-password-field {
