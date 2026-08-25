@@ -230,13 +230,21 @@ jobs:
           draft: true
 
       # Windows 自更新依赖 GitHub 为 release asset 生成的 digest。发布时立即
-      # 验收，避免元数据缺失直到用户点击更新才暴露。
+      # 验收，避免元数据缺失直到用户点击更新才暴露。draft release 不能通过
+      # `releases/tags/<tag>` 查询（draft 不暴露给该端点，返回 404），因此先
+      # 在 release 列表里按 tag 找到（含 draft 的）release id，再用 id 查 asset。
       - name: Verify Windows updater metadata
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          digest=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+          release_id=$(gh api "repos/${{ github.repository }}/releases" \
+            --jq '.[] | select(.tag_name == "${{ github.ref_name }}") | .id' | head -1)
+          if [[ -z "$release_id" ]]; then
+            echo "::error::未找到 tag ${{ github.ref_name }} 对应的 release"
+            exit 1
+          fi
+          digest=$(gh api "repos/${{ github.repository }}/releases/$release_id" \
             --jq '.assets[] | select(.name == "DSHBox-windows-x64.exe") | .digest')
           if [[ ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
             echo "::error::Windows release asset 缺少有效 SHA-256 digest"
