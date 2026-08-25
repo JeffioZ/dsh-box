@@ -69,10 +69,7 @@ async function renderUsagePage() {
 }
 
 function fmtTokens(n) {
-  if (n < 1e3) return String(Math.round(n));
-  const scaled = (n / 1e3 < 100 && n < 1e6) ? Math.round(n / 1e3 * 10) / 10 : Math.round(n / 1e3);
-  const unit = n < 1e6 ? 'K' : 'M';
-  return String(scaled) + unit;
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function formatPercent(p) {
@@ -84,12 +81,17 @@ function renderUsageReport(report, seq) {
   const summary = $('usage-summary');
   if (!wrap || !summary) return;
   const total = report.total || {};
-  const hit = report.total && report.total.cache_hit_rate;
+  const todayInfo = todayEntry(report);
+  const todayHit = todayInfo ? todayInfo.cache_hit_rate : null;
+  const totalHit = report.total ? report.total.cache_hit_rate : null;
   summary.innerHTML =
-    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageToday') + '</span><b>' + fmtTokens(todayTokens(report)) + '</b></div>' +
-    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageThisMonth') + '</span><b>' + fmtTokens(monthTokens(report)) + '</b></div>' +
-    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotal') + '</span><b>' + fmtTokens(total.tokens || 0) + '</b></div>' +
-    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageCacheHit') + '</span><b>' + formatPercent(hit) + '</b></div>';
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageToday') + '</span><b data-trunc-tip>' + fmtTokens(todayTokens(report)) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageThisMonth') + '</span><b data-trunc-tip>' + fmtTokens(monthTokens(report)) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotal') + '</span><b data-trunc-tip>' + fmtTokens(total.tokens || 0) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTodayHit') + '</span><b>' + formatPercent(todayHit) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotalHit') + '</span><b>' + formatPercent(totalHit) + '</b></div>';
+  // 汇总区 token 数值可能因列宽不足被截断：仅截断时才给悬停 title 显示完整值。
+  applyTruncationTips(summary);
   const load = $('usage-load');
   if (load) load.remove();
   // 区块顺序：账户（余额/订阅）最常看 → 每日用量热图 → 最近 14 天 → 模型下钻。
@@ -99,9 +101,12 @@ function renderUsageReport(report, seq) {
   renderModelBreakdown(wrap, report);
 }
 
-function todayTokens(report) {
+function todayEntry(report) {
   const today = localDayKey(Date.now());
-  const day = (report.days || []).find((d) => d.date === today);
+  return (report.days || []).find((d) => d.date === today) || null;
+}
+function todayTokens(report) {
+  const day = todayEntry(report);
   return day ? day.tokens : 0;
 }
 function monthTokens(report) {
@@ -331,9 +336,10 @@ function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
     btn.dataset.lv = String(lv);
     // aria-label 与格内视觉信息对齐：日期（今天标注）+ token + 命中率
     btn.setAttribute('aria-label', (today ? dshdT('usageTodayBtn') + '，' : '') + key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : ''));
-    btn.innerHTML = '<span>' + d + '</span>' +
-      (tokens > 0 ? '<span class="usage-day-tok">' + fmtTokens(tokens) + '</span>' : '') +
-      (hit !== null && hit !== undefined ? '<span class="usage-day-hit">' + hit + '%</span>' : '');
+    // 格子内只放日期号数（对齐插件：token/命中率进 tooltip/aria-label 与
+    // 选中后的明细，避免格内塞三项导致换行溢出）。
+    btn.innerHTML = '<span>' + d + '</span>';
+    btn.title = key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : '');
     btn.addEventListener('click', () => {
       const prevSel = cal.querySelector('.usage-day.selected');
       if (prevSel) prevSel.classList.remove('selected');

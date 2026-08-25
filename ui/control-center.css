@@ -199,7 +199,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   margin: 0 0 8px; font-size: var(--dshd-fs-sm); font-weight: 600;
   color: var(--dshd-text-dim); line-height: 1.4;
 }
-.usage-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--dshd-sp-2); }
+.usage-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--dshd-sp-2); }
 .usage-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .usage-stat-l { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); }
 .usage-stat b {
@@ -232,15 +232,11 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-day:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 .usage-day.empty { background: transparent; cursor: default; }
 .usage-day.empty:hover { background: transparent; }
-.usage-day .usage-day-tok { font-size: 10px; color: var(--dshd-text-dim); }
-.usage-day .usage-day-hit { font-size: 9px; color: var(--dshd-text-dim); }
 .usage-day[data-lv="1"] { background: rgba(31,111,235,0.25); }
 .usage-day[data-lv="2"] { background: rgba(31,111,235,0.45); }
 .usage-day[data-lv="3"] { background: rgba(31,111,235,0.7); }
 .usage-day[data-lv="4"] { background: rgba(31,111,235,0.9); }
 .usage-day[data-lv]:not([data-lv="0"]) { color: rgba(255,255,255,0.95); }
-.usage-day[data-lv]:not([data-lv="0"]) .usage-day-tok,
-.usage-day[data-lv]:not([data-lv="0"]) .usage-day-hit { color: rgba(255,255,255,0.85); }
 .usage-day.selected { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 /* 今天：日期数字加粗 + accent 色（不高亮整格，保持热力可读） */
 .usage-day.today > span:first-child { font-weight: 700; color: var(--dshd-accent); }
@@ -250,10 +246,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
      文字（对比度规则：浅底深字），lv3/4 蓝底仍用白字 */
   .usage-day[data-lv="1"]:not([data-lv="0"]),
   .usage-day[data-lv="2"]:not([data-lv="0"]) { color: var(--dshd-text); }
-  .usage-day[data-lv="1"]:not([data-lv="0"]) .usage-day-tok,
-  .usage-day[data-lv="2"]:not([data-lv="0"]) .usage-day-tok,
-  .usage-day[data-lv="1"]:not([data-lv="0"]) .usage-day-hit,
-  .usage-day[data-lv="2"]:not([data-lv="0"]) .usage-day-hit { color: var(--dshd-text-dim); }
   .usage-day.today[data-lv="1"]:not([data-lv="0"]) > span:first-child,
   .usage-day.today[data-lv="2"]:not([data-lv="0"]) > span:first-child { color: var(--dshd-accent); }
   /* 浅色下有热度格 hover 改为加深（深色主题为提亮）——两个方向都增强

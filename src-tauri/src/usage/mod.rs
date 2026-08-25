@@ -21,6 +21,7 @@ pub(crate) use live::{
     current_session_id, refresh_once, session_activity, snapshot, start_live_rate, start_periodic,
     StatsPayload,
 };
+pub(crate) use log::session_log_path;
 pub(crate) use monitor::{
     cached_accounts, cached_deepseek, cached_subscriptions, request_account_refresh,
     start_account_monitor,

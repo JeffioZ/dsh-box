@@ -311,8 +311,8 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
             windows: Vec::new(),
             error: Some(
                 crate::locale::text(
-                    "该供应商未提供公开余额接口。",
-                    "This provider has no public balance interface.",
+                    "该供应商未提供公开余额查询接口。",
+                    "This provider has no public balance query interface.",
                 )
                 .into(),
             ),
