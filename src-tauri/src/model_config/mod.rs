@@ -328,7 +328,18 @@ fn filter_builtin_routes(section: &str) -> String {
 }
 
 /// 应用导入：写 settings.yaml 的 llm-pi-ai 段 + .credentials.yaml 的凭据。
+///
+/// 失败（含跨进程瞬时写入冲突重试后仍失败）会记录日志，便于定位偶发的一次性
+/// 导入失败——此前失败只返回给前端弹窗提示，日志无痕。
 pub fn apply(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String> {
+    let result = apply_inner(app, payload);
+    if let Err(e) = &result {
+        crate::logging::log(&format!("model-import: 导入失败：{e}"));
+    }
+    result
+}
+
+fn apply_inner(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), String> {
     let config = app.state::<AppState>().config();
 
     // 1) 先校验结构（与 preview 同一解析路径，确保写入的文本合法）。

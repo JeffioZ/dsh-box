@@ -17,21 +17,61 @@ pub(crate) fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
 
 /// 串行执行“读取—变换—原子替换”，防止同一进程内多个设置入口互相覆盖。
 /// 变换返回错误时保留原文件不动。
+///
+/// 读阶段与 dsh 进程（settings/credentials 的文件监视器与热发布）存在跨进程
+/// 竞争：撞上 dsh 正在打开/读目标文件时，Windows 的读或替换会返回瞬时占用/
+/// 共享冲突。这里对读阶段做有限重试（读到冲突就 sleep 后重读、重跑 transform，
+/// 避免基于过时内容）；transform 返回的逻辑错误（如 YAML 语法）不重试，直接
+/// 原样返回；替换阶段的瞬时冲突由 `atomic_write_unlocked` 内部按同一白名单重试。
 pub(crate) fn update_text_file(
     path: &Path,
-    transform: impl FnOnce(String) -> Result<String, String>,
+    mut transform: impl FnMut(String) -> Result<String, String>,
 ) -> Result<(), String> {
     let _guard = MANAGED_FILE_WRITE_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.to_string()),
-    };
-    let next = transform(text)?;
-    atomic_write_unlocked(path, &next)
+    for attempt in 0..=MAX_WRITE_RETRIES {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) if retryable_io(&e) && attempt < MAX_WRITE_RETRIES => {
+                std::thread::sleep(WRITE_RETRY_DELAY);
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let next = transform(text)?;
+        // 替换阶段（含临时文件创建/写/ReplaceFileW）的瞬时冲突由
+        // atomic_write_unlocked 内部按白名单重试；这里不再盲目整轮重试，
+        // 避免把非瞬时替换错误也重复 transform 多次。
+        return atomic_write_unlocked(path, &next);
+    }
+    unreachable!("读阶段重试循环所有路径都在尝试内返回")
 }
+
+/// 瞬时冲突类错误码白名单：这些是资源被临时占用/共享冲突，重试可成功；
+/// 其余（如权限永久不足、磁盘满）不重试，直接报错。
+///
+/// 关键：Windows 的共享/锁冲突（ERROR_SHARING_VIOLATION=32、
+/// ERROR_LOCK_VIOLATION=33）在 Rust std 里映射为 `Uncategorized`/`Other`，
+/// 并不落在 `PermissionDenied`；必须用 `raw_os_error()` 显式匹配，否则真实
+/// 进程占用冲突不会触发重试，导入偶发失败依旧。这两个错误码专用于 Windows，
+/// 用 `#[cfg(windows)]` 限定，避免 Unix 上同名 errno（EPIPE/EDOM）被误判。
+fn retryable_io(e: &std::io::Error) -> bool {
+    #[cfg(windows)]
+    if matches!(e.raw_os_error(), Some(32) | Some(33)) {
+        return true;
+    }
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+    )
+}
+
+/// 最多重试次数（初始尝试之外）。循环 `0..=MAX_WRITE_RETRIES` 因此是
+/// 1 次初始尝试 + 3 次重试 = 4 次尝试。
+const MAX_WRITE_RETRIES: u32 = 3;
+const WRITE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn atomic_write_unlocked(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
@@ -68,12 +108,24 @@ fn atomic_write_unlocked(path: &Path, text: &str) -> Result<(), String> {
         return Err(e.to_string());
     }
     drop(file);
-    if let Err(e) = replace_file(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(e.to_string());
+    // 替换阶段（ReplaceFileW / rename）可能因 dsh 正打开目标文件而瞬时
+    // 共享冲突：对白名单错误码短重试，避免一次性写入失败。
+    for attempt in 0..=MAX_WRITE_RETRIES {
+        match replace_file(&temp, path) {
+            Ok(()) => {
+                fsync_parent_dir(path);
+                return Ok(());
+            }
+            Err(e) if retryable_io(&e) && attempt < MAX_WRITE_RETRIES => {
+                std::thread::sleep(WRITE_RETRY_DELAY);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp);
+                return Err(e.to_string());
+            }
+        }
     }
-    fsync_parent_dir(path);
-    Ok(())
+    unreachable!("替换重试循环所有路径都在尝试内返回")
 }
 
 /// 清理目录中崩溃残留的原子写临时文件（`.<name>.dshbox-*.tmp`）。
@@ -195,4 +247,75 @@ fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
 #[cfg(not(windows))]
 fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(temp, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{retryable_io, update_text_file};
+
+    #[test]
+    fn retryable_io_classifies_conflict_kinds() {
+        // 瞬时占用/共享冲突：应重试。
+        assert!(retryable_io(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+        assert!(retryable_io(&std::io::Error::from(
+            std::io::ErrorKind::WouldBlock
+        )));
+        // Windows 真实共享/锁冲突（raw 32/33）映射为 Uncategorized/Other，
+        // 但仍应重试——这是核心修复点。
+        assert!(retryable_io(&std::io::Error::from_raw_os_error(32)));
+        assert!(retryable_io(&std::io::Error::from_raw_os_error(33)));
+        // 确定性/非瞬时错误：不应重试。
+        assert!(!retryable_io(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+        assert!(!retryable_io(&std::io::Error::from(
+            std::io::ErrorKind::InvalidData
+        )));
+        assert!(!retryable_io(&std::io::Error::from_raw_os_error(1))); // invalid function
+        assert!(!retryable_io(&std::io::Error::from_raw_os_error(2))); // file not found
+    }
+
+    #[test]
+    fn update_text_file_writes_when_file_missing() {
+        // 文件不存在：读阶段返回空串，transform 后写入，成功且内容正确。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-mf-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.txt");
+        update_text_file(&path, |text| {
+            assert_eq!(text, "");
+            Ok("hello".to_string())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_text_file_propagates_transform_error_without_write() {
+        // transform 返回逻辑错误：不重试、不写盘，原样返回该错误。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-mf-transform-err-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.txt");
+        std::fs::write(&path, "orig").unwrap();
+        let err = update_text_file(&path, |_text| Err("逻辑错误".to_string())).unwrap_err();
+        assert_eq!(err, "逻辑错误");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "orig");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
