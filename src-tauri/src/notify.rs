@@ -61,11 +61,9 @@ fn poll_once(app: &AppHandle, watched: &mut Option<WatchedSession>) -> Result<()
     let Some(session_id) = crate::usage::current_session_id(&config) else {
         return Ok(());
     };
-    let path = config
-        .dsh_home()
-        .join("sessions")
-        .join(session_id)
-        .join("session.jsonl.zstd");
+    let Some(path) = crate::usage::session_log_path(&config, &session_id) else {
+        return Ok(());
+    };
     let Ok(mtime) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
         return Ok(());
     };

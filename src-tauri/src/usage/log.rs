@@ -95,12 +95,24 @@ fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
 
 /// 列举 `$DSH_HOME/sessions` 下所有含 `session.jsonl.zstd` 的会话目录，
 /// 返回 `(session_id, log_path)`。
+///
+/// dsh 会把会话按启动工作目录分组到**嵌套**目录（实测如
+/// `sessions/--D-git-IdleTrigger--/session-<id>/session.jsonl.zstd`，分组名
+/// 随 `cwd` 派生、无法硬编码），因此必须递归扫描而不是只扫一层。会话 id
+/// 取包含日志文件的直接父目录名（`session-<id>`），与 RPC `session.list`
+/// 的 `sessionId` 及插件缓存 key 对齐。
 pub(crate) fn list_sessions(config: &Config) -> Vec<(String, PathBuf)> {
     let dir = config.dsh_home().join("sessions");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
+    collect_session_logs(&dir, &mut out);
+    out
+}
+
+/// 递归收集目录树下所有直接包含 `session.jsonl.zstd` 的会话。
+fn collect_session_logs(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -111,14 +123,27 @@ pub(crate) fn list_sessions(config: &Config) -> Vec<(String, PathBuf)> {
             if let Some(id) = path.file_name().and_then(|n| n.to_str()) {
                 out.push((id.to_string(), log));
             }
+        } else {
+            // 更深层的分组目录：继续向下递归。
+            collect_session_logs(&path, out);
         }
     }
-    out
+}
+
+/// 按会话 id 定位其真实日志路径（递归枚举，支持嵌套分组目录）。
+///
+/// 供 `live.rs`（实时 tok/s）与 `notify.rs`（任务完成通知）复用，避免各自
+/// 用 `sessions/<id>/session.jsonl.zstd` 拼接路径而在嵌套目录下失效。
+pub(crate) fn session_log_path(config: &Config, session_id: &str) -> Option<PathBuf> {
+    list_sessions(config)
+        .into_iter()
+        .find(|(id, _)| id == session_id)
+        .map(|(_, path)| path)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{read_full, read_full_limited};
+    use super::{list_sessions, read_full, read_full_limited, session_log_path};
 
     fn temp_log(tag: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -167,5 +192,50 @@ mod tests {
         assert!(read_full_limited(&path, 6).is_err());
         assert_eq!(read_full_limited(&path, 8).unwrap(), "one\ntwo\n");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn list_sessions_recurses_into_grouped_dirs_and_ids_by_log_parent() {
+        // dsh 会把会话按启动工作目录分组到嵌套目录：
+        // sessions/<group>/session-<id>/session.jsonl.zstd。会话 id 取包含
+        // 日志的直接父目录名，不能是分组目录名。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-list-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = crate::app_state::Config::load();
+        config.dsh_home = root.clone();
+        let group = root.join("sessions").join("--D-git-IdleTrigger--");
+        std::fs::create_dir_all(group.join("session-aaa")).unwrap();
+        std::fs::create_dir_all(group.join("session-bbb")).unwrap();
+        for (sid, tag) in [("session-aaa", "a"), ("session-bbb", "b")] {
+            std::fs::write(
+                group.join(sid).join("session.jsonl.zstd"),
+                zstd::encode_all(format!("{tag}\n").as_bytes(), 3).unwrap(),
+            )
+            .unwrap();
+        }
+        let sessions = list_sessions(&config);
+        let ids: Vec<&str> = sessions.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"session-aaa"));
+        assert!(ids.contains(&"session-bbb"));
+        assert_eq!(sessions.len(), 2);
+        // 路径必须是完整路径，指向分组目录内的真实日志。
+        let (_, pa) = sessions
+            .iter()
+            .find(|(id, _)| id == "session-aaa")
+            .unwrap()
+            .clone();
+        assert!(pa.ends_with("--D-git-IdleTrigger--/session-aaa/session.jsonl.zstd"));
+        // 按 id 定位也应回到完整嵌套路径。
+        let p = session_log_path(&config, "session-aaa").unwrap();
+        assert_eq!(p, pa);
+        assert!(session_log_path(&config, "session-none").is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

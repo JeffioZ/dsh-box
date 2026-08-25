@@ -438,11 +438,7 @@ fn live_rate_once(session_id: &str, config: &Config) -> Option<f64> {
 /// 压缩数据内可能出现伪 magic 字节序列：解压失败时继续向前尝试
 /// 下一个候选（最多 3 个），全部失败才放弃。
 fn read_tail_frame(session_id: &str, config: &Config) -> Option<String> {
-    let path = config
-        .dsh_home()
-        .join("sessions")
-        .join(session_id)
-        .join("session.jsonl.zstd");
+    let path = super::session_log_path(config, session_id)?;
     crate::session_log::read_tail_frame(&path).ok().flatten()
 }
 
