@@ -263,9 +263,14 @@ mod tests {
             std::io::ErrorKind::WouldBlock
         )));
         // Windows 真实共享/锁冲突（raw 32/33）映射为 Uncategorized/Other，
-        // 但仍应重试——这是核心修复点。
-        assert!(retryable_io(&std::io::Error::from_raw_os_error(32)));
-        assert!(retryable_io(&std::io::Error::from_raw_os_error(33)));
+        // 但仍应重试——这是核心修复点，仅 Windows 侧测试（retryable_io 的
+        // raw 32/33 分支用 #[cfg(windows)] 限定，Linux 上这两个 errno 是
+        // EPIPE/EDOM，语义不同）。
+        #[cfg(windows)]
+        {
+            assert!(retryable_io(&std::io::Error::from_raw_os_error(32)));
+            assert!(retryable_io(&std::io::Error::from_raw_os_error(33)));
+        }
         // 确定性/非瞬时错误：不应重试。
         assert!(!retryable_io(&std::io::Error::from(
             std::io::ErrorKind::NotFound
@@ -273,8 +278,10 @@ mod tests {
         assert!(!retryable_io(&std::io::Error::from(
             std::io::ErrorKind::InvalidData
         )));
-        assert!(!retryable_io(&std::io::Error::from_raw_os_error(1))); // invalid function
-        assert!(!retryable_io(&std::io::Error::from_raw_os_error(2))); // file not found
+        // 平台无关的 raw 码：ENOENT(2) 映射 NotFound，任何平台都不重试。
+        // 注意不能在 Linux 上断言 from_raw_os_error(1)：EPERM 映射
+        // PermissionDenied 会被判定为可重试（重试合理），此处不断言。
+        assert!(!retryable_io(&std::io::Error::from_raw_os_error(2)));
     }
 
     #[test]
