@@ -311,6 +311,9 @@ fn scheme_response(
         .status(status)
         .header("Access-Control-Allow-Origin", allowed_origin)
         .header("Vary", "Origin")
+        // 本地文件全文与令牌校验结果都不可缓存：排除 WebView2 网络层
+        // 复用/落盘的可能（防御性，正常流程不会命中缓存）
+        .header("Cache-Control", "no-store")
         .header("content-type", mime)
         .body(body)
         .unwrap_or_else(|_| http::Response::new(Vec::new()))

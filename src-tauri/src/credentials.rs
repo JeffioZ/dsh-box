@@ -306,6 +306,11 @@ fn encode_scalar(value: &str) -> String {
 
 fn decode_scalar(value: &str) -> Option<String> {
     let value = value.trim();
+    // 块标量指示符（| / >- 等）不是值本身：dsh 自身不写此形态，手改文件
+    // 才会出现——按读不到处理（None），而不是把指示符当凭据返回。
+    if value == "|" || value == ">" || value.starts_with("|-") || value.starts_with(">-") {
+        return None;
+    }
     if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
         let decoded = value[1..value.len() - 1].replace("''", "'");
         return (!decoded.is_empty()).then_some(decoded);
@@ -522,6 +527,11 @@ mod tests {
     #[test]
     fn plain_scalar_stops_at_unquoted_comment() {
         // ` #`（# 前有空白）起为行内注释；`abc#def` 的 # 前无空白，不截断
+        // 块标量指示符不是值：按读不到处理，不把 | / > 当凭据返回
+        assert_eq!(decode_scalar("|"), None);
+        assert_eq!(decode_scalar(">"), None);
+        assert_eq!(decode_scalar("|-"), None);
+        assert_eq!(decode_scalar(">-2"), None);
         assert_eq!(decode_scalar(" abc # 备注").as_deref(), Some("abc"));
         assert_eq!(decode_scalar(" abc#def").as_deref(), Some("abc#def"));
     }

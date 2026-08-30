@@ -475,17 +475,11 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   font: inherit; font-size: 12.5px; line-height: 18px; font-weight: 500; text-align: center;
   border: 1px solid var(--dshd-border); background: var(--dshd-hover);
   color: var(--dshd-text); cursor: pointer;
-  transition: var(--dshd-anim-state);
 }
+/* 过渡/焦点环/按下/primary 色阶/禁用的状态语义见 common.css 共享规则；
+   此处只保留控制中心的填充式底色与 hover/disabled 复位 */
 .mi-btn:hover { border-color: var(--dshd-border-strong); background: var(--dshd-selected); }
-.mi-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
-.mi-btn:active { background: var(--dshd-pressed); }
-.mi-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
-.mi-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
-.mi-btn.primary:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
-.mi-btn:disabled { opacity: .55; cursor: default; }
 .mi-btn:disabled:hover { border-color: var(--dshd-border); background: var(--dshd-hover); }
-.mi-btn.primary:disabled:hover { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); }
 .mi-result {
   margin-top: 6px; padding: 8px 10px; border-radius: 8px;
   background: var(--dshd-hover); border: 1px solid var(--dshd-border);

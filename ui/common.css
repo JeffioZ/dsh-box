@@ -8,6 +8,12 @@
 :root {
   --dshd-bg: #151517;
   --dshd-card: #353638;
+  /* dsh 字体栈（dsw-font-family）：系统 UI 优先 + 中文回退。
+     唯一定义点——各页面与子 webview 内联样式一律 var(--dshd-font)，
+     不再复制字面量栈 */
+  --dshd-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
   /* 弹窗/悬浮层面板背景：dsh bg-layer-2（bluish-850 #2c2c2e）——
      与卡片（菜单）色区分，dsh 弹窗面板用 layer-2 */
   --dshd-overlay: #2c2c2e;
@@ -145,10 +151,7 @@
 
 .dshd-body {
   margin: 0;
-  /* dsh 字体栈（dsw-font-family）：系统 UI 优先 + 中文回退 */
-  font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
+  font: 14px/22px var(--dshd-font);
   color: var(--dshd-text);
   user-select: none;
 }
@@ -314,17 +317,23 @@
   outline: none;
 }
 .dshd-btn:hover { background: var(--dshd-hover); }
-.dshd-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
-.dshd-btn:active { background: var(--dshd-pressed); }
-.dshd-btn { transition: var(--dshd-anim-state); }
+.dshd-btn:disabled:hover { background: transparent; }
 /* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角与主按钮一致（18px pill） */
 .dshd-btn.small { height: 24px; padding: 0 10px; font-size: 12px; border-radius: var(--dshd-r-btn); }
-.dshd-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
-.dshd-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
-.dshd-btn.primary:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
-.dshd-btn:disabled { cursor: default; opacity: .55; }
-.dshd-btn:disabled:hover { background: transparent; }
-.dshd-btn.primary:disabled:hover { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); }
+
+/* —— 按钮状态语义（三页按钮类共用，唯一落点）——
+   .dshd-btn（公共）/ .btn（启动页）/ .mi-btn（控制中心）的过渡、焦点环、
+   按下、primary 色阶与禁用完全一致（启动页 --blue-* 即 --dshd-* 的别名）；
+   几何尺寸、圆角、底色与普通 :hover / :disabled:hover 复位因各页外观不同
+   保留在各自样式文件 */
+.dshd-btn, .btn, .mi-btn { transition: var(--dshd-anim-state); }
+.dshd-btn:focus-visible, .btn:focus-visible, .mi-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
+.dshd-btn:active, .btn:active, .mi-btn:active { background: var(--dshd-pressed); }
+.dshd-btn.primary, .btn.primary, .mi-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
+.dshd-btn.primary:hover, .btn.primary:hover, .mi-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
+.dshd-btn.primary:active, .btn.primary:active, .mi-btn.primary:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
+.dshd-btn:disabled, .btn:disabled, .mi-btn:disabled { cursor: default; opacity: .55; }
+.dshd-btn.primary:disabled:hover, .btn.primary:disabled:hover, .mi-btn.primary:disabled:hover { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); }
 
 /* 文本输入控件共享多态。页面只通过 --dshd-input-height 和布局类调整密度，
    颜色、边框、焦点、错误、禁用与占位符状态不再各自实现。 */
