@@ -9,10 +9,6 @@ let mainMenu = null;
 let mainMenuMotion = null;
 let mainMenuRequest = 0;
 let mainMenuSelectionPending = false;
-// 图标 morph 句柄（init 时绑定）：主菜单下箭头⇄上箭头（展开/收起语义）。
-// 窗控三键不做动画——最小化/关闭点击后窗口即刻消失、最大化被窗口过渡
-// 占据注意力，形变不可见
-let setMenuGlyph = null;
 let closeBehavior = 'tray';
 let hoverSuspendPoint = null;
 let lastPointerPoint = null;
@@ -80,7 +76,6 @@ function setMainMenuOpen(open, focusMenu = false) {
   mainMenuOpen = Boolean(open);
   if (!mainMenuOpen) mainMenuSelectionPending = false;
   $('main-menu-wrap').classList.toggle('open', mainMenuOpen);
-  if (setMenuGlyph) setMenuGlyph(mainMenuOpen ? DSHD_ICON_PATHS.menuArrowUp : DSHD_ICON_PATHS.menuArrowDown);
   $('btn-menu').setAttribute('aria-expanded', String(mainMenuOpen));
   $('main-menu-panel').setAttribute('aria-hidden', String(!mainMenuOpen));
   $('main-menu-panel').inert = !mainMenuOpen;
@@ -190,7 +185,6 @@ async function refreshMaxState() {
 async function init() {
   dshdApplyI18n();
   initPlatform();
-  setMenuGlyph = dshdMorphIcon($('btn-menu').querySelector('path'));
   bindMainMenu();
   bindWindowControls();
 
@@ -240,6 +234,30 @@ async function init() {
     if (!active) suspendWindowControlHover();
   };
   refreshMainMenu();
+  // Win11 贴边浮层：上报最大化按钮矩形（本视口 CSS 像素），Rust 侧叠加
+  // webview 偏移后在窗口上创建 HTMAXBUTTON 原生覆盖层——悬停弹系统浮层、
+  // 点击走原生最大化/还原。覆盖层挡住 webview 的真实 hover，悬停视觉由
+  // Rust 的 dshd-snap-hover 事件镜像 .is-hovered（见下方监听与 CSS）
+  const syncSnapOverlay = () => {
+    const btn = $('btn-max');
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    invoke('snap_overlay_update', {
+      x: Math.round(rect.left), y: Math.round(rect.top),
+      width: Math.round(rect.width), height: Math.round(rect.height),
+    }).catch(() => {});
+  };
+  syncSnapOverlay();
+  new ResizeObserver(syncSnapOverlay).observe(document.body);
+  dshdListen('dshd-snap-hover', (event) => {
+    $('btn-max').classList.toggle('is-hovered', !!(event && event.payload && event.payload.on));
+  }).catch(() => {});
+  dshdListen('dshd-snap-press', (event) => {
+    $('btn-max').classList.toggle('is-pressed', !!(event && event.payload && event.payload.on));
+  }).catch(() => {});
+  window.addEventListener('pagehide', () => {
+    invoke('snap_overlay_detach').catch(() => {});
+  });
   // 初始化完成回报：Rust 启动自愈看门狗据此判断本页面是否加载成功
   invoke('titlebar_ready').catch(() => {});
 }

@@ -331,8 +331,8 @@ function providerMark(item) {
   return (letters.slice(0, 2) || '?').toUpperCase();
 }
 
-const WARN_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
-const CRIT_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9L7.9 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>';
+const WARN_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
+const CRIT_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>';
 const CLOCK_ICON = dshdIcon('clock', 'focusable="false" aria-hidden="true"');
 
 // —— 最近 14 天：本地日历窗口，只列有用量的日期（无用量省略、未来日不计）——
@@ -1063,7 +1063,7 @@ const NAV_TITLE_KEY = {
   settings: 'settingsTitle', about: 'about',
 };
 const NAV_ICONS = {
-  chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path></svg>',
+  chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></svg>',
   download: dshdIcon('download', 'focusable="false" aria-hidden="true"'),
   puzzle: dshdIcon('puzzle', 'focusable="false" aria-hidden="true"'),
   gear: dshdIcon('gear', 'focusable="false" aria-hidden="true"'),

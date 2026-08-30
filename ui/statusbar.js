@@ -6,15 +6,16 @@ const listen = (event, handler) => window.__TAURI__.event.listen(event, handler)
 const $ = (id) => document.getElementById(id);
 
 // 统计组图标（装饰性：旁边有可见文本，aria-hidden；单族 outline stroke）
-// 12px 渲染下控制细节密度：气泡去三点、圆柱去中间弧，保证剪影清晰
+// 12px 渲染下控制细节密度：speeds/cache 保留 lucide 形态的简化版
+// （闪电用直线剪影、圆柱去中间弧），其余对齐 lucide 官方路径
 const GROUP_ICONS = {
-  counts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"></path></svg>',
+  counts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg>',
   durations: dshdIcon('clock', 'aria-hidden="true"'),
   speeds: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>',
   cache: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z"></path><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path></svg>',
-  tokens: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3 21 7 17 11"></path><path d="M21 7H9"></path><path d="M7 13 3 17 7 21"></path><path d="M3 17h12"></path></svg>',
+  tokens: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg>',
 };
-const WALLET_ICON = '<svg class="c-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h13"></path><path d="M3 5v14a2 2 0 0 0 2 2h16V7"></path><path d="M16 13h3"></path></svg>';
+const WALLET_ICON = '<svg class="c-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path></svg>';
 
 let statsGroups = [];
 let avgTps = null; // stats 载荷的平均解码速率（tok/s）

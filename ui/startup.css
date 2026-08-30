@@ -46,8 +46,8 @@ body.fade-out { opacity: 0; }
 .logo {
   width: 56px; height: 56px;
 }
-.title { font-size: 20px; font-weight: 600; letter-spacing: .2px; margin-top: 4px; }
-.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 6px; }
+.title { font-size: 20px; font-weight: 600; letter-spacing: .2px; margin-top: 2px; }
+.tagline { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-top: 2px; }
 
 .status { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
 .status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
@@ -215,35 +215,17 @@ body.fade-out { opacity: 0; }
   margin-left: auto;
 }
 .dshd-select-list li[aria-selected="true"]::after {
-  content: "✓"; color: var(--dshd-selected-text); font-size: 12px; line-height: 14px;
-  text-align: center;
+  /* 矢量勾选（lucide check 路径经 mask）：文本 "✓" 依赖字体回退，
+     Linux 字体栈下形态不可控；mask 用 currentColor 保证跨平台一致 */
+  content: "";
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
 }
 /* 选中：dsh ghost-active-fill（bluish-750 深色） + label-primary */
 .dshd-select-list li[aria-selected="true"] { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
-/* 开关统一为 dshmarket 规范 38×22（与设置页 .sswitch 及 common.css 的
-   switch token 注释一致；knob 16px、行程 18px） */
-.ob-switch { position: relative; width: 38px; height: 22px; flex: none; }
-.ob-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-.ob-track {
-  display: block; width: 100%; height: 100%; border-radius: 999px;
-  /* dshmarket 开关：未选中 bg-layer-2 + border-l2 */
-  background: var(--dshd-switch-bg); border: 1px solid var(--dshd-border-strong);
-  transition: var(--dshd-anim-state);
-}
-.ob-track::before {
-  content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; border-radius: 50%; background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
-  transition: var(--dshd-anim-state);
-}
-.ob-switch input:checked + .ob-track { background: var(--dshd-switch-on); border-color: var(--dshd-switch-on); }
-.ob-switch input:checked + .ob-track::before { transform: translate(18px, -50%); background: #fff; }
-.ob-switch:hover .ob-track { border-color: var(--dshd-text-dim); }
-.ob-switch:active .ob-track { filter: brightness(.9); }
-.ob-switch input:focus-visible + .ob-track { outline: 2px solid var(--blue); outline-offset: 2px; }
-.ob-switch input:disabled { cursor: default; }
-.ob-switch input:disabled + .ob-track { opacity: .55; }
-.ob-switch:has(input:disabled):hover .ob-track { border-color: var(--dshd-border-strong); }
+/* 开关本体复用 common.css 的 .sswitch；此处只提供引导行容器的联动 */
+.ob-switch-row:hover .sswitch:not(:disabled) { border-color: var(--dshd-text-dim); }
 .ob-runtime {
   width: 100%; padding: 8px 10px; border: 1px solid var(--dshd-border);
   border-radius: 10px; background: var(--dshd-hover);

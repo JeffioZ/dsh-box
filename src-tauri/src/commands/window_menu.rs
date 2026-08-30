@@ -94,3 +94,34 @@ pub fn tray_menu_close(app: AppHandle, webview: tauri::Webview) -> Result<(), St
     crate::tray_menu::hide_menu(&app);
     Ok(())
 }
+
+/// 更新 Win11 贴边浮层覆盖层位置（按钮矩形为标题栏视口内的 CSS 像素；
+/// Rust 侧叠加 webview 偏移换算到窗口客户区）。非 Windows 平台 no-op。
+#[tauri::command]
+pub fn snap_overlay_update(
+    window: tauri::Window,
+    webview: tauri::Webview,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    #[cfg(windows)]
+    crate::snap_layout::update(&webview, &window, x, y, width, height);
+    // cfg 剔除实现后参数悬空：显式消音，避免非 Windows CI 的 -D warnings
+    #[cfg(not(windows))]
+    let _ = (window, x, y, width, height);
+    Ok(())
+}
+
+/// 移除贴边浮层覆盖层（标题栏页面卸载时调用）。非 Windows 平台 no-op。
+#[tauri::command]
+pub fn snap_overlay_detach(window: tauri::Window, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    #[cfg(windows)]
+    crate::snap_layout::detach(&window);
+    #[cfg(not(windows))]
+    let _ = window;
+    Ok(())
+}

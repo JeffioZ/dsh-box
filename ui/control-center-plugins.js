@@ -41,7 +41,7 @@ function renderPlugins() {
     '<div class="psearch-field">' +
     '<label class="psearch-label" for="p-query">' + esc(dshdT('pluginSearchHint')) + '</label>' +
     '<div class="psearch-control">' +
-    '<span class="psearch-ic" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg></span>' +
+    '<span class="psearch-ic" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.34-4.34"></path></svg></span>' +
     '<input class="dshd-input pinput" id="p-query" type="search" placeholder="dshmarket" autocomplete="off" spellcheck="false" />' +
     '</div></div>' +
     '<button type="button" class="dshd-btn" id="p-search">' + esc(dshdT('pluginSearch')) + '</button>' +
@@ -265,7 +265,7 @@ function pluginHomepageButton(p, reportError) {
   homepageBtn.className = 'dshd-btn small plugin-home';
   homepageBtn.title = dshdT('pluginHomepage');
   homepageBtn.setAttribute('aria-label', dshdT('pluginHomepage') + ': ' + p.name);
-  homepageBtn.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M15 3h6v6"></path><path d="m10 14 11-11"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg><span>' + esc(dshdT('pluginHomepage')) + '</span>';
+  homepageBtn.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"></path><path d="m21 3-9 9"></path><path d="M15 3h6v6"></path></svg><span>' + esc(dshdT('pluginHomepage')) + '</span>';
   homepageBtn.addEventListener('click', () => {
     invoke('open_external_url', { url: p.homepage }).catch(reportError);
   });
