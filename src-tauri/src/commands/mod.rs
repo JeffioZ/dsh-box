@@ -228,6 +228,8 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         window_menu::titlebar_ready,
         crate::heartbeat::page_heartbeat,
         window_menu::titlebar_expand,
+        window_menu::snap_overlay_update,
+        window_menu::snap_overlay_detach,
         window_menu::menu_get,
         window_menu::menu_choose,
         window_menu::tray_menu_close,

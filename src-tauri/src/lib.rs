@@ -29,6 +29,9 @@ mod plugins;
 mod processes;
 mod runtime;
 mod session_log;
+#[cfg(windows)]
+#[path = "platform/windows/snap_layout.rs"]
+mod snap_layout;
 mod titlebar;
 mod tray;
 mod tray_menu;
