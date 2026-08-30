@@ -179,34 +179,41 @@ fn refresh_all(config: &Config) -> AccountsPayload {
         .as_ref()
         .map(|p| p.subscriptions.as_slice())
         .unwrap_or(&[]);
-    let accounts: Vec<super::balance::AccountSnapshot> =
-        super::providers::configured_routes(config)
-            .into_iter()
-            .map(|route| super::balance::query_route(config, &route))
-            .collect();
-    let subscriptions = super::subscriptions::subscriptions(config);
+    // 走 mod 层入口：假数据模式（DSH_BOX_FAKE_USAGE）下同源返回假快照、
+    // 零网络请求；真实模式与原逐路由查询等价。
+    let accounts: Vec<super::balance::AccountSnapshot> = match super::accounts(config) {
+        Ok(accounts) => accounts,
+        Err(e) => {
+            crate::logging::log(&format!("usage: 账户查询失败 {e}"));
+            Vec::new()
+        }
+    };
+    let subscriptions = super::subscriptions(config);
     // 排查日志：只记异常态（not-configured 是"没配凭据"的正常态，不记），
     // 300s 一轮、账户数有限，量可控。error 文本截断防日志膨胀。
-    for snapshot in accounts.iter() {
-        if snapshot.status != "ok" && snapshot.status != "not-configured" {
-            crate::logging::log(&format!(
-                "usage: 账户查询失败 id={} adapter={} status={} error={}",
-                snapshot.id,
-                snapshot.adapter.unwrap_or("-"),
-                snapshot.status,
-                truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
-            ));
+    // 假数据模式含人为构造的异常态卡片，不记。
+    if !super::dev_fake::enabled() {
+        for snapshot in accounts.iter() {
+            if snapshot.status != "ok" && snapshot.status != "not-configured" {
+                crate::logging::log(&format!(
+                    "usage: 账户查询失败 id={} adapter={} status={} error={}",
+                    snapshot.id,
+                    snapshot.adapter.unwrap_or("-"),
+                    snapshot.status,
+                    truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
+                ));
+            }
         }
-    }
-    for snapshot in subscriptions.iter() {
-        if snapshot.status != "ok" && snapshot.status != "not-configured" {
-            crate::logging::log(&format!(
-                "usage: 订阅查询失败 id={} adapter={} status={} error={}",
-                snapshot.id,
-                snapshot.adapter,
-                snapshot.status,
-                truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
-            ));
+        for snapshot in subscriptions.iter() {
+            if snapshot.status != "ok" && snapshot.status != "not-configured" {
+                crate::logging::log(&format!(
+                    "usage: 订阅查询失败 id={} adapter={} status={} error={}",
+                    snapshot.id,
+                    snapshot.adapter,
+                    snapshot.status,
+                    truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
+                ));
+            }
         }
     }
     AccountsPayload {

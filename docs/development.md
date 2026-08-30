@@ -80,3 +80,13 @@ npm run icons
 - 更新失败时不要手工删除 `*-old`、`.part` 或事务标记，先让下一次启动执行恢复。
 
 常见用户侧问题与日志位置见[故障排查](troubleshooting.md)。「用量与余额」模块与上游 dsh-usage-stats 的同步规程见[用量同步](usage-sync.md)。
+
+## 用量与余额假数据（dev 专用）
+
+`pwsh -File .\dev-run.ps1 -FakeUsage`（或自设环境变量 `DSH_BOX_FAKE_USAGE=1` 后启动）注入确定性假数据，不配任何凭据/订阅即可看全显示分支：
+
+- **余额/订阅卡**：ok（CNY/USD、含赠送/充值明细行）、unlimited（∞）、预警两档（warning/critical）、not-configured / unauthorized / unsupported（含本地 Ollama 门控文案）、窗口型卡片（quota/session/weekly + 重置时间）、stale 旧快照标记、当前会话徽标。
+- **用量报告**：今日/本月/累计 token 与缓存命中率、月历热力图（含上一月导航）、最近 14 天、按模型下钻；成本列走真实 `render` 与定价引擎——当月各天为官方 DeepSeek（显示金额），上一月留一天自定义路由（该日与「累计」显示「—」，演示未定价 fail-closed 语义）。
+- **状态栏**（需在设置中开启"隐藏 dsh 统计行"）：五组统计与 tooltip 明细走真实组装路径；实时速率为 18–52 tok/s 三角波，可见动态变化。
+
+边界：假数据**零网络请求、不写聚合缓存**，报告经 `aggregate::render` 现算、成本按 `pricing.rs` 实价估算——展示链路与真实数据完全同一条。环境变量未设置时代码完全休眠，生产不受影响。实现见 `src-tauri/src/usage/dev_fake.rs`。

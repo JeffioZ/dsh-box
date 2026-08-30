@@ -103,6 +103,33 @@ fn poll_once(config: &Config) -> StatsPayload {
             details: Vec::new(),
         };
     }
+    // dev 假数据：合成投影走真实组装路径（格式化与真实数据一致）
+    if super::dev_fake::enabled() {
+        let stats = RawSessionStats {
+            turns: 12,
+            steps: 47,
+            llm_ms: 612_000.0,
+            tool_ms: 88_000.0,
+            ttft_ms: 23_500.0,
+            ttft_steps: 44,
+            decode_ms: 402_000.0,
+            decode_tokens: 21_750.0,
+        };
+        let usage = RawTokenUsage {
+            uncached_input_tokens: 41_200.0,
+            output_tokens: 23_800.0,
+            cache_read_tokens: 986_000.0,
+            cache_write_tokens: 12_800.0,
+        };
+        let (groups, avg_tps, details) = assemble_groups(Some(stats), Some(usage));
+        return StatsPayload {
+            ok: true,
+            show_stats: true,
+            groups,
+            avg_tps,
+            details,
+        };
+    }
     match build_groups(config) {
         Some((groups, avg_tps, details)) => StatsPayload {
             ok: true,
@@ -244,7 +271,11 @@ fn build_groups(config: &Config) -> Option<BuiltGroups> {
         serde_json::from_value(values.get("sessionStats").cloned()?).ok();
     let usage: Option<RawTokenUsage> =
         serde_json::from_value(values.get("tokenUsage").cloned()?).ok();
+    Some(assemble_groups(stats, usage))
+}
 
+/// 由投影数据组装显示组（真实 RPC 与 dev 假数据共用，保证格式一致）。
+fn assemble_groups(stats: Option<RawSessionStats>, usage: Option<RawTokenUsage>) -> BuiltGroups {
     let mut groups: Vec<StatsGroup> = Vec::new();
     let mut details: Vec<StatsDetail> = Vec::new();
     let group = |key: &'static str, text: String| StatsGroup { key, text };
@@ -344,7 +375,7 @@ fn build_groups(config: &Config) -> Option<BuiltGroups> {
             push_group("tokens", text, Vec::new());
         }
     }
-    Some((groups, avg_tps, details))
+    (groups, avg_tps, details)
 }
 
 /// 紧凑时长：<60s 保留一位小数秒，之后 m+s（与 dsh 前端一致）。
@@ -429,6 +460,9 @@ pub(crate) fn start_live_rate(app: AppHandle) {
 /// 一次实时速率采样：读当前会话日志最后一帧，统计最近 3s 的 token
 /// 增量。会话空闲（窗口内无 delta 事件）返回 None。
 fn live_rate_once(session_id: &str, config: &Config) -> Option<f64> {
+    if super::dev_fake::enabled() {
+        return Some(super::dev_fake::live_tps());
+    }
     let text = read_tail_frame(session_id, config)?;
     let now_ms = unix_ms();
     live_rate_from_lines(&text, now_ms)

@@ -46,17 +46,45 @@ function meaningfulAccounts(accounts, subs) {
   return out;
 }
 
+// 用量导出：保存对话框由后端弹出；进行中禁用全部导出按钮防重复触发
+async function exportUsage(kind, btn) {
+  const all = document.querySelectorAll('.usage-export-btn');
+  all.forEach((b) => { b.disabled = true; });
+  const prev = btn.textContent;
+  btn.textContent = dshdT('usageExporting');
+  try {
+    await invoke('usage_export', { format: kind });
+    btn.textContent = dshdT('usageExportDone');
+  } catch (e) {
+    btn.textContent = dshdT('usageExportFailed');
+    window.setTimeout(() => { btn.textContent = prev; }, 2500);
+  }
+  window.setTimeout(() => {
+    btn.textContent = prev;
+    all.forEach((b) => { b.disabled = false; });
+  }, 1800);
+}
+
 async function renderUsagePage() {
   const seq = ++usageSeq;
   const body = $('body');
   body.innerHTML =
     '<div class="usage-wrap">' +
     '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
+    '<div class="usage-h-row">' +
     '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTokenSection') + '</h3>' +
+    '<div class="usage-export-btns">' +
+    '<button type="button" class="usage-export-btn" data-usage-export="csv">' + dshdT('usageExportCsv') + '</button>' +
+    '<button type="button" class="usage-export-btn" data-usage-export="json">JSON</button>' +
+    '</div>' +
+    '</div>' +
     '<div class="usage-summary" id="usage-summary"></div>' +
     '</section>' +
     '<div class="usage-load" id="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
     '</div>';
+  body.querySelectorAll('.usage-export-btn').forEach((btn) => {
+    btn.addEventListener('click', () => exportUsage(btn.dataset.usageExport, btn));
+  });
   try {
     const report = await invoke('usage_report_get');
     if (openKind !== 'usage' || seq !== usageSeq) return;

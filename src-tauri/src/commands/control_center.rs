@@ -154,6 +154,73 @@ pub async fn usage_report_get(
         })?
 }
 
+/// 用量导出：`format` = "csv"（每日明细）或 "json"（全量），保存对话框
+/// 选路径后写文件；用户取消对话框视为成功（不报错）。
+#[tauri::command]
+pub async fn usage_export(
+    app: AppHandle,
+    webview: tauri::Webview,
+    format: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能导出用量统计。",
+            "Usage export is available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = crate::usage::report(&config)?;
+        let today = crate::usage::day_key_now();
+        let (content, file_name) = match format.as_str() {
+            "csv" => (
+                crate::usage::export::daily_csv(&report),
+                format!("dshbox-usage-daily-{today}.csv"),
+            ),
+            "json" => (
+                crate::usage::export::export_json(&report),
+                format!("dshbox-usage-export-{today}.json"),
+            ),
+            other => {
+                return Err(crate::locale::owned(
+                    format!("未知的导出格式：{other}"),
+                    format!("Unknown export format: {other}"),
+                ))
+            }
+        };
+        use tauri_plugin_dialog::DialogExt;
+        let mut builder = app.dialog().file().set_file_name(&file_name);
+        if let Some(window) = crate::main_window(&app) {
+            if window.is_visible().unwrap_or(false) {
+                builder = builder.set_parent(&window);
+            }
+        }
+        let Some(dest) = builder
+            .blocking_save_file()
+            .and_then(|d| d.into_path().ok())
+        else {
+            return Ok(()); // 用户取消
+        };
+        std::fs::write(&dest, content.as_bytes()).map_err(|e| {
+            crate::locale::owned(
+                format!("写入导出文件失败：{e}"),
+                format!("Failed to write the export file: {e}"),
+            )
+        })?;
+        crate::logging::log(&format!("usage: 已导出 {file_name} → {}", dest.display()));
+        Ok(())
+    })
+    .await
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("导出任务异常结束：{e}"),
+            format!("The export task ended unexpectedly: {e}"),
+        )
+    })?
+}
+
 /// 当前会话路由上下文（只读入口；无活动会话时三字段全 null）。
 #[tauri::command]
 pub async fn usage_session_context_get(

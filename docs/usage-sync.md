@@ -51,7 +51,7 @@
 
 - **dsh 持久化格式演进**：dsh 0.1.2 起默认开启 delta 打包（`text-chunks`/`reasoning-chunks`/`tool-call-chunks` 存储行）；聚合只读 usage 块（永不打包）不受影响，实时速率（`live.rs`）已双形态兼容。另有 opt-in 的 SQLite 持久化后端（`session-persistence-sqlite`，无默认启用）——若上游翻转默认值，「直扫 jsonl.zstd」数据源失效，需迁移到别的通道。
 - **成本预算**（上游 `budgets.currency/daily/monthly` + 80%/100% 告警）：需 config.json 新键 + 设置界面；有需求再加。
-- **CSV/JSON 导出**（上游 `lib/export.js`，无密钥、schema 版本化）：待做（`tauri-plugin-dialog` 已具备保存能力）。
+- **导出范围**：已实现每日明细 CSV 与全量 JSON（`usage/export.rs`，UTF-8 BOM、RFC 4180 转义、公式注入防护、schema 1.0.0）；上游的 `sessions.csv` 未做（按会话级数据不在聚合缓存中，为导出扩缓存不划算）。
 - **自适应账户刷新**（上游 active 60s / detail 120s / background 900s + 限流退避）：我们固定 300s 一轮。
 - 低余额绝对阈值配置（`warning.warnBelow/criticalBelow`）：我们当前只实现 30%/10% 比例阈值，无设置界面；有需求再加。
 - **声明式余额查询**（上游 JSON-Pointer 自定义查询模板）：自托管网关可先用 New API / Sub2API 适配器。

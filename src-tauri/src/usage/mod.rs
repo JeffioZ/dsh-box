@@ -7,6 +7,8 @@
 mod aggregate;
 mod balance;
 mod cache;
+mod dev_fake;
+pub(crate) mod export;
 mod live;
 mod log;
 mod monitor;
@@ -31,8 +33,20 @@ pub(crate) use monitor::{
 pub(crate) use monitor::{set_cache_for_test, CACHE_TEST_LOCK};
 pub use subscriptions::SubscriptionSnapshot;
 
+/// 本地今天的 `YYYY-MM-DD`（导出文件名用；假数据模式同样按真实日期）。
+pub fn day_key_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    aggregate::day_key(now)
+}
+
 /// 枚举已配置供应商路由并查询各账户余额（阶段 2 入口）。
 pub fn accounts(config: &crate::app_state::Config) -> Result<Vec<AccountSnapshot>, String> {
+    if dev_fake::enabled() {
+        return Ok(dev_fake::accounts());
+    }
     Ok(providers::configured_routes(config)
         .into_iter()
         .map(|route| balance::query_route(config, &route))
@@ -41,6 +55,9 @@ pub fn accounts(config: &crate::app_state::Config) -> Result<Vec<AccountSnapshot
 
 /// 查询全部订阅额度适配器（阶段 3 入口）。
 pub fn subscriptions(config: &crate::app_state::Config) -> Vec<SubscriptionSnapshot> {
+    if dev_fake::enabled() {
+        return dev_fake::subscriptions();
+    }
     subscriptions::subscriptions(config)
 }
 
@@ -100,6 +117,9 @@ pub struct SessionContext {
 /// （对齐上游 v0.3 session-context 端点：折叠状态是唯一依据，无路由
 /// 归因时返回全 null，不猜、不伪造）。
 pub fn session_context(config: &crate::app_state::Config) -> SessionContext {
+    if dev_fake::enabled() {
+        return dev_fake::session_context();
+    }
     let Some(session_id) = live::current_session_id(config) else {
         return empty_context();
     };
@@ -153,6 +173,9 @@ fn context_of(
 /// 增量折叠状态落到 `$DSH_HOME/storages/usage-stats-cache.json`；消失的
 /// 会话从缓存剔除；损坏/版本不符静默退回全量重折。
 pub fn report(config: &crate::app_state::Config) -> Result<UsageReport, String> {
+    if dev_fake::enabled() {
+        return Ok(dev_fake::report());
+    }
     let mut sessions = cache::load(config);
     let mut seen = std::collections::HashSet::new();
     for (id, path) in list_session_logs(config) {

@@ -1,9 +1,18 @@
 ﻿# 开发模式运行：确保 UI 静态服务器在跑（node 进程），然后启动开发版 exe。
 # 之后只改 ui/ 下的文件：重启本脚本（或刷新页面）即生效，无需重新编译。
+# -FakeUsage：注入用量与余额假数据（DSH_BOX_FAKE_USAGE=1），不配凭据也能
+# 看全用量页/状态栏的每个显示分支，详见 docs/development.md。
 [CmdletBinding()]
-param()
+param(
+    [switch]$FakeUsage
+)
 
 $ErrorActionPreference = "Stop"
+
+if ($FakeUsage) {
+    $env:DSH_BOX_FAKE_USAGE = '1'
+    Write-Host "已启用用量与余额假数据（DSH_BOX_FAKE_USAGE=1）：零网络请求、不写聚合缓存" -ForegroundColor Yellow
+}
 
 $root = $PSScriptRoot
 $exe = Join-Path $root "dist-dev\DSHBox-dev.exe"

@@ -201,6 +201,14 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 /* auto-fit：汇总项从 5 项扩到 7 项（成本两项）后按内容自适应换行，
    窄弹窗不再依赖手工断点维持可读列宽 */
+.usage-h-row { display: flex; align-items: center; justify-content: space-between; gap: var(--dshd-sp-2); margin-bottom: 8px; }
+.usage-h-row .usage-h { margin: 0; }
+.usage-export-btns { display: inline-flex; gap: 4px; }
+.usage-export-btn { border: none; background: transparent; border-radius: 6px; color: var(--dshd-text-dim); cursor: pointer; padding: 2px 8px; font: inherit; font-size: var(--dshd-fs-xs); }
+.usage-export-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
+.usage-export-btn:disabled { opacity: .35; cursor: default; }
+.usage-export-btn:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
+.usage-export-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .usage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: var(--dshd-sp-2); }
 .usage-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .usage-stat-l { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); }

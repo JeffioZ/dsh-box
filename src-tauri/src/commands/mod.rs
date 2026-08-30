@@ -236,6 +236,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::app_dialog_open_usage,
         control_center::session_stats_get,
         control_center::usage_report_get,
+        control_center::usage_export,
         control_center::usage_session_context_get,
         control_center::usage_accounts_get,
         control_center::usage_subscriptions_get,
