@@ -6,6 +6,9 @@ mod node;
 mod package_manager;
 mod server;
 
+// 消费方（updater/app.rs 的下载/校验）为 windows 门控：非 Windows 下
+// 再导出无人使用，按仓库既有模式豁免（同 powershell.rs 的 latest_stable_tag）
+#[cfg_attr(not(windows), allow(unused_imports))]
 pub(crate) use download::{sha256_file, stream_to_file, DownloadError, StreamRequest};
 #[cfg(test)]
 use dsh_package::read_log_tail;
