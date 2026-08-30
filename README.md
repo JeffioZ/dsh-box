@@ -20,9 +20,6 @@ DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-a
 <p align="center">
   <img src="assets/screenshots/main-window.jpg" width="840" alt="主窗口" />
 </p>
-<p align="center">
-  <img src="assets/screenshots/usage.jpg" width="840" alt="用量与余额" />
-</p>
 
 ## 快速开始
 
