@@ -179,7 +179,12 @@ function extOf(p) { var m = /\.([^./\\]+)$/.exec(p); return m ? m[1].toLowerCase
 var TEXT_EXTS = ['txt','md','markdown','json','jsonc','js','mjs','cjs','ts','tsx','jsx','py','rb','rs','go','java','c','h','cpp','hpp','cc','hh','cs','css','scss','less','sass','html','htm','xml','yml','yaml','toml','ini','cfg','conf','cnf','sh','bash','zsh','bat','ps1','psm1','sql','log','csv','tsv','vue','svelte','m','mm','swift','kt','kts','php','lua','r','pl','pm','tex','sty','bib','env','gitignore','gitattributes','lock','properties','gradle','cmake','dockerfile','makefile','editorconfig','eslintrc','prettierrc','babelrc','npmrc','tsconfig','jsconfig','htaccess','svg','map','patch','diff','ipynb'];
 var IMG_EXTS = ['png','jpg','jpeg','gif','webp','bmp','ico','avif','tif','tiff','heic'];
 var EXE_EXTS = ['exe','msi','com','bat','cmd','lnk','scr','appx','msix','pif','cpl'];
-function isTextLike(p) { return TEXT_EXTS.indexOf(extOf(p)) >= 0; }
+function isTextLike(p) {
+  // 凭据文件不提供文本动作（yaml 在白名单内，特判避免经 content/菜单复制泄出）
+  var base = String(p).replace(/^.*[\/]/, '').toLowerCase();
+  if (base.indexOf('.credentials') === 0) { return false; }
+  return TEXT_EXTS.indexOf(extOf(p)) >= 0;
+}
 function isImageLike(p) { return IMG_EXTS.indexOf(extOf(p)) >= 0; }
 function isExeLike(p) { return EXE_EXTS.indexOf(extOf(p)) >= 0; }
 

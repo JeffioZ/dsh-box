@@ -36,6 +36,67 @@ struct ImportedProvider {
     models: Vec<serde::de::IgnoredAny>,
 }
 
+/// 密钥样字段名集合（小写、去 -/_ 归一）。凭据只允许经 `apiKeyEnv` 引用
+/// 写入 `.credentials.yaml`——settings 与分享文本不应出现内联密钥，
+/// 导入侧遇到即报错（此前会随原文直写 settings）。
+fn secret_like_field(key: &str) -> bool {
+    let normalized: String = key
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "apikey"
+            | "apisecret"
+            | "key"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "bearertoken"
+            | "secret"
+            | "clientsecret"
+            | "password"
+            | "passwd"
+    )
+}
+
+/// 扫描文本中的密钥样字段行，返回首个命中的字段名（导入拒绝用）。
+pub(super) fn find_secret_field(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let Some((key, _)) = trimmed.split_once(':') else {
+            continue;
+        };
+        // 跳过注释与路由键（缩进层级不区分：providers 内任意深度的
+        // 密钥样键都算命中；顶层段键 llm-pi-ai 不在集合内）
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if secret_like_field(key.trim()) {
+            return Some(key.trim().to_string());
+        }
+    }
+    None
+}
+
+/// 剔除密钥样字段行（导出脱敏用：分享文本绝不携带明文凭据）。
+pub(super) fn strip_secret_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let is_secret = !trimmed.starts_with('#')
+            && trimmed
+                .split_once(':')
+                .is_some_and(|(key, _)| secret_like_field(key.trim()));
+        if !is_secret {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// 用完整 YAML 解析器校验语义，再投影成预览所需的最小类型。写盘仍保留用户
 /// 原文，避免序列化过程改写注释、字段顺序或上游扩展字段。
 pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
@@ -49,6 +110,16 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
             "The model configuration exceeds the 1 MB limit.",
         )
         .into());
+    }
+    if let Some(field) = find_secret_field(yaml) {
+        return Err(crate::locale::owned(
+            format!(
+                "配置包含内联密钥字段 {field}：请删除该字段，改用 apiKeyEnv 引用并在导入时单独填写密钥（settings 与分享文本不保存明文密钥）。"
+            ),
+            format!(
+                "The configuration contains an inline secret field {field}: remove it and use an apiKeyEnv reference instead, providing the key separately during import (settings and shared text never store plaintext secrets)."
+            ),
+        ));
     }
     let document: ImportedDocument = serde_saphyr::from_str(yaml).map_err(|error| {
         crate::locale::owned(

@@ -40,7 +40,31 @@ pub(crate) fn update_text_file(
             }
             Err(e) => return Err(e.to_string()),
         };
-        let next = transform(text)?;
+        let next = transform(text.clone())?;
+        // 跨进程丢更新窗口：读—变换期间 dsh（settings 文件监视器/热发布）
+        // 可能已写入新内容，直接替换会整文件覆盖掉那次写入。替换前重读
+        // 比对，变化则丢弃本次结果、重读重跑 transform。窗口由此收窄到
+        // 重读与原子替换之间的毫秒级；彻底消除需要 dsh 配合的锁协议。
+        let reread = match std::fs::read_to_string(path) {
+            Ok(current) => current,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) if retryable_io(&e) && attempt < MAX_WRITE_RETRIES => {
+                std::thread::sleep(WRITE_RETRY_DELAY);
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        if reread != text {
+            if attempt >= MAX_WRITE_RETRIES {
+                return Err(crate::locale::owned(
+                    "目标文件在写入期间被其他进程反复修改，已放弃本次变更。".to_string(),
+                    "The target file kept changing during the write; the change was abandoned."
+                        .to_string(),
+                ));
+            }
+            crate::logging::log("managed-file: 写入期间目标文件被外部修改，重读后重试");
+            continue;
+        }
         // 替换阶段（含临时文件创建/写/ReplaceFileW）的瞬时冲突由
         // atomic_write_unlocked 内部按白名单重试；这里不再盲目整轮重试，
         // 避免把非瞬时替换错误也重复 transform 多次。
@@ -282,6 +306,54 @@ mod tests {
         // 注意不能在 Linux 上断言 from_raw_os_error(1)：EPERM 映射
         // PermissionDenied 会被判定为可重试（重试合理），此处不断言。
         assert!(!retryable_io(&std::io::Error::from_raw_os_error(2)));
+    }
+
+    #[test]
+    fn update_text_file_retries_when_external_write_lands_during_transform() {
+        // 模拟 dsh 在本壳"读—变换"期间写入：transform 闭包首轮改写目标
+        // 文件，替换前重读发现内容变化 → 丢弃旧结果重跑；最终两边的
+        // 变更都在（外部写入不被整文件覆盖）。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-mf-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.txt");
+        std::fs::write(
+            &path, "base: 1
+",
+        )
+        .unwrap();
+        let mut externally_touched = false;
+        update_text_file(&path, |text| {
+            if !externally_touched {
+                externally_touched = true;
+                std::fs::write(
+                    &path,
+                    "external: true
+",
+                )
+                .unwrap();
+            }
+            Ok(text
+                + "mine: true
+")
+        })
+        .unwrap();
+        let final_text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            final_text.contains("external: true"),
+            "unexpected: {final_text}"
+        );
+        assert!(
+            final_text.contains("mine: true"),
+            "unexpected: {final_text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -146,7 +146,8 @@ pub fn export_yaml(config: &Config) -> Result<Option<String>, String> {
     if custom_only.trim().is_empty() {
         return Ok(None);
     }
-    Ok(Some(custom_only))
+    // 脱敏：分享文本绝不携带密钥样字段（与前端"不含 API Key"提示一致）
+    Ok(Some(parser::strip_secret_lines(&custom_only)))
 }
 
 /// 从 settings.yaml 文本中提取 llm-pi-ai 顶层段（纯逻辑，供单测）。
@@ -513,6 +514,45 @@ llm-pi-ai:
             providers[0].api_key_env.as_deref(),
             Some("CORP_GATEWAY_KEY")
         );
+    }
+
+    #[test]
+    fn import_rejects_inline_secret_fields() {
+        let text = "llm-pi-ai:
+  providers:
+    gw:
+      apiKey: sk-12345
+      models:
+        - id: x
+";
+        let err = parse_providers(text).unwrap_err();
+        assert!(err.contains("apiKey"), "unexpected: {err}");
+        // apiKeyEnv 引用不受影响
+        let ok = "llm-pi-ai:
+  providers:
+    gw:
+      apiKeyEnv: K
+      models:
+        - id: x
+";
+        assert!(parse_providers(ok).is_ok());
+    }
+
+    #[test]
+    fn export_strips_secret_lines() {
+        let section = "llm-pi-ai:
+  providers:
+    acme-gw:
+      apiKey: sk-1
+      api_key: sk-2
+      Bearer-Token: t
+      displayName: Acme
+      models:
+        - id: x
+";
+        let out = parser::strip_secret_lines(section);
+        assert!(!out.contains("sk-1") && !out.contains("sk-2") && !out.contains("Bearer"));
+        assert!(out.contains("displayName: Acme") && out.contains("id: x"));
     }
 
     #[test]

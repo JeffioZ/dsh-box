@@ -145,11 +145,22 @@ pub(crate) fn handle_dshd_scheme(
                 }
             }
         }
-        // 复制文件内容：读文本（限 2MB、拒绝二进制/非 UTF-8）
+        // 复制文件内容：读文本（限 2MB、拒绝二进制/非 UTF-8，且仅限
+        // content_ext_allowed 白名单内的文本类目标）
         ("content", Some(p)) if file_actions::is_absolute(p) => {
-            match file_actions::read_text_file(std::path::Path::new(p), 2 * 1024 * 1024) {
-                Ok(text) => respond(200, "text/plain; charset=utf-8", text.into_bytes()),
-                Err(_) => respond(415, "", Vec::new()),
+            let path = std::path::Path::new(p);
+            let name_ok = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(content_ext_allowed);
+            if !name_ok {
+                logging::log(&format!("dshd: content 拒绝非白名单扩展名 {p}"));
+                respond(415, "", Vec::new())
+            } else {
+                match file_actions::read_text_file(path, 2 * 1024 * 1024) {
+                    Ok(text) => respond(200, "text/plain; charset=utf-8", text.into_bytes()),
+                    Err(_) => respond(415, "", Vec::new()),
+                }
             }
         }
         // 在默认浏览器打开链接（仅 http/https）
@@ -319,6 +330,118 @@ fn scheme_response(
         .unwrap_or_else(|_| http::Response::new(Vec::new()))
 }
 
+/// `content` 动作的扩展名/文件名白名单：与 `resources/injections/
+/// context-menu.js` 的 TEXT_EXTS 对齐（上游清单变更需同步两处）。
+/// 令牌防线失守时（dsh 页同源脚本可截获 X-DSHd-Token 读取任意 ≤2MB
+/// 文本），这是本地文件读取面的最后收窄——非文本目标一律 415。
+const CONTENT_EXTS: &[&str] = &[
+    "txt",
+    "md",
+    "markdown",
+    "json",
+    "jsonc",
+    "js",
+    "mjs",
+    "cjs",
+    "ts",
+    "tsx",
+    "jsx",
+    "py",
+    "rb",
+    "rs",
+    "go",
+    "java",
+    "c",
+    "h",
+    "cpp",
+    "hpp",
+    "cc",
+    "hh",
+    "cs",
+    "css",
+    "scss",
+    "less",
+    "sass",
+    "html",
+    "htm",
+    "xml",
+    "yml",
+    "yaml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "cnf",
+    "sh",
+    "bash",
+    "zsh",
+    "bat",
+    "ps1",
+    "psm1",
+    "sql",
+    "log",
+    "csv",
+    "tsv",
+    "vue",
+    "svelte",
+    "m",
+    "mm",
+    "swift",
+    "kt",
+    "kts",
+    "php",
+    "lua",
+    "r",
+    "pl",
+    "pm",
+    "tex",
+    "sty",
+    "bib",
+    "env",
+    "gitignore",
+    "gitattributes",
+    "lock",
+    "properties",
+    "gradle",
+    "cmake",
+    "dockerfile",
+    "makefile",
+    "editorconfig",
+    "eslintrc",
+    "prettierrc",
+    "babelrc",
+    "npmrc",
+    "tsconfig",
+    "jsconfig",
+    "htaccess",
+    "svg",
+    "map",
+    "patch",
+    "diff",
+    "ipynb",
+];
+
+/// content 白名单判定（纯逻辑，供单测）：扩展名命中，或无扩展名时按
+/// 整个文件名（点文件/dockerfile 等）命中；全部小写比较。
+fn content_ext_allowed(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    // 凭据文件无论扩展名如何都拒绝：yaml 在白名单内，.credentials.yaml
+    // 不做特判就会经 content 泄出
+    if lowered.starts_with(".credentials") {
+        return false;
+    }
+    match std::path::Path::new(&lowered)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        Some(ext) => CONTENT_EXTS.contains(&ext),
+        None => {
+            let stem = lowered.trim_start_matches('.');
+            CONTENT_EXTS.contains(&stem)
+        }
+    }
+}
+
 /// 实际请求授权：主 WebView + 当前页面停在 dsh 来源 + 令牌头精确匹配。
 /// 注入端与 Rust 同版本发布，不保留 ?token= URL 旧形式的兼容读取。
 fn authorized(label: &str, current_is_dsh: bool, token: Option<&str>, expected: &str) -> bool {
@@ -351,6 +474,27 @@ fn preflight_response(origin: Option<&str>, allowed_origin: &str) -> http::Respo
 
 #[cfg(test)]
 mod tests {
+    use super::content_ext_allowed;
+
+    #[test]
+    fn content_whitelist_accepts_text_targets_only() {
+        // 常规扩展名（含大写）与路径形式
+        assert!(content_ext_allowed("notes.md"));
+        assert!(content_ext_allowed(r"C:	mp\config.JSON"));
+        assert!(content_ext_allowed("/home/u/main.rs"));
+        // 无扩展名：按文件名匹配点文件/约定名
+        assert!(content_ext_allowed(".gitignore"));
+        assert!(content_ext_allowed("Dockerfile"));
+        // 非文本目标一律拒绝：凭据、二进制、可执行、无扩展普通名
+        assert!(!content_ext_allowed(".credentials.yaml"));
+        assert!(!content_ext_allowed(".Credentials"));
+        assert!(!content_ext_allowed("id_rsa"));
+        assert!(!content_ext_allowed("app.exe"));
+        assert!(!content_ext_allowed("photo.png"));
+        assert!(!content_ext_allowed("data.db"));
+        assert!(!content_ext_allowed("README"));
+    }
+
     use super::*;
 
     const DSH_ORIGIN: &str = "http://127.0.0.1:3080";
