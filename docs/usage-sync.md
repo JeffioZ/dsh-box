@@ -21,7 +21,7 @@
 | `src-tauri/src/usage/balance.rs` | `lib/balance.js` + `lib/accounts.js` 契约（含 OrcaRouter / New API / Sub2API 适配器） | 适配器契约参考，结构重写 |
 | `src-tauri/src/usage/subscriptions.rs` | `lib/subscriptions.js`（五适配器 + v0.3.1 的区域主机/端点回退/裸 key 鉴权） | 解析逻辑参考 |
 | `src-tauri/src/net_guard.rs`（`guard_https_or_lan_http` / `read_json_capped`） | `lib/network.js` + `lib/accounts.js` 传输层 | 同一口径（https 任意主机 / http 仅私网放行、1 MiB 响应上限）；状态栏余额与用量账户共用 |
-| `src-tauri/src/usage/cache.rs` | `lib/index.js` 缓存段 | 同概念；文件名与版本号有意独立（当前 v4，含成本账） |
+| `src-tauri/src/usage/cache.rs` | `lib/index.js` 缓存段 | 同概念；文件名与版本号有意独立（当前 v5，含成本账与字节偏移增量折叠游标） |
 | `src-tauri/src/usage/log.rs` | `scripts/verify-raw.mjs` | 同「直扫会话日志」思路 |
 | `ui/control-center.js` 用量页 | `lib/client.js` 面板结构 | 结构参照，视觉用本仓设计体系重写 |
 

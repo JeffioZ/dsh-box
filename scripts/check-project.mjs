@@ -35,7 +35,7 @@ const knownText = new Set([
   '', '.css', '.html', '.js', '.json', '.lock', '.md', '.mjs', '.ps1', '.rs',
   '.svg', '.toml', '.xml', '.yaml', '.yml',
 ]);
-const knownBinary = new Set(['.icns', '.ico', '.png']);
+const knownBinary = new Set(['.icns', '.ico', '.jpg', '.png']);
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
 
 for (const file of tracked) {

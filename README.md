@@ -1,15 +1,28 @@
 # DSHBox
 
-![CI](https://github.com/JeffioZ/dsh-box/actions/workflows/build.yml/badge.svg)
-![License](https://img.shields.io/github/license/JeffioZ/dsh-box)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4176e6)
+<p align="center">
+  <img src="assets/brand/deepseek-mark.svg" width="96" alt="DSHBox" />
+</p>
 
-[English](README.en.md) · [架构](docs/architecture.md) · [开发指南](docs/development.md) · [故障排查](docs/troubleshooting.md) · [安全模型](docs/security.md)
+<p align="center">
+  <img src="https://github.com/JeffioZ/dsh-box/actions/workflows/build.yml/badge.svg" alt="CI" />
+  <img src="https://img.shields.io/github/license/JeffioZ/dsh-box" alt="License" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4176e6" alt="Platforms" />
+</p>
+
+[English](README.en.md) · [为什么做 DSHBox](docs/why-desktop.md) · [架构](docs/architecture.md) · [开发指南](docs/development.md) · [故障排查](docs/troubleshooting.md) · [安全模型](docs/security.md)
 
 DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的跨平台桌面外壳，基于 Tauri v2、Rust 与原生 HTML/CSS/JavaScript。主界面直接加载官方 `dsh web`，外壳负责运行环境、窗口、托盘、更新与本地系统集成，不 fork 或 patch dsh。
 
 > [!IMPORTANT]
-> 仓库目前处于首个公开版本发布前。请从源码构建；后续 Release 产物仍将保持未签名，系统可能要求手动放行。详情见[安全模型](docs/security.md)。
+> 发布产物保持未签名，系统可能要求手动放行。详情见[安全模型](docs/security.md)。
+
+<p align="center">
+  <img src="assets/screenshots/main-window.jpg" width="840" alt="主窗口" />
+</p>
+<p align="center">
+  <img src="assets/screenshots/usage.jpg" width="840" alt="用量与余额" />
+</p>
 
 ## 快速开始
 
@@ -31,7 +44,7 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 |---|---|
 | 开箱即用 | 自动检测 Node.js、安装 dsh，并在 Windows 缺少 WebView2 时引导安装 |
 | 服务生命周期 | 系统分配端口回退、外部 dsh 安全接入、进程树清理、服务看门狗和页面心跳恢复 |
-| 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、深浅色和中英双语 |
+| 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、Windows 11 贴边布局浮层（Win10 自动回退）、深浅色和中英双语 |
 | 安全更新 | dsh/Node 事务化更新和中断恢复；Windows 应用附件按精确 tag 与 SHA-256 校验 |
 | 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
 | 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次内置插件可明确取消 |
@@ -51,7 +64,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 ## 安装与首次启动
 
-首个公开版本发布后，可从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应产物：
+从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应产物：
 
 - Windows：运行 `DSHBox.exe`。
 - macOS：把应用拖入 Applications。若 Gatekeeper 拦截，按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
@@ -68,6 +81,8 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 ## 配置与数据
 
+### 数据目录
+
 默认数据根目录：
 
 | 平台 | 路径 |
@@ -76,7 +91,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 | macOS | `~/Library/Application Support/com.deepseek.dsh-box` |
 | Linux | `$XDG_DATA_HOME/com.deepseek.dsh-box`，未设置时为 `~/.local/share/com.deepseek.dsh-box` |
 
-主要内容：
+### 目录内容
 
 - `config.json`：用户可理解的外壳设置。
 - `state.json`：窗口位置、首次引导和后台维护标记；不建议手工编辑。
@@ -84,6 +99,8 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 - `npm-cache/`、`pnpm-store/`：安装与插件维护共用的本地包缓存。
 - `logs/dshbox.log`：UTC 日志，超过 2 MiB 轮转为 `.old`。
 - `$DSH_HOME`：默认 `~/.dsh`，由官方 dsh 与 DSHBox 共享，不位于上述数据根目录。
+
+### config.json
 
 `config.json` 支持：
 
@@ -107,9 +124,15 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 
 `dsh_update_channel` 可取 `latest` 或风险更高的预览通道 `next`。`close_behavior` 可取 `tray` / `quit`，`launch_behavior` 可取 `window` / `tray`，`download_source` 可取 `auto` / `official` / `mirror`。`config.json` 与 `state.json` 职责严格分离，不读取旧文件中的跨界字段。
 
+### 端口策略
+
 `port` 是本地托管服务的首选端口，不是必须占用的固定端口。DSHBox 先尝试上次成功端口和该首选端口；均不可用时通过 `dsh web --port 0` 让操作系统一次分配可用端口，并把结果记入 `state.json`，不会顺序扫描大段端口。
 
+### 接入外部 dsh 服务
+
 启动时若在首选端口或 dsh 官方默认端口 `3080` 发现通过页面与 `host.describe` 双重校验的外部 dsh，DSHBox 会先询问是否连接并记住该服务指纹。首次运行时该选择优先于本地设置；选择外部服务会暂缓只适用于本地运行时的凭据与插件引导，日后首次改用本地服务时再补充显示。外部模式只负责显示与重连，不会停止、重启或更新该进程，也不会改写其凭据、模型或插件；服务消失时会明确报错，用户可重试或改用本地服务。
+
+### 环境变量
 
 环境变量优先于 `config.json`：
 
@@ -184,7 +207,7 @@ desktop/
 │     ├─ usage/                    # 用量与余额聚合、缓存与状态栏统计
 │     ├─ tray.rs / tray_menu.rs    # 系统托盘与托盘菜单窗口
 │     ├─ webview/                  # 导航边界、自定义协议与注入
-│     └─ platform/windows/         # Windows 专属 WebView2 预检
+│     └─ platform/windows/         # Windows 专属 WebView2 预检与贴边布局浮层
 ├─ scripts/                        # 一致性检查、图标、构建辅助
 └─ .github/workflows/              # 三平台 CI 与 tag 发布
 ```
