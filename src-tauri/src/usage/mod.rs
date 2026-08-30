@@ -10,6 +10,7 @@ mod cache;
 mod live;
 mod log;
 mod monitor;
+mod pricing;
 mod providers;
 mod subscriptions;
 
@@ -188,11 +189,15 @@ fn merge_days(
             .entry(day.clone())
             .or_insert_with(|| aggregate::DayEntry {
                 totals: Buckets::default(),
+                totals_cost: aggregate::CostAcc::default(),
                 models: std::collections::HashMap::new(),
             });
         t.totals.add_into(entry.totals);
-        for (model, b) in &entry.models {
-            t.models.entry(model.clone()).or_default().add_into(*b);
+        t.totals_cost.merge(entry.totals_cost);
+        for (model, me) in &entry.models {
+            let target_entry = t.models.entry(model.clone()).or_default();
+            target_entry.buckets.add_into(me.buckets);
+            target_entry.cost.merge(me.cost);
         }
     }
 }

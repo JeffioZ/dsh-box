@@ -9,12 +9,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::aggregate::{Buckets, CurrentRoute, FoldKind, FoldState};
+use super::aggregate::{Buckets, CostAcc, CurrentRoute, FoldKind, FoldState, ModelEntry};
 use crate::app_state::Config;
 
-// v3：FoldState 新增 kind 与 current_route（上游 v0.3）。旧版本缓存按现有
+// v4：DayEntry/ModelEntry 增加成本账（pricing 移植）。旧版本缓存按现有
 // 语义静默丢弃、全新重折，不做迁移。
-const CACHE_VERSION: u64 = 3;
+const CACHE_VERSION: u64 = 4;
 /// 缓存文件带 `dshbox-` 前缀：与参考项目 dsh-usage-stats（其缓存为
 /// `$DSH_HOME/storages/usage-stats-cache.json`）隔离，避免两个聚合器读写
 /// 同一文件互相覆盖（缓存结构版本不同，同名会互相重置）。
@@ -61,7 +61,45 @@ struct RouteOnDisk {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DayOnDisk {
     totals: BucketOnDisk,
-    models: HashMap<String, BucketOnDisk>,
+    /// 成本账（v4；缺省视为空账，兼容手写/半旧缓存）。
+    #[serde(default)]
+    cost: CostOnDisk,
+    models: HashMap<String, ModelOnDisk>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ModelOnDisk {
+    buckets: BucketOnDisk,
+    #[serde(default)]
+    cost: CostOnDisk,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+struct CostOnDisk {
+    usd: f64,
+    priced: u32,
+    incomplete: u32,
+}
+
+impl From<CostOnDisk> for CostAcc {
+    fn from(c: CostOnDisk) -> Self {
+        CostAcc {
+            usd: c.usd,
+            priced: c.priced,
+            incomplete: c.incomplete,
+        }
+    }
+}
+
+impl From<CostAcc> for CostOnDisk {
+    fn from(c: CostAcc) -> Self {
+        CostOnDisk {
+            usd: c.usd,
+            priced: c.priced,
+            incomplete: c.incomplete,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -79,6 +117,17 @@ struct SampleOnDisk {
     day: String,
     model: String,
     buckets: BucketOnDisk,
+    /// 样本成本回执（v4；替换去重时回退）。缺省 = 不计入（零值兼容）。
+    #[serde(default)]
+    cost: SampleCostOnDisk,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+struct SampleCostOnDisk {
+    usd: f64,
+    complete: bool,
+    counted: bool,
 }
 
 impl From<Buckets> for BucketOnDisk {
@@ -109,9 +158,17 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
         return HashMap::new();
     };
     let Ok(disk) = serde_json::from_str::<OnDisk>(&text) else {
+        // 损坏不阻断（全新重折即可），但留痕——用户报"用量从头算"时能对上时间
+        crate::logging::log("usage: 聚合缓存损坏，全新重折");
         return HashMap::new();
     };
     if disk.version != CACHE_VERSION {
+        // 版本升级（如 v3→v4 成本账）会静默丢弃全部会话进度做一次全量重折，
+        // 记一行解释"为什么这次报告变慢/成本从头累计"
+        crate::logging::log(&format!(
+            "usage: 聚合缓存版本 v{} ≠ v{CACHE_VERSION}，全新重折",
+            disk.version
+        ));
         return HashMap::new();
     }
     disk.sessions
@@ -128,10 +185,19 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
                                 day,
                                 super::aggregate::DayEntry {
                                     totals: d.totals.into(),
+                                    totals_cost: d.cost.into(),
                                     models: d
                                         .models
                                         .into_iter()
-                                        .map(|(m, b)| (m, b.into()))
+                                        .map(|(m, me)| {
+                                            (
+                                                m,
+                                                ModelEntry {
+                                                    buckets: me.buckets.into(),
+                                                    cost: me.cost.into(),
+                                                },
+                                            )
+                                        })
                                         .collect(),
                                 },
                             )
@@ -142,6 +208,11 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
                         day: x.day,
                         model: x.model,
                         buckets: x.buckets.into(),
+                        cost: super::pricing::SampleCost {
+                            usd: x.cost.usd,
+                            complete: x.cost.complete,
+                            counted: x.cost.counted,
+                        },
                     }),
                     current_model: s.current_model,
                     current_route: s.current_route.map(|r| CurrentRoute {
@@ -180,10 +251,19 @@ pub(crate) fn save(config: &Config, sessions: &HashMap<String, FoldState>) -> Re
                                     day.clone(),
                                     DayOnDisk {
                                         totals: d.totals.into(),
+                                        cost: d.totals_cost.into(),
                                         models: d
                                             .models
                                             .iter()
-                                            .map(|(m, b)| (m.clone(), (*b).into()))
+                                            .map(|(m, me)| {
+                                                (
+                                                    m.clone(),
+                                                    ModelOnDisk {
+                                                        buckets: me.buckets.into(),
+                                                        cost: me.cost.into(),
+                                                    },
+                                                )
+                                            })
                                             .collect(),
                                     },
                                 )
@@ -194,6 +274,11 @@ pub(crate) fn save(config: &Config, sessions: &HashMap<String, FoldState>) -> Re
                             day: x.day.clone(),
                             model: x.model.clone(),
                             buckets: x.buckets.into(),
+                            cost: SampleCostOnDisk {
+                                usd: x.cost.usd,
+                                complete: x.cost.complete,
+                                counted: x.cost.counted,
+                            },
                         }),
                         current_model: s.current_model.clone(),
                         current_route: s.current_route.as_ref().map(|r| RouteOnDisk {

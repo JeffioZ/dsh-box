@@ -442,41 +442,104 @@ fn read_tail_frame(session_id: &str, config: &Config) -> Option<String> {
     crate::session_log::read_tail_frame(&path).ok().flatten()
 }
 
-/// 从事件行文本计算最近窗口的实时速率（token 估算 = 字符数/4，
-/// 与 dsh-status-bar 的 live-rate 折叠同款启发式）。
+/// 从事件行文本计算最近窗口的实时速率（token 估算 = 字符数/4）。
+/// dsh 持久化日志有两种 delta 形态，两种都必须认：
+/// - 松散事件：`assistant/chunk` 且 `chunk.type` 为 `text-delta`/`reasoning-delta`
+///   （连续不足 3 个的 run 不打包，旧版本日志全部是这种）；
+/// - 打包行：`text-chunks`/`reasoning-chunks`（dsh ≥0.1.2 默认开启 delta 打包），
+///   成员 k 的时间 = `time0` + `dt` 前 k 个间隔（dsh 帧内 wall clock 可能倒退，
+///   间隔允许为负）。
+///
+/// `tool-call-*` 不计入（与 decode tps 的输出口径一致）。
 fn live_rate_from_lines(text: &str, now_ms: i64) -> Option<f64> {
     let window_start = now_ms - LIVE_RATE_WINDOW_MS;
     let mut tokens = 0u64;
     let mut first_ms: Option<i64> = None;
     let mut last_ms: Option<i64> = None;
+    fn push_sample(
+        ts: i64,
+        chars: u64,
+        window_start: i64,
+        now_ms: i64,
+        tokens: &mut u64,
+        first_ms: &mut Option<i64>,
+        last_ms: &mut Option<i64>,
+    ) {
+        if ts < window_start || ts > now_ms || chars == 0 {
+            return;
+        }
+        *tokens += chars.div_ceil(4);
+        *first_ms = Some(first_ms.map_or(ts, |f| f.min(ts)));
+        *last_ms = Some(ts);
+    }
     for line in text.lines() {
         let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if json.get("type").and_then(|v| v.as_str()) != Some("assistant/chunk") {
-            continue;
+        let kind = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match kind {
+            "assistant/chunk" => {
+                let Some(ts) = json.get("time").and_then(|v| v.as_i64()) else {
+                    continue;
+                };
+                let Some(chunk) = json.get("data").and_then(|data| data.get("chunk")) else {
+                    continue;
+                };
+                let chunk_kind = chunk.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if !matches!(chunk_kind, "text-delta" | "reasoning-delta") {
+                    continue;
+                }
+                let chars = chunk
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|t| t.chars().count() as u64)
+                    .unwrap_or(0);
+                push_sample(
+                    ts,
+                    chars,
+                    window_start,
+                    now_ms,
+                    &mut tokens,
+                    &mut first_ms,
+                    &mut last_ms,
+                );
+            }
+            "text-chunks" | "reasoning-chunks" => {
+                let Some(t0) = json.get("time0").and_then(|v| v.as_i64()) else {
+                    continue;
+                };
+                let Some(data) = json.get("data") else {
+                    continue;
+                };
+                let Some(texts) = data.get("texts").and_then(|v| v.as_array()) else {
+                    continue;
+                };
+                let gaps = data.get("dt").and_then(|v| v.as_array());
+                let mut ts = t0;
+                for (k, member) in texts.iter().enumerate() {
+                    if k > 0 {
+                        ts += gaps
+                            .and_then(|g| g.get(k - 1))
+                            .and_then(|g| g.as_i64())
+                            .unwrap_or(0);
+                    }
+                    let chars = member
+                        .as_str()
+                        .map(|t| t.chars().count() as u64)
+                        .unwrap_or(0);
+                    push_sample(
+                        ts,
+                        chars,
+                        window_start,
+                        now_ms,
+                        &mut tokens,
+                        &mut first_ms,
+                        &mut last_ms,
+                    );
+                }
+            }
+            _ => {}
         }
-        let Some(ts) = json.get("time").and_then(|v| v.as_i64()) else {
-            continue;
-        };
-        if ts < window_start || ts > now_ms {
-            continue;
-        }
-        let Some(chunk) = json.get("data").and_then(|data| data.get("chunk")) else {
-            continue;
-        };
-        let is_delta = chunk.get("type").and_then(|t| t.as_str()) == Some("delta");
-        let text_len = chunk
-            .get("text")
-            .and_then(|t| t.as_str())
-            .map(|t| t.chars().count() as u64)
-            .unwrap_or(0);
-        if !is_delta || text_len == 0 {
-            continue;
-        }
-        tokens += text_len.div_ceil(4);
-        first_ms = Some(first_ms.map_or(ts, |f| f.min(ts)));
-        last_ms = Some(ts);
     }
     let (first, last) = (first_ms?, last_ms?);
     // 时间跨度下限 500ms：极短窗口（单次 flush 突发）会虚高
@@ -527,7 +590,7 @@ mod tests {
         let now = 1_700_000_000_000i64;
         let line = |ts: i64, text: &str| {
             format!(
-                r#"{{"type":"assistant/chunk","time":{ts},"data":{{"turn":1,"step":1,"chunk":{{"type":"delta","text":"{text}"}}}}}}"#
+                r#"{{"type":"assistant/chunk","time":{ts},"data":{{"turn":1,"step":1,"chunk":{{"type":"text-delta","text":"{text}"}}}}}}"#
             )
         };
         let text = format!(
@@ -542,26 +605,82 @@ mod tests {
     }
 
     #[test]
+    fn live_rate_counts_reasoning_deltas() {
+        let now = 1_700_000_000_000i64;
+        let text = format!(
+            r#"{{"type":"assistant/chunk","time":{},"data":{{"chunk":{{"type":"reasoning-delta","text":"abcdefgh"}}}}}}"#,
+            now - 1000
+        );
+        let tps = live_rate_from_lines(&text, now).unwrap();
+        // 2 token / 500ms 下限 → 4 tok/s
+        assert!((tps - 4.0).abs() < 0.2, "tps={tps}");
+    }
+
+    #[test]
     fn live_rate_ignores_stale_and_non_delta_events() {
         let now = 1_700_000_000_000i64;
         let delta = |ts: i64, text: &str| {
             format!(
-                r#"{{"type":"assistant/chunk","time":{ts},"data":{{"turn":1,"step":1,"chunk":{{"type":"delta","text":"{text}"}}}}}}"#
+                r#"{{"type":"assistant/chunk","time":{ts},"data":{{"turn":1,"step":1,"chunk":{{"type":"text-delta","text":"{text}"}}}}}}"#
             )
         };
         let missing_data = format!(r#"{{"type":"assistant/chunk","time":{now}}}"#);
         let non_delta = format!(
             r#"{{"type":"assistant/chunk","time":{now},"data":{{"chunk":{{"type":"usage"}}}}}}"#
         );
+        let tool_delta = format!(
+            r#"{{"type":"assistant/chunk","time":{},"data":{{"chunk":{{"type":"tool-call-delta","argumentsDelta":"abcdefgh"}}}}}}"#,
+            now - 1000
+        );
         let text = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             delta(now - 10_000, "abcdefgh"), // 窗口外：忽略
             missing_data,                    // 合法事件但缺 data：跳过，不能中止整帧
-            non_delta,                       // 非 delta：忽略
+            non_delta,                       // usage 块：忽略
+            tool_delta,                      // 工具调用参数：不计入口径
             delta(now - 1000, "abcdefgh"),   // 窗口内：2 token
         );
         let tps = live_rate_from_lines(&text, now).unwrap();
         // span 下限 500ms，2 token → 4 tok/s
         assert!((tps - 4.0).abs() < 0.2, "tps={tps}");
+    }
+
+    #[test]
+    fn live_rate_unfolds_packed_chunk_rows() {
+        // 打包行：成员 k 的时间 = time0 + 前 k 个 dt 间隔；本行 7 成员各 8 字符
+        // （2 token），成员 0/1 在窗口外、其余 5 个在窗口内
+        let now = 1_700_000_000_000i64;
+        let t0 = now - 3500;
+        let packed = format!(
+            r#"{{"type":"reasoning-chunks","seq0":54,"time0":{t0},"data":{{"turn":5,"step":1,"index":0,"dt":[300,300,300,300,300,300],"texts":["abcdefgh","abcdefgh","abcdefgh","abcdefgh","abcdefgh","abcdefgh","abcdefgh"]}}}}"#
+        );
+        let loose = format!(
+            r#"{{"type":"assistant/chunk","time":{},"data":{{"chunk":{{"type":"text-delta","text":"abcdefgh"}}}}}}"#,
+            now - 500
+        );
+        let tool_packed = format!(
+            r#"{{"type":"tool-call-chunks","seq0":70,"time0":{},"data":{{"turn":5,"step":1,"index":1,"dt":[],"args":["abcdefgh","abcdefgh","abcdefgh"]}}}}"#,
+            now - 1000
+        );
+        let text = format!("{packed}\n{loose}\n{tool_packed}");
+        // 窗口内：打包行成员 2..=6（t0+600 起）共 5×2 token + 松散 2 token = 12 token；
+        // first = t0+600 = now-2900，last = now-500，span=2400ms → 5 tok/s
+        let tps = live_rate_from_lines(&text, now).unwrap();
+        assert!((tps - 5.0).abs() < 0.2, "tps={tps}");
+    }
+
+    #[test]
+    fn live_rate_packed_row_negative_gap_keeps_member_times() {
+        // dsh 允许帧内 wall clock 倒退（负间隔）：成员时间不得被钳成单调递增，
+        // 窗口过滤按各成员真实时间判定（成员 1 因负间隔落到窗口外）
+        let now = 1_700_000_000_000i64;
+        let t0 = now - 1200;
+        let packed = format!(
+            r#"{{"type":"text-chunks","seq0":1,"time0":{t0},"data":{{"dt":[-2500,2500],"texts":["abcdefgh","abcdefgh","abcdefgh"]}}}}"#
+        );
+        // 成员时间：now-1200（窗内）、now-3700（窗外）、now-1200（窗内）→ 4 token；
+        // first == last，span 取 500ms 下限 → 8 tok/s（若负间隔被钳为 0 则会算出 12）
+        let tps = live_rate_from_lines(&packed, now).unwrap();
+        assert!((tps - 8.0).abs() < 0.2, "tps={tps}");
     }
 }

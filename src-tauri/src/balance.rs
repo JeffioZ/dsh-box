@@ -297,40 +297,23 @@ async fn run_balance_query(app: AppHandle) -> BalancePayload {
         })
 }
 
-/// 校验并构造余额查询 URL：仅 http/https、不得携带 userinfo；https 任意主机，
-/// http 仅放行回环/私有地址（允许用户自托管局域网网关，防止误配 http 公网
-/// 地址导致 API Key 明文外泄）。判定与 usage/balance.rs 的 guard_url 保持同一
-/// 口径（其模块不对外导出，无法直接复用；改动时两处需同步）。
+/// 校验并构造余额查询 URL：委托 `net_guard::guard_https_or_lan_http`——
+/// 与 usage/balance.rs 的 guard_url 现在真正共用同一实现（历史上两处
+/// 各写一份且口径漂移过，已收敛到 net_guard 单一定义点）。
 fn guarded_balance_url(api_base: &str) -> Result<String, BalanceError> {
-    fn invalid(api_base: &str) -> BalanceError {
-        BalanceError::Other(format!(
-            "{}: {api_base}",
-            crate::locale::text(
-                "API 地址无效（仅支持 https，或 http 的回环/局域网地址）",
-                "Invalid API base URL (only HTTPS, or HTTP to a loopback/private address, is allowed)"
-            )
-        ))
-    }
-    let combined = format!("{}/user/balance", api_base.trim_end_matches('/'));
-    let url = url::Url::parse(&combined).map_err(|_| invalid(api_base))?;
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(invalid(api_base));
-    }
-    match url.scheme() {
-        "https" => Ok(url.to_string()),
-        "http" => {
-            let host = url.host_str().ok_or_else(|| invalid(api_base))?;
-            if hostname_is_private(host) {
-                Ok(url.to_string())
-            } else {
-                Err(invalid(api_base))
-            }
-        }
-        _ => Err(invalid(api_base)),
-    }
+    crate::net_guard::guard_https_or_lan_http(api_base, "/user/balance")
+        .map_err(|_| invalid_balance_url(api_base))
 }
 
-use crate::net_guard::hostname_is_private;
+fn invalid_balance_url(api_base: &str) -> BalanceError {
+    BalanceError::Other(format!(
+        "{}: {api_base}",
+        crate::locale::text(
+            "API 地址无效（仅支持 https，或 http 的回环/局域网地址）",
+            "Invalid API base URL (only HTTPS, or HTTP to a loopback/private address, is allowed)"
+        )
+    ))
+}
 
 /// 金额字符串解析为 f64（空串/非数值/非有限值一律 None，不向客户端
 /// 吐 NaN/Infinity——serde_json 无法序列化非有限浮点）。
@@ -360,7 +343,13 @@ fn query(config: &Config) -> Result<BalancePayload, BalanceError> {
                 ))
             }
         })?;
-    let raw: RawBalance = resp.into_body().read_json().map_err(|e| {
+    let value = crate::net_guard::read_json_capped(resp.into_body()).map_err(|e| {
+        BalanceError::Other(format!(
+            "{}: {e}",
+            crate::locale::text("解析余额响应失败", "Failed to parse the balance response")
+        ))
+    })?;
+    let raw: RawBalance = serde_json::from_value(value).map_err(|e| {
         BalanceError::Other(format!(
             "{}: {e}",
             crate::locale::text("解析余额响应失败", "Failed to parse the balance response")
