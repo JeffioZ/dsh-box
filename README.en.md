@@ -18,7 +18,7 @@ DSHBox (`dsh-box`) is a cross-platform desktop shell for [DeepSeek Harness](http
 > Release artifacts remain unsigned; the operating system may ask for manual approval. See the [security model](docs/security.md) for details.
 
 <p align="center">
-  <img src="assets/screenshots/main-window.jpg" width="840" alt="Main window" />
+  <img src="assets/screenshots/main-window.png" width="840" alt="Main window" />
 </p>
 
 ## Quick start

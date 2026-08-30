@@ -18,7 +18,7 @@ DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-a
 > 发布产物保持未签名，系统可能要求手动放行。详情见[安全模型](docs/security.md)。
 
 <p align="center">
-  <img src="assets/screenshots/main-window.jpg" width="840" alt="主窗口" />
+  <img src="assets/screenshots/main-window.png" width="840" alt="主窗口" />
 </p>
 
 ## 快速开始
