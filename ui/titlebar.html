@@ -59,7 +59,7 @@ body.window-inactive .tb-btn { color: #5b5c66; }
 }
 #main-menu-list { display: flex; flex-direction: column; }
 
-/* ---------- 窗口控制按钮（Windows 用 Fluent 系统字体，Linux 用 CSS 图形回退） ---------- */
+/* ---------- 窗口控制按钮（自绘 SVG 描边图标，三平台同款，不依赖系统字体） ---------- */
 /* 抵消标题栏父级 8px gap，使主菜单与三个窗口按钮形成连续按钮组。 */
 .win-buttons { display: flex; height: 100%; margin-left: -8px; }
 .tb-btn {
@@ -83,48 +83,12 @@ body.hover-suspended .tb-btn.close:hover {
 .tb-btn:disabled { opacity: .55; cursor: default; }
 .tb-btn:disabled:hover,
 .tb-btn.close:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
-.tb-glyph {
-  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
-  font-size: 10px; line-height: 1; -webkit-font-smoothing: antialiased;
+.tb-icon {
+  display: block; width: 12px; height: 12px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-.menu-glyph {
-  position: relative; width: 14px; height: 1px; border-radius: 1px;
-  background: currentColor;
-}
-.menu-glyph::before, .menu-glyph::after {
-  content: ""; position: absolute; left: 0; width: 14px; height: 1px;
-  border-radius: 1px; background: currentColor;
-}
-.menu-glyph::before { top: -4px; }
-.menu-glyph::after { top: 4px; }
-.css-glyph { display: none; position: relative; width: 11px; height: 11px; }
-body.linux .win-buttons .tb-glyph { display: none; }
-.css-min::after {
-  content: ""; position: absolute; left: 1px; right: 1px; top: 5px;
-  height: 1px; background: currentColor;
-}
-.css-max { border: 1px solid currentColor; }
-.css-restore::before, .css-restore::after {
-  content: ""; position: absolute; width: 8px; height: 8px;
-  border: 1px solid currentColor; box-sizing: border-box;
-}
-.css-restore::before { left: 0; top: 3px; }
-.css-restore::after { left: 3px; top: 0; background: inherit; }
-.css-close::before, .css-close::after {
-  content: ""; position: absolute; left: 5px; top: 0; width: 1px; height: 12px;
-  background: currentColor;
-}
-.css-close::before { transform: rotate(45deg); }
-.css-close::after { transform: rotate(-45deg); }
-.tb-btn .tb-glyph.ic-restore { display: none; }
-.tb-btn.maximized .tb-glyph.ic-max { display: none; }
-.tb-btn.maximized .tb-glyph.ic-restore { display: inline; }
-body.linux .win-buttons .css-min,
-body.linux .win-buttons .css-close,
-body.linux .win-buttons .css-max { display: block; }
-body.linux .win-buttons .css-restore { display: none; }
-body.linux .win-buttons .tb-btn.maximized .css-max { display: none; }
-body.linux .win-buttons .tb-btn.maximized .css-restore { display: block; }
+.tb-icon.menu-icon { width: 16px; height: 16px; }
 
 /* macOS：系统红绿灯悬浮于左侧，标题栏内容让位 */
 body.macos .titlebar { padding-left: 82px; }
@@ -153,27 +117,22 @@ body.macos .titlebar { padding-left: 82px; }
     <div class="drag-space" data-tauri-drag-region></div>
     <div id="main-menu-wrap" class="main-menu-wrap">
       <button type="button" id="btn-menu" class="tb-btn menu" data-i18n-title="mainMenu" data-i18n-aria-label="mainMenu" aria-expanded="false" aria-controls="main-menu-panel">
-        <span class="menu-glyph" aria-hidden="true"></span>
+        <svg class="tb-icon menu-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9L12 15L18 9"></path></svg>
       </button>
       <div id="main-menu-panel" class="main-menu-panel dshd-menu-surface dshd-menu-motion" aria-hidden="true" inert>
         <div id="main-menu-list" role="menu" data-i18n-aria-label="mainMenu"></div>
       </div>
     </div>
     <div id="win-buttons" class="win-buttons hidden">
-      <!-- Windows 使用 Segoe Fluent Icons；Linux 缺少该字体时切到 CSS 图形。 -->
+      <!-- 自绘 SVG 描边图标：三平台同款，不依赖系统字体（最大化态由 JS 换还原图标） -->
       <button type="button" id="btn-min" class="tb-btn" data-i18n-title="minimize" data-i18n-aria-label="minimize">
-        <span class="tb-glyph" aria-hidden="true">&#xE921;</span>
-        <span class="css-glyph css-min" aria-hidden="true"></span>
+        <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"></path></svg>
       </button>
       <button type="button" id="btn-max" class="tb-btn" data-i18n-title="maximize" data-i18n-aria-label="maximize">
-        <span class="tb-glyph ic-max" aria-hidden="true">&#xE922;</span>
-        <span class="tb-glyph ic-restore" aria-hidden="true">&#xE923;</span>
-        <span class="css-glyph css-max ic-max" aria-hidden="true"></span>
-        <span class="css-glyph css-restore ic-restore" aria-hidden="true"></span>
+        <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5h14v14H5Z"></path></svg>
       </button>
       <button type="button" id="btn-close" class="tb-btn close" data-i18n-title="closeToTray" data-i18n-aria-label="closeToTray">
-        <span class="tb-glyph" aria-hidden="true">&#xE8BB;</span>
-        <span class="css-glyph css-close" aria-hidden="true"></span>
+        <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12 M18 6L6 18"></path></svg>
       </button>
     </div>
   </div>

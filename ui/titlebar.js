@@ -9,6 +9,10 @@ let mainMenu = null;
 let mainMenuMotion = null;
 let mainMenuRequest = 0;
 let mainMenuSelectionPending = false;
+// 图标 morph 句柄（init 时绑定）：主菜单下箭头⇄上箭头（展开/收起语义）。
+// 窗控三键不做动画——最小化/关闭点击后窗口即刻消失、最大化被窗口过渡
+// 占据注意力，形变不可见
+let setMenuGlyph = null;
 let closeBehavior = 'tray';
 let hoverSuspendPoint = null;
 let lastPointerPoint = null;
@@ -51,11 +55,7 @@ function initPlatform() {
     : (navigator.platform || '');
   const isMac = platform.toLowerCase().includes('mac') || navigator.userAgent.includes('Macintosh');
   if (isMac) document.body.classList.add('macos');
-  else {
-    const isWindows = platform.toLowerCase().includes('win') || navigator.userAgent.includes('Windows');
-    document.body.classList.add(isWindows ? 'windows' : 'linux');
-    $('win-buttons').classList.remove('hidden');
-  }
+  else $('win-buttons').classList.remove('hidden');
 }
 
 // 浮层高度按内容实测（+36px 标题栏 + 48px shadow-lv3 底部余量）：
@@ -80,6 +80,7 @@ function setMainMenuOpen(open, focusMenu = false) {
   mainMenuOpen = Boolean(open);
   if (!mainMenuOpen) mainMenuSelectionPending = false;
   $('main-menu-wrap').classList.toggle('open', mainMenuOpen);
+  if (setMenuGlyph) setMenuGlyph(mainMenuOpen ? DSHD_ICON_PATHS.menuArrowUp : DSHD_ICON_PATHS.menuArrowDown);
   $('btn-menu').setAttribute('aria-expanded', String(mainMenuOpen));
   $('main-menu-panel').setAttribute('aria-hidden', String(!mainMenuOpen));
   $('main-menu-panel').inert = !mainMenuOpen;
@@ -174,6 +175,8 @@ function applyMaxState(maximized) {
   $('btn-max').classList.toggle('maximized', maximized);
   $('btn-max').title = dshdT(maximized ? 'restore' : 'maximize');
   $('btn-max').setAttribute('aria-label', dshdT(maximized ? 'restoreWindow' : 'maximize'));
+  const glyph = $('btn-max').querySelector('path');
+  if (glyph) glyph.setAttribute('d', maximized ? DSHD_ICON_PATHS.winRestore : DSHD_ICON_PATHS.winMax);
 }
 
 async function refreshMaxState() {
@@ -187,6 +190,7 @@ async function refreshMaxState() {
 async function init() {
   dshdApplyI18n();
   initPlatform();
+  setMenuGlyph = dshdMorphIcon($('btn-menu').querySelector('path'));
   bindMainMenu();
   bindWindowControls();
 

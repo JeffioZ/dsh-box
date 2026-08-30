@@ -120,6 +120,16 @@ const DSHD_ICON_PATHS = {
   info: '<circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path>',
   clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
   chevronDown: '<path d="m6 9 6 6 6-6"></path>',
+  // —— morph 图标对（同 24×24 网格、描边式，经 morphicons 弹簧变形）——
+  // 注意：这里必须是裸 d 字符串（morphTo 的解析输入），与上方给 dshdIcon 用的
+  // 完整 <path> 标签条目（如 chevronDown）不可混用；键名故意的区分开
+  winMax: 'M5 5h14v14H5Z',
+  winRestore: 'M5 9h10v10H5Z M9 9V5h10v10h-4',
+  menuArrowDown: 'M6 9L12 15L18 9',
+  menuArrowUp: 'M6 15L12 9L18 15',
+  // 密码可见性：眼睛 ⇄ 眼睛斜杠（瞳孔圆转 path 子路径以便整对变形）
+  eyeShow: 'M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z M14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0Z',
+  eyeHide: 'M3 3l18 18 M10.6 5.7A10.8 10.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.2 3.1 M6.2 6.3A16.7 16.7 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.4 10.4 0 0 0 4-.8 M10.2 10.2a2.5 2.5 0 0 0 3.6 3.6',
 };
 
 /**
@@ -163,20 +173,61 @@ function dshdIcon(name, attrs) {
   watch();
 })();
 
-const DSHD_PASSWORD_ICONS = {
-  show: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>',
-  hide: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 5.7A10.8 10.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.2 3.1"></path><path d="M6.2 6.3A16.7 16.7 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.4 10.4 0 0 0 4-.8"></path><path d="M10.2 10.2a2.5 2.5 0 0 0 3.6 3.6"></path></svg>',
-};
+// —— 图标 morph（vendored morphicons，见 ui/vendor/morphicons/README.md）——
+// 模块懒加载：未就绪、加载失败或身处无动态 import 的环境（vm 检查等）时，
+// 调用方拿到的 setD 退化为直接替换 path 的 d，交互不因动画缺失而降级。
+let dshdMorphCreate = null;
+let dshdMorphLoading = null;
+function dshdEnsureMorph() {
+  if (dshdMorphLoading) return dshdMorphLoading;
+  try {
+    dshdMorphLoading = import('vendor/morphicons/dom.js')
+      .then((mod) => { dshdMorphCreate = mod.createMorph; })
+      .catch(() => {});
+  } catch (e) {
+    dshdMorphLoading = Promise.resolve();
+  }
+  return dshdMorphLoading;
+}
+
+/**
+ * 把单个 <path> 绑定为可变形图标，返回 setD(d)。morph 就绪后带弹簧动画切换，
+ * 否则直接换 d。reducedMotion 固定 'user'：跟随系统减弱动效偏好（本仓库
+ * 强制约定；该库默认不尊重系统设置）。描边/网格要求见 vendor README。
+ */
+function dshdMorphIcon(pathEl) {
+  let handle = null;
+  let currentD = pathEl.getAttribute('d') || '';
+  dshdEnsureMorph().then(() => {
+    if (!dshdMorphCreate || !pathEl.isConnected) return;
+    handle = dshdMorphCreate(pathEl, currentD, { reducedMotion: 'user' });
+  });
+  return (nextD) => {
+    currentD = nextD;
+    if (handle) handle.morphTo(nextD);
+    else pathEl.setAttribute('d', nextD);
+  };
+}
 
 /** API Key 等密码输入框共用的可见性按钮、焦点保持与空值状态。 */
 function dshdBindPasswordToggle(input, toggle) {
   if (!input || !toggle) return;
+  let setGlyph = null;
+  const ensureGlyph = () => {
+    // 首次渲染眼睛图标（单 path，后续经 morph 变形切换）
+    if (toggle.firstElementChild) return;
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="'
+      + DSHD_ICON_PATHS.eyeShow + '"></path></svg>';
+    const pathEl = toggle.querySelector('path');
+    if (pathEl) setGlyph = dshdMorphIcon(pathEl);
+  };
   const sync = () => {
     const hasValue = String(input.value || '').length > 0;
     if (!hasValue && input.type === 'text') input.type = 'password';
     const visible = input.type === 'text';
     const label = dshdT(visible ? 'settingsApiKeyHideAria' : 'settingsApiKeyShowAria');
-    toggle.innerHTML = DSHD_PASSWORD_ICONS[visible ? 'hide' : 'show'];
+    ensureGlyph();
+    if (setGlyph) setGlyph(visible ? DSHD_ICON_PATHS.eyeHide : DSHD_ICON_PATHS.eyeShow);
     toggle.hidden = !hasValue;
     toggle.setAttribute('aria-label', label);
     toggle.title = label;
