@@ -296,7 +296,7 @@
   .dshd-row, .dshd-btn, .dshd-x, .dshd-input { transition: none; }
 }
 
-.dshd-sep { height: 1px; margin: 4px 2px; background: var(--dshd-border); }
+.dshd-sep { height: var(--dshd-hair, 1px); margin: 4px 2px; background: var(--dshd-border); }
 
 /* 跨页面共享：显隐工具类与加载旋转关键帧（此前各页面各自重复定义） */
 .hidden { display: none !important; }

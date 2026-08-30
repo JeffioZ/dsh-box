@@ -46,23 +46,107 @@ function meaningfulAccounts(accounts, subs) {
   return out;
 }
 
-// 用量导出：保存对话框由后端弹出；进行中禁用全部导出按钮防重复触发
-async function exportUsage(kind, btn) {
-  const all = document.querySelectorAll('.usage-export-btn');
-  all.forEach((b) => { b.disabled = true; });
-  const prev = btn.textContent;
-  btn.textContent = dshdT('usageExporting');
+// 用量导出：保存对话框由后端弹出；进行中禁用触发按钮并反馈状态，防重复触发
+async function exportUsage(kind, trigger) {
+  trigger.disabled = true;
+  const label = trigger.querySelector('.lb');
+  const prev = label.textContent;
+  const restore = () => {
+    label.textContent = prev;
+    trigger.disabled = false;
+  };
+  label.textContent = dshdT('usageExporting');
   try {
     await invoke('usage_export', { format: kind });
-    btn.textContent = dshdT('usageExportDone');
+    label.textContent = dshdT('usageExportDone');
   } catch (e) {
-    btn.textContent = dshdT('usageExportFailed');
-    window.setTimeout(() => { btn.textContent = prev; }, 2500);
+    label.textContent = dshdT('usageExportFailed');
+    window.setTimeout(restore, 2500);
+    return;
   }
-  window.setTimeout(() => {
-    btn.textContent = prev;
-    all.forEach((b) => { b.disabled = false; });
-  }, 1800);
+  window.setTimeout(restore, 1800);
+}
+
+// 外点收起的 document 监听只注册一次：renderUsagePage 每次渲染都会重建
+// 菜单实例，若随 setup 挂在 document 上会不断累积；当前实例经 dismiss 换新，
+// 被替换的旧实例 openState 恒为 false，成为无害的空操作。
+let usageExportDismiss = null;
+document.addEventListener('pointerdown', (event) => {
+  if (!usageExportDismiss) return;
+  const target = event.target;
+  if (target && target.closest && target.closest('.usage-export-dd')) return;
+  usageExportDismiss();
+});
+
+// 导出下拉：触发按钮 + 共享菜单组件（与标题栏/托盘菜单同一套视觉与键盘导航）。
+// 悬停即出（短延迟防误触，移出后短暂保留以容纳移入菜单）；点击与方向键仍可
+// 切换。后续新增导出格式只需在 items 里加一行。
+function setupUsageExportMenu() {
+  const dd = document.querySelector('.usage-export-dd');
+  if (!dd) return;
+  const trigger = dd.querySelector('.usage-export-btn');
+  const surface = dd.querySelector('.usage-export-menu');
+  let openState = false;
+  let hoverTimer = 0;
+  let leaveTimer = 0;
+  const close = (focusTrigger) => {
+    if (!openState) return;
+    openState = false;
+    surface.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    if (focusTrigger) trigger.focus();
+  };
+  const menu = dshdCreateMenu(surface, {
+    onChoose: (id) => {
+      close(true);
+      exportUsage(id, trigger);
+    },
+    onEscape: () => close(true),
+  });
+  menu.setItems([
+    { id: 'csv', label: 'CSV' },
+    { id: 'json', label: 'JSON' },
+  ]);
+  const open = (focusMenu) => {
+    // 导出进行中（触发按钮禁用）不再唤出，避免经菜单项重复触发
+    if (trigger.disabled) return;
+    openState = true;
+    surface.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    if (focusMenu) menu.focusFirst();
+  };
+  // 悬停打开不抢焦点（鼠标路径）；点击/方向键打开时进入菜单，便于键盘导航
+  dd.addEventListener('mouseenter', () => {
+    window.clearTimeout(leaveTimer);
+    if (!openState) hoverTimer = window.setTimeout(() => open(false), 120);
+  });
+  dd.addEventListener('mouseleave', () => {
+    window.clearTimeout(hoverTimer);
+    if (openState) leaveTimer = window.setTimeout(() => close(false), 220);
+  });
+  trigger.addEventListener('click', () => {
+    if (openState) close(true);
+    else open(true);
+  });
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && openState) {
+      // 菜单开着时按钮上的 Esc 只收菜单：不阻断会冒泡到弹窗窗口级
+      // Esc 把整个弹窗关掉（焦点在菜单内时由 surface 上的同名处理负责）
+      event.stopPropagation();
+      close(true);
+      return;
+    }
+    if (!openState && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault();
+      open(true);
+    }
+  });
+  // 菜单自身的 Esc 只关菜单：menu.js 处理后仍会冒泡，不阻断会触发弹窗
+  // 窗口级的全局 Esc 把整个弹窗关掉
+  surface.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') event.stopPropagation();
+  });
+  usageExportDismiss = () => close(false);
 }
 
 async function renderUsagePage() {
@@ -73,18 +157,19 @@ async function renderUsagePage() {
     '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
     '<div class="usage-h-row">' +
     '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTokenSection') + '</h3>' +
-    '<div class="usage-export-btns">' +
-    '<button type="button" class="usage-export-btn" data-usage-export="csv">' + dshdT('usageExportCsv') + '</button>' +
-    '<button type="button" class="usage-export-btn" data-usage-export="json">JSON</button>' +
+    '<div class="usage-export-dd">' +
+    '<button type="button" class="usage-export-btn" aria-haspopup="menu" aria-expanded="false">' +
+    '<span class="lb">' + dshdT('usageExport') + '</span>' +
+    dshdIcon('chevronDown', 'aria-hidden="true"') +
+    '</button>' +
+    '<div class="usage-export-menu dshd-menu-surface" role="menu" hidden></div>' +
     '</div>' +
     '</div>' +
     '<div class="usage-summary" id="usage-summary"></div>' +
     '</section>' +
     '<div class="usage-load" id="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
     '</div>';
-  body.querySelectorAll('.usage-export-btn').forEach((btn) => {
-    btn.addEventListener('click', () => exportUsage(btn.dataset.usageExport, btn));
-  });
+  setupUsageExportMenu();
   try {
     const report = await invoke('usage_report_get');
     if (openKind !== 'usage' || seq !== usageSeq) return;

@@ -42,7 +42,7 @@ const DSHD_MESSAGES = {
   usageMonthCost: ['本月估算成本', 'Estimated cost this month'],
   usageTotalCost: ['累计估算成本', 'Estimated total cost'],
   usageCostUnknown: ['含未定价样本（非官方 DeepSeek 或含缓存写入），无法给出可信估算', 'Contains unpriced samples (non-official DeepSeek or cache writes); no trustworthy estimate'],
-  usageExportCsv: ['导出 CSV', 'Export CSV'],
+  usageExport: ['导出', 'Export'],
   usageExporting: ['导出中…', 'Exporting…'],
   usageExportDone: ['已导出', 'Exported'],
   usageExportFailed: ['导出失败', 'Export failed'],
