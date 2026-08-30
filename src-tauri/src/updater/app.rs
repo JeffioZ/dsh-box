@@ -363,6 +363,8 @@ pub(super) fn windows_replace_script(
            if (-not $process.HasExited -and (Test-Path -LiteralPath $old)) {{ Remove-Item -LiteralPath $old -Force }}\n\
          }} catch {{\n\
            if ((-not (Test-Path -LiteralPath $dst)) -and (Test-Path -LiteralPath $old)) {{ Copy-Item -LiteralPath $old -Destination $dst -Force }}\n\
+           # 失败留痕：下次启动由 cleanup 读取并转发（此前静默 exit 1，只能靠版本不匹配间接推断）\n\
+           $_ | Out-File -LiteralPath (Join-Path (Split-Path -Parent $src) 'replace-error.log') -Encoding utf8\n\
            exit 1\n\
          }} finally {{\n\
            if (Test-Path -LiteralPath $new) {{ Remove-Item -LiteralPath $new -Force }}\n\
