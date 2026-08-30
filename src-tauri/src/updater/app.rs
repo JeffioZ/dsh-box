@@ -462,7 +462,10 @@ fn apply_downloaded_exe(
         crate::logging::log(&format!("updater: 写入应用更新确认标记失败：{e}"));
     }
     crate::logging::log(&format!("updater: 应用更新已就绪，退出并重启（{exe:?}）"));
-    // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）
+    // 保存窗口状态 + 清理子进程树，然后退出（替换脚本接管重启）。
+    // 先置 quitting：ExitRequested 的守卫据此跳过后台停服重试，也让各
+    // 周期任务在替换脚本接管前停止活动。
+    app.state::<crate::app_state::AppState>().set_quitting(true);
     crate::window::save_window_state_now(app);
     crate::dsh::shutdown(app);
     app.exit(0);

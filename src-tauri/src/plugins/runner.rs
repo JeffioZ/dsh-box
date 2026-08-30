@@ -10,6 +10,12 @@ fn text_tail(text: &str, max_chars: usize) -> String {
 
 /// 所有 `dsh plugin`（pnpm）操作的互斥锁：引导、定时升级、手动升级、
 /// 手动安装/卸载都可能并发触发 pnpm，串行化避免 pnpm 锁竞争与状态错乱。
+///
+/// 锁序约定（违反会死锁）：`lifecycle_guard` → `MARKET_PNPM_LOCK` →
+/// `RESTART_STATE`。boot 流程持 lifecycle 后经 recover_*/clear_resolved 取
+/// 本锁；服务重启（updater::restart_service_locked）同样在 lifecycle 之后
+/// 取本锁（经 plugins::try_acquire_pnpm_lock）。绝不能先取本锁再等
+/// lifecycle。
 pub(super) static MARKET_PNPM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 调用 dsh CLI 的 plugin 子命令（阻塞至完成，5 分钟超时）。

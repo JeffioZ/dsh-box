@@ -375,9 +375,40 @@ fn enter_restart_view(app: &AppHandle, from_dsh_page: bool) {
     }
 }
 
-/// 重启服务并进入界面（托盘“重启服务”/更新后复用）。
+/// restart_service 的 single-flight 门（见其注释）。以 RAII 复位：
+/// dev/test 构建下 panic 走 unwind，手动复位会被跳过导致门永久卡死。
+static RESTART_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct RestartGateGuard;
+
+impl Drop for RestartGateGuard {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        RESTART_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+/// 重启服务并进入界面（托盘“重启服务”/插件协调器复用）。
 /// 持有生命周期锁，与 boot_once 互斥，杜绝双服务并发。
+///
+/// single-flight：门在取生命周期锁**之前**。boot_inner 持锁期间可能长时间
+/// 停在首次配置等待上，期间每个重启请求线程都停在锁内排队，锁释放后串行
+/// 逐个执行完整停服+重启——连点 N 次托盘“重启”就连环重启 N 次刚就绪的
+/// 服务。进门失败（已有重启在途，包括还在等锁的）直接返回 Ok：任何一次
+/// 完成的重启都会按最新 manifest 重新加载，合并请求在语义上安全。
+/// 内部关键路径（boot 衔接/更新回滚）持锁调用 restart_service_locked，
+/// 不受门限制。
 pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    if RESTART_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        crate::logging::log("updater: 重启已在进行，合并本次重启请求");
+        return Ok(());
+    }
+    let _gate = RestartGateGuard;
+    restart_service_gated(app)
+}
+
+fn restart_service_gated(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.service_ownership().is_external() {
         return Err(crate::locale::text(
@@ -405,6 +436,28 @@ pub(crate) fn restart_service(app: &AppHandle) -> Result<(), String> {
     restart_service_locked(app)
 }
 
+/// 与在途 `dsh plugin` CLI 互斥后再重启（锁序 lifecycle → pnpm，约定见
+/// plugins::try_acquire_pnpm_lock 注释）。停服期间 pnpm 若仍在写 profile，
+/// 新服务会按半写状态做启动收敛，误删正在安装的插件。CLI 最长 5 分钟，
+/// 这里做有界等待而非阻塞到底：等不到交给调用方按失败处理（插件协调器
+/// 会退避重试，托盘会报错）。
+fn wait_pnpm_for_restart(app: &AppHandle) -> Result<crate::plugins::PnpmGuard, String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(guard) = crate::plugins::try_acquire_pnpm_lock() {
+            return Ok(guard);
+        }
+        if app.state::<AppState>().inner().is_quitting() || std::time::Instant::now() >= deadline {
+            return Err(crate::locale::text(
+                "插件操作正在进行，暂时无法重启服务，稍后将自动重试。",
+                "A plugin operation is in progress; the service restart will be retried later.",
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 /// 调用方已持有生命周期锁时使用。
 pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -415,6 +468,7 @@ pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
         )
         .into());
     }
+    let _pnpm = wait_pnpm_for_restart(app)?;
     let mut config = state.config();
     let resume_url = crate::main_webview(app)
         .and_then(|webview| webview.url().ok())

@@ -102,6 +102,38 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
 /// 自动落 onboarded 标记并放行，避免永久卡在启动页。
 /// 等待解除条件：用户已保存（onboarding_done）。开发构建每个进程仍展示
 /// 一次，但同一进程内的服务重启不会再次进入引导。
+/// 到期且面板未显示时的兜底放行期限。
+const ONBOARDING_FALLBACK_SECS: Duration = Duration::from_secs(60);
+
+/// `wait_onboarding` 单次轮询的决策（纯逻辑，供表驱动测试）。
+#[derive(Debug, PartialEq, Eq)]
+enum OnboardingWaitAction {
+    /// 用户已完成配置，继续启动。
+    Proceed,
+    /// 继续等待（面板已显示则无限期，未到期则等下一轮）。
+    Wait,
+    /// 兜底放行：到期、面板未显示且探活也不可见。
+    ForceOnboard,
+}
+
+/// `done`=用户已保存；`shown`=启动页已回报面板渲染；`deadline_passed`=已过
+/// 兜底期限；`probe_visible`=到期探活确认面板可见（未探活传 false）。
+/// 面板已显示时永不放行——用户可能正在填写。
+fn onboarding_wait_decision(
+    done: bool,
+    shown: bool,
+    deadline_passed: bool,
+    probe_visible: bool,
+) -> OnboardingWaitAction {
+    if done {
+        OnboardingWaitAction::Proceed
+    } else if shown || !deadline_passed || probe_visible {
+        OnboardingWaitAction::Wait
+    } else {
+        OnboardingWaitAction::ForceOnboard
+    }
+}
+
 fn wait_onboarding(app: &AppHandle, state: &AppState) {
     if !state.onboarding_pending() {
         return;
@@ -111,45 +143,55 @@ fn wait_onboarding(app: &AppHandle, state: &AppState) {
     // 面板未显示（启动页 IPC 异常等）：60 秒后先主动探活一次，确认面板
     // 确实未渲染才兜底放行，避免把「回报迟到但面板已显示」误判为异常而
     // 跳过用户正在填写的首次设置。
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + ONBOARDING_FALLBACK_SECS;
     let mut probed = false;
+    let mut probe_visible = false;
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        if crate::app_state::onboarding_done() {
-            crate::logging::log("boot: 用户已完成首次配置，继续启动");
-            return;
-        }
-        if !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline {
+        if !probed && !crate::app_state::onboarding_shown() && std::time::Instant::now() >= deadline
+        {
             // 到期且尚未收到面板显示回报：先探查主 WebView 里面板是否可见。
             // Tauri 的 eval 不返回脚本值，探活函数通过带代次的 IPC 显式回报；
             // 失败或页面不在启动页时按「未显示」处理，不引入新的卡死路径。
-            if !probed {
-                probed = true;
-                if probe_onboarding_visibility(app) {
-                    crate::logging::log("boot: 首次配置面板探活可见，转为无限等待");
-                    continue;
-                }
+            probed = true;
+            probe_visible = probe_onboarding_visibility(app);
+            if probe_visible {
+                crate::logging::log("boot: 首次配置面板探活可见，转为无限等待");
             }
-            // 超时兜底：自动落标记并继续，避免启动页卡死
-            let config = state.config();
-            let _ = crate::app_state::save_state_value(
-                &config.root,
-                "builtin_plugins_enabled",
-                serde_json::Value::Bool(false),
-            );
-            let _ = crate::app_state::save_state_value(
-                &config.root,
-                "local_onboarding_deferred",
-                serde_json::Value::Bool(false),
-            );
-            let _ = crate::app_state::save_state_value(
-                &config.root,
-                "onboarded",
-                serde_json::Value::Bool(true),
-            );
-            crate::app_state::mark_onboarding_done();
-            crate::logging::log("boot: 首次配置面板未显示，60 秒兜底放行");
-            return;
+        }
+        match onboarding_wait_decision(
+            crate::app_state::onboarding_done(),
+            crate::app_state::onboarding_shown(),
+            std::time::Instant::now() >= deadline,
+            probe_visible,
+        ) {
+            OnboardingWaitAction::Proceed => {
+                crate::logging::log("boot: 用户已完成首次配置，继续启动");
+                return;
+            }
+            OnboardingWaitAction::Wait => continue,
+            OnboardingWaitAction::ForceOnboard => {
+                // 超时兜底：自动落标记并继续，避免启动页卡死
+                let config = state.config();
+                let _ = crate::app_state::save_state_value(
+                    &config.root,
+                    "builtin_plugins_enabled",
+                    serde_json::Value::Bool(false),
+                );
+                let _ = crate::app_state::save_state_value(
+                    &config.root,
+                    "local_onboarding_deferred",
+                    serde_json::Value::Bool(false),
+                );
+                let _ = crate::app_state::save_state_value(
+                    &config.root,
+                    "onboarded",
+                    serde_json::Value::Bool(true),
+                );
+                crate::app_state::mark_onboarding_done();
+                crate::logging::log("boot: 首次配置面板未显示，60 秒兜底放行");
+                return;
+            }
         }
     }
 }
@@ -189,17 +231,29 @@ fn probe_onboarding_visibility(app: &AppHandle) -> bool {
 /// 首次配置可能触发凭据或插件重启。此时加载页已显示对应忙碌状态，当前
 /// boot 必须立即释放生命周期锁，让统一重启协调器继续，不能先进入 dsh。
 fn onboarding_handoff_pending(state: &AppState) -> bool {
-    if state.phase() != BootPhase::Ready {
-        crate::logging::log("boot: 首次配置后的界面切换已由其他生命周期流程接管");
-        return true;
+    let phase = state.phase();
+    let ownership = state.service_ownership();
+    let deferred = crate::plugins::deferred_restart_pending();
+    let handoff = onboarding_handoff_decision(phase, ownership, deferred);
+    if handoff {
+        if phase != BootPhase::Ready {
+            crate::logging::log("boot: 首次配置后的界面切换已由其他生命周期流程接管");
+        } else {
+            crate::logging::log("boot: 预置插件待应用，保持启动页并交给统一重启流程");
+        }
     }
-    if state.service_ownership() == ServiceOwnership::Managed
-        && crate::plugins::deferred_restart_pending()
-    {
-        crate::logging::log("boot: 预置插件待应用，保持启动页并交给统一重启流程");
-        return true;
-    }
-    false
+    handoff
+}
+
+/// `onboarding_handoff_pending` 的纯决策（供表驱动测试）：
+/// 阶段已非 Ready（其他生命周期流程接管）或托管服务有待应用的重启。
+fn onboarding_handoff_decision(
+    phase: BootPhase,
+    ownership: ServiceOwnership,
+    deferred_restart_pending: bool,
+) -> bool {
+    phase != BootPhase::Ready
+        || (ownership == ServiceOwnership::Managed && deferred_restart_pending)
 }
 
 /// 首次本地配置的统一收尾。无论服务是本轮启动还是由并发重启路径复用，
@@ -876,6 +930,68 @@ pub(crate) fn forget_external_service(app: &AppHandle) -> Result<(), String> {
 
 // ---------- 看门狗 ----------
 
+/// 看门狗单个 tick 的决策（纯逻辑，供表驱动测试）。
+/// `service_failed` 为「托管进程已退出或健康检查失败」的综合判定；
+/// `None` 表示尚未探测——决策返回 `CheckService` 交由 IO 层探测后带
+/// 结果重新决策（避免在 updating/非 Ready 时做 800ms 的健康探测）。
+#[derive(Debug, PartialEq, Eq)]
+enum WatchdogAction {
+    /// 应用退出中：结束看门狗。
+    Exit,
+    /// 正常或暂时性状态：重置失败计数继续监控。
+    ContinueReset,
+    /// Ready 且尚未探测：IO 层做进程/健康探测后重新决策。
+    CheckService,
+    /// 健康检查未通过但未达阈值：保持计数继续监控。
+    ContinueCounting,
+    /// 连续两次失败且服务为外部归属：标记断开并交回错误页。
+    MarkExternalDisconnected,
+    /// 连续两次失败且服务为托管：清进程并触发自动重启。
+    RestartManaged,
+}
+
+/// `failures` 为此前已累计的连续失败次数（0 起）。
+fn watchdog_step(
+    quitting: bool,
+    updating: bool,
+    phase: BootPhase,
+    ownership: ServiceOwnership,
+    service_failed: Option<bool>,
+    failures: u32,
+) -> WatchdogAction {
+    if quitting {
+        return WatchdogAction::Exit;
+    }
+    if updating {
+        return WatchdogAction::ContinueReset;
+    }
+    if phase != BootPhase::Ready {
+        // 阶段离开 Ready：更新/重启失败会把阶段置为 Error（错误页已展示），
+        // 退出看门狗交回 boot_loop 等待“重试”——在此继续会让 retry 信号
+        // 永远无人消费
+        return if matches!(phase, BootPhase::Error | BootPhase::SwitchingService) {
+            WatchdogAction::Exit
+        } else {
+            WatchdogAction::ContinueReset
+        };
+    }
+    let Some(service_failed) = service_failed else {
+        return WatchdogAction::CheckService;
+    };
+    if !service_failed {
+        return WatchdogAction::ContinueReset;
+    }
+    // 连续两次失败才处理：dsh 思考高峰时响应可能短暂超时。
+    if failures + 1 < 2 {
+        return WatchdogAction::ContinueCounting;
+    }
+    if ownership == ServiceOwnership::External {
+        WatchdogAction::MarkExternalDisconnected
+    } else {
+        WatchdogAction::RestartManaged
+    }
+}
+
 /// 看门狗：服务掉线时回到启动页并自动重启（重启失败会走 Err 分支显示错误+手动重试）。
 /// 更新流程进行中（updating=true）时跳过，避免打断运行时安装。
 fn watchdog(app: &AppHandle) {
@@ -883,73 +999,83 @@ fn watchdog(app: &AppHandle) {
     loop {
         std::thread::sleep(WATCH_INTERVAL);
         let state = app.state::<AppState>();
-        if state.is_quitting() {
-            return;
-        }
-        if state.is_updating() {
-            failures = 0;
-            continue;
-        }
-        if state.phase() != BootPhase::Ready {
-            // 阶段离开 Ready：更新/重启失败会把阶段置为 Error（错误页已展示），
-            // 退出看门狗交回 boot_loop 等待“重试”——在此 continue 会让
-            // retry 信号永远无人消费
-            if matches!(
+        // None = 尚未探测；决策要求探测时才真正做进程/健康检查
+        let mut service_failed: Option<bool> = None;
+        loop {
+            let action = watchdog_step(
+                state.is_quitting(),
+                state.is_updating(),
                 state.phase(),
-                BootPhase::Error | BootPhase::SwitchingService
-            ) {
-                return;
-            }
-            failures = 0;
-            continue;
-        }
-        let port = state.config().port;
-        let managed_exited = state.service_ownership() == ServiceOwnership::Managed
-            && state
-                .managed_process_exit()
-                .map(|status| status.is_some())
-                .unwrap_or(true);
-        if managed_exited || !health_check(port) {
-            // 连续两次失败才处理：dsh 思考高峰时响应可能短暂超时。
-            failures += 1;
-            crate::logging::log(&format!("watchdog: 健康检查失败 {failures}/2"));
-            if failures < 2 {
-                continue;
-            }
-            // 复检：更新/重启可能刚把服务拉起，避免误停刚就绪的服务
-            let state = app.state::<AppState>();
-            if state.is_updating() || state.phase() != BootPhase::Ready {
-                failures = 0;
-                continue;
-            }
-            if state.service_ownership() == ServiceOwnership::External {
-                // 外部进程不属于 DSHBox：不停止、不替换、不偷偷切换数据源。
-                crate::logging::log("watchdog: 外部 dsh 服务已断开，等待用户恢复或改用本地服务");
-                state.mark_external_disconnected();
-                navigate_to_splash(app);
-                let message = crate::locale::text(
-                    "外部 dsh 服务已断开。可重试连接，或改用 DSHBox 本地服务。",
-                    "The external dsh service disconnected. Try reconnecting, or switch to DSHBox's local service.",
-                );
-                state.set_phase(BootPhase::Error, message, "");
-                emit_status(app, BootPhase::Error, message, "");
-                return;
-            }
-            // 托管服务已停止：清理残留进程，回启动页，由外层循环自动重启。
-            crate::logging::log("watchdog: dsh 服务已停止，准备自动重启");
-            shutdown(app);
-            navigate_to_splash(app);
-            let state = app.state::<AppState>();
-            let restarting = crate::locale::text(
-                "服务已停止，正在自动重启…",
-                "The service stopped. Restarting automatically…",
+                state.service_ownership(),
+                service_failed,
+                failures,
             );
-            state.set_phase(BootPhase::Starting, restarting, "");
-            emit_status(app, BootPhase::Starting, restarting, "");
-            std::thread::sleep(Duration::from_secs(2));
-            return;
+            match action {
+                WatchdogAction::Exit => return,
+                WatchdogAction::ContinueReset => {
+                    failures = 0;
+                    break;
+                }
+                WatchdogAction::CheckService => {
+                    let port = state.config().port;
+                    // 外部服务没有子进程可查，只看健康检查；托管服务进程
+                    // 退出即视为失败
+                    service_failed =
+                        Some(if state.service_ownership() == ServiceOwnership::Managed {
+                            state
+                                .managed_process_exit()
+                                .map(|status| status.is_some())
+                                .unwrap_or(true)
+                                || !health_check(port)
+                        } else {
+                            !health_check(port)
+                        });
+                }
+                WatchdogAction::ContinueCounting => {
+                    failures += 1;
+                    crate::logging::log(&format!("watchdog: 健康检查失败 {failures}/2"));
+                    break;
+                }
+                // 达到阈值：复检更新/重启可能刚把服务拉起，避免误停刚就绪的服务
+                WatchdogAction::MarkExternalDisconnected => {
+                    if state.is_updating() || state.phase() != BootPhase::Ready {
+                        failures = 0;
+                        break;
+                    }
+                    // 外部进程不属于 DSHBox：不停止、不替换、不偷偷切换数据源。
+                    crate::logging::log(
+                        "watchdog: 外部 dsh 服务已断开，等待用户恢复或改用本地服务",
+                    );
+                    state.mark_external_disconnected();
+                    navigate_to_splash(app);
+                    let message = crate::locale::text(
+                        "外部 dsh 服务已断开。可重试连接，或改用 DSHBox 本地服务。",
+                        "The external dsh service disconnected. Try reconnecting, or switch to DSHBox's local service.",
+                    );
+                    state.set_phase(BootPhase::Error, message, "");
+                    emit_status(app, BootPhase::Error, message, "");
+                    return;
+                }
+                WatchdogAction::RestartManaged => {
+                    if state.is_updating() || state.phase() != BootPhase::Ready {
+                        failures = 0;
+                        break;
+                    }
+                    // 托管服务已停止：清理残留进程，回启动页，由外层循环自动重启。
+                    crate::logging::log("watchdog: dsh 服务已停止，准备自动重启");
+                    shutdown(app);
+                    navigate_to_splash(app);
+                    let restarting = crate::locale::text(
+                        "服务已停止，正在自动重启…",
+                        "The service stopped. Restarting automatically…",
+                    );
+                    state.set_phase(BootPhase::Starting, restarting, "");
+                    emit_status(app, BootPhase::Starting, restarting, "");
+                    std::thread::sleep(Duration::from_secs(2));
+                    return;
+                }
+            }
         }
-        failures = 0;
     }
 }
 
@@ -1042,10 +1168,183 @@ fn is_dsh_response(response: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_boot_result, is_bind_failure, is_dsh_response, parse_external_description,
-        parse_server_port, same_external_identity, select_managed_port, BootOutcome, InstallAction,
-        PortAvailability,
+        classify_boot_result, is_bind_failure, is_dsh_response, onboarding_handoff_decision,
+        onboarding_wait_decision, parse_external_description, parse_server_port,
+        same_external_identity, select_managed_port, watchdog_step, BootOutcome, InstallAction,
+        OnboardingWaitAction, PortAvailability, ServiceOwnership, WatchdogAction,
     };
+
+    #[test]
+    fn onboarding_wait_waits_indefinitely_while_panel_is_shown() {
+        // 面板已回报显示：即使远超兜底期限也不放行
+        assert_eq!(
+            onboarding_wait_decision(false, true, true, false),
+            OnboardingWaitAction::Wait
+        );
+        assert_eq!(
+            onboarding_wait_decision(true, true, true, false),
+            OnboardingWaitAction::Proceed
+        );
+    }
+
+    #[test]
+    fn onboarding_wait_forces_onboard_only_after_deadline_and_failed_probe() {
+        // 未到期：等待
+        assert_eq!(
+            onboarding_wait_decision(false, false, false, false),
+            OnboardingWaitAction::Wait
+        );
+        // 到期但探活确认面板可见：继续等待
+        assert_eq!(
+            onboarding_wait_decision(false, false, true, true),
+            OnboardingWaitAction::Wait
+        );
+        // 到期、面板未显示、探活不可见：兜底放行
+        assert_eq!(
+            onboarding_wait_decision(false, false, true, false),
+            OnboardingWaitAction::ForceOnboard
+        );
+    }
+
+    #[test]
+    fn handoff_delegates_when_phase_left_ready_or_restart_pending() {
+        use crate::app_state::BootPhase;
+        assert!(onboarding_handoff_decision(
+            BootPhase::Starting,
+            ServiceOwnership::Managed,
+            false
+        ));
+        assert!(onboarding_handoff_decision(
+            BootPhase::Ready,
+            ServiceOwnership::Managed,
+            true
+        ));
+        // 外部服务不参与插件重启协调
+        assert!(!onboarding_handoff_decision(
+            BootPhase::Ready,
+            ServiceOwnership::External,
+            true
+        ));
+        assert!(!onboarding_handoff_decision(
+            BootPhase::Ready,
+            ServiceOwnership::Managed,
+            false
+        ));
+    }
+
+    #[test]
+    fn watchdog_exits_on_terminal_phases_and_quitting() {
+        use crate::app_state::BootPhase;
+        assert_eq!(
+            watchdog_step(
+                true,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                None,
+                0
+            ),
+            WatchdogAction::Exit
+        );
+        for phase in [BootPhase::Error, BootPhase::SwitchingService] {
+            assert_eq!(
+                watchdog_step(false, false, phase, ServiceOwnership::Managed, None, 0),
+                WatchdogAction::Exit
+            );
+        }
+    }
+
+    #[test]
+    fn watchdog_skips_probe_until_ready_and_not_updating() {
+        use crate::app_state::BootPhase;
+        // Ready 且未探测：要求 IO 层做健康判定
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                None,
+                0
+            ),
+            WatchdogAction::CheckService
+        );
+        // updating / 非 Ready 阶段：不做探测直接重置计数
+        assert_eq!(
+            watchdog_step(
+                false,
+                true,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                None,
+                0
+            ),
+            WatchdogAction::ContinueReset
+        );
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Starting,
+                ServiceOwnership::Managed,
+                None,
+                0
+            ),
+            WatchdogAction::ContinueReset
+        );
+    }
+
+    #[test]
+    fn watchdog_requires_two_consecutive_failures_before_acting() {
+        use crate::app_state::BootPhase;
+        // 首次失败：只计数
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                Some(true),
+                0
+            ),
+            WatchdogAction::ContinueCounting
+        );
+        // 第二次失败：托管重启 / 外部标记断开
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                Some(true),
+                1
+            ),
+            WatchdogAction::RestartManaged
+        );
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::External,
+                Some(true),
+                1
+            ),
+            WatchdogAction::MarkExternalDisconnected
+        );
+        // 健康恢复：重置
+        assert_eq!(
+            watchdog_step(
+                false,
+                false,
+                BootPhase::Ready,
+                ServiceOwnership::Managed,
+                Some(false),
+                1
+            ),
+            WatchdogAction::ContinueReset
+        );
+    }
 
     #[test]
     fn cancellation_is_not_reported_as_startup_failure() {

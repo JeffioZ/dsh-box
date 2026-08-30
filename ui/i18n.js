@@ -268,7 +268,6 @@ const DSHD_MESSAGES = {
   switchingLocalService: ['正在切换到本地服务…', 'Switching to the local service…'],
   startupFailed: ['启动失败', 'Startup failed'],
   startupFailedHint: ['请重试；若持续失败，可打开日志查看详情。', 'Please retry. If it keeps failing, open the logs for details.'],
-  systemManaged: ['系统 Node.js', 'System Node.js'],
   systemManagedLatest: ['系统 Node.js · 最新 LTS {version}', 'System Node.js · Latest LTS {version}'],
   systemManagedUnavailable: ['系统 Node.js · 暂无法获取版本信息', 'System Node.js · Version information unavailable'],
   toppedUpBalance: ['充值余额', 'Topped-up balance'],

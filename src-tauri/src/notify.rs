@@ -36,18 +36,17 @@ pub fn start_task_watch(app: AppHandle) {
         let mut watched: Option<WatchedSession> = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
-            let state = app.state::<AppState>();
-            if state.is_quitting() {
-                return;
-            }
-            if state.service_ownership().is_external() {
-                watched = None;
-                continue;
-            }
-            if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
-                || state.phase() != crate::app_state::BootPhase::Ready
-            {
-                continue;
+            // 就绪门控统一走 background::service_gate（仅本地托管且 Ready
+            // 放行）；外部模式没有会话日志可查，断开重连后需从头跟踪
+            match crate::background::service_gate(&app) {
+                crate::background::Gate::Quitting => return,
+                crate::background::Gate::NotReady => {
+                    if app.state::<AppState>().service_ownership().is_external() {
+                        watched = None;
+                    }
+                    continue;
+                }
+                crate::background::Gate::Ready => {}
             }
             if let Err(e) = poll_once(&app, &mut watched) {
                 crate::logging::log(&format!("notify: 轮询失败：{e}"));

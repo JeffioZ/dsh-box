@@ -7,6 +7,7 @@
 
 mod app_state;
 mod autostart;
+mod background;
 mod balance;
 mod bootstrap;
 mod commands;

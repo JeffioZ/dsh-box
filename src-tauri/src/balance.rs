@@ -208,36 +208,28 @@ fn fmt_amount(value: Option<f64>) -> String {
 static REFRESH_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 后台周期刷新余额：立即查询一次，此后每 5 分钟刷新并广播 balance-updated
-/// （标题栏余额 chip 消费）。只启动一次。
+/// （标题栏余额 chip 消费）。只启动一次；就绪门控统一走
+/// background::service_gate（仅本地托管且 Ready 放行）。界面隐藏/余额
+/// 隐藏时任务体直接跳过，节奏退化为 5 分钟一轮空转。
 pub(crate) fn start_periodic_refresh(app: AppHandle) {
     use std::sync::atomic::Ordering;
     if REFRESH_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        if state.is_quitting() {
-            return;
-        }
-        if state.service_ownership().is_external() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-        if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
-            || state.phase() != crate::app_state::BootPhase::Ready
-        {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-        let config = state.config();
-        if config.hide_statusbar || config.hide_balance || !crate::main_is_visible(&app) {
-            std::thread::sleep(std::time::Duration::from_secs(300));
-            continue;
-        }
-        let payload = query_balance(&config);
-        let _ = app.emit("balance-updated", payload);
-        std::thread::sleep(std::time::Duration::from_secs(300));
-    });
+    crate::background::spawn_gated_periodic(
+        app,
+        "balance-refresh",
+        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(5),
+        |app| {
+            let config = app.state::<AppState>().config();
+            if config.hide_statusbar || config.hide_balance || !crate::main_is_visible(app) {
+                return;
+            }
+            let payload = query_balance(&config);
+            let _ = app.emit("balance-updated", payload);
+        },
+    );
 }
 
 /// 立即查询并广播一次余额（状态栏首帧数据，不等 5 分钟轮询周期）。

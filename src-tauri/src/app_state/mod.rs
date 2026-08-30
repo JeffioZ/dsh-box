@@ -318,8 +318,22 @@ pub static RETRY_RX: std::sync::Mutex<Option<Receiver<()>>> = std::sync::Mutex::
 
 impl AppState {
     pub fn new() -> AppState {
+        // 随机数失败退化为时间+PID 派生 token 而非 panic：release 构建
+        // panic=abort 会让进程无声消失（见 bootstrap 的 fatal 政策注释）。
+        // 降级 token 仅削弱 dshd 协议的防枚举强度，好过应用完全无法启动。
         let mut token_bytes = [0u8; 16];
-        getrandom::fill(&mut token_bytes).expect("无法读取系统随机数");
+        if getrandom::fill(&mut token_bytes).is_err() {
+            crate::logging::log("app-state: 系统随机数不可用，协议令牌退化为时间+PID 派生");
+            let mut mixed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                ^ ((std::process::id() as u128) << 64);
+            for byte in token_bytes.iter_mut() {
+                *byte = (mixed & 0xff) as u8;
+                mixed = mixed.rotate_left(13) ^ (mixed >> 7);
+            }
+        }
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let protocol_token: String = token_bytes
             .iter()

@@ -279,25 +279,96 @@ pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<NodeRuntim
     Ok(runtime)
 }
 
+/// 探测便携运行时，失败时短暂重试：spawn 偶发失败（安全软件拦截、系统
+/// 瞬时不可用）与真损坏在单次探测下不可区分，直接清理会误删健康运行时。
+fn inspect_runtime_with_retry(executable: PathBuf) -> Option<NodeRuntime> {
+    for attempt in 0..3 {
+        if let Some(runtime) = inspect_runtime(executable.clone()) {
+            return Some(runtime);
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    None
+}
+
+/// 便携 Node 的隔离目录：重选运行时（重装/换系统 Node）期间暂存旧副本，
+/// 重选失败时还原，不让用户落到「无任何可用运行时」的状态。
+fn node_quarantine_dir(config: &Config) -> PathBuf {
+    config.root.join("node-quarantine")
+}
+
 /// 选择或安装一个满足版本要求的 Node 运行时（不涉及 npm 升级，见 `ensure_node`）。
 fn ensure_node_inner(app: &AppHandle, config: &Config) -> Result<NodeRuntime, String> {
+    let node_dir = config.node_dir();
+    let quarantine = node_quarantine_dir(config);
+    // 收敛上次崩溃遗留的隔离目录：node_dir 缺失说明上次隔离后重选未完成，
+    // 先还原再走正常决策（若旧副本本就可用则直接恢复使用；不可用会再次
+    // 隔离并重选，每次都推进到安装或系统 Node，不会空转）。
+    if !node_dir.exists() && quarantine.exists() {
+        crate::logging::log("runtime: 发现上次中断的 Node 隔离目录，先还原再重新决策");
+        let _ = std::fs::rename(&quarantine, &node_dir);
+    }
     let managed = config.node_exe();
     if managed.exists() {
-        if let Some(runtime) = inspect_runtime(managed) {
+        if let Some(runtime) = inspect_runtime_with_retry(managed) {
+            // 探测成功：上轮隔离副本（如有）已无用（本次 node_dir 健康）
+            if quarantine.exists() {
+                let _ = std::fs::remove_dir_all(&quarantine);
+            }
             return Ok(runtime);
-        } else {
-            crate::logging::log("runtime: 便携 Node 损坏或版本过旧，准备重新选择运行时");
-            std::fs::remove_dir_all(config.node_dir()).map_err(|e| {
-                crate::locale::owned(
-                    format!("清理损坏的 Node.js 运行时失败：{e}"),
-                    format!("Failed to remove the damaged Node.js runtime: {e}"),
-                )
-            })?;
-            return find_system_node()
-                .and_then(inspect_runtime)
-                .map(Ok)
-                .unwrap_or_else(|| install_runtime(app, config));
         }
+        crate::logging::log("runtime: 便携 Node 探测失败或版本过旧，隔离旧目录后重新选择运行时");
+        // 隔离而非直接删除：删除不可恢复且重装依赖网络——离线时会让 dsh
+        // 彻底无法启动。rename 同卷瞬时完成，也不会像 remove_dir_all 那样
+        // 中断后留下半删目录。
+        if quarantine.exists() {
+            let _ = std::fs::remove_dir_all(&quarantine);
+        }
+        let quarantined = match std::fs::rename(&node_dir, &quarantine) {
+            Ok(()) => true,
+            Err(_) => {
+                // rename 失败（目录被占用等）退回直接删除
+                std::fs::remove_dir_all(&node_dir).map_err(|e| {
+                    crate::locale::owned(
+                        format!("清理损坏的 Node.js 运行时失败：{e}"),
+                        format!("Failed to remove the damaged Node.js runtime: {e}"),
+                    )
+                })?;
+                false
+            }
+        };
+        let selection = find_system_node()
+            .and_then(inspect_runtime)
+            .map(Ok)
+            .unwrap_or_else(|| install_runtime(app, config));
+        return match selection {
+            Ok(runtime) => {
+                if quarantined {
+                    let _ = std::fs::remove_dir_all(&quarantine);
+                }
+                Ok(runtime)
+            }
+            Err(error) => {
+                // 重选失败（如离线）：还原旧运行时，回到升级前状态而非「无
+                // 运行时」。安装失败可能已建出空/半成品 node_dir
+                // （create_dir_all 先于下载执行），先清掉再还原。
+                if quarantined && !config.node_exe().exists() {
+                    if node_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&node_dir);
+                    }
+                    match std::fs::rename(&quarantine, &node_dir) {
+                        Ok(()) => crate::logging::log("runtime: 已还原被隔离的旧 Node 运行时"),
+                        Err(e) => crate::logging::log(&format!(
+                            "runtime: 还原旧 Node 运行时失败（{e}），隔离副本保留于 {}",
+                            quarantine.display()
+                        )),
+                    }
+                }
+                Err(error)
+            }
+        };
     }
     find_system_node()
         .and_then(inspect_runtime)
@@ -441,9 +512,126 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     Ok(config.node_exe())
 }
 
+/// npm 包在便携 Node 前缀下的相对位置（Windows 官方包与 `npm -g` 的布局
+/// 一致；Unix 两者都在 lib 下）。
+fn portable_npm_rel() -> &'static str {
+    if cfg!(windows) {
+        "node_modules/npm"
+    } else {
+        "lib/node_modules/npm"
+    }
+}
+
+/// npm 升级的暂存前缀：新 npm 先完整装到这里并校验，再一次性换入受管
+/// 目录——避免 `npm install -g` 在服务运行中直接改写 node 目录，超时或
+/// 断电留下半新半旧的 npm 且无从恢复。
+fn npm_upgrade_staging(config: &Config) -> PathBuf {
+    config.root.join("npm-upgrade-staging")
+}
+
+/// 旧 npm 的就地隔离目录（换入新 npm 期间的备份，与 live 同父目录，
+/// rename 同卷瞬时完成；它的存在即「换入未完成」标记）。
+fn npm_quarantine_dir(node_dir: &Path) -> PathBuf {
+    node_dir.join(format!("{}.dshbox-old", portable_npm_rel()))
+}
+
+/// 运行指定 npm CLI 取其主版本号；失败返回 None。
+fn npm_major_version(node_exe: &Path, npm_cli: &Path) -> Option<u32> {
+    let mut cmd = std::process::Command::new(node_exe);
+    cmd.arg(npm_cli).arg("--version");
+    processes::hide_console(&mut cmd);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    text.split('.').next()?.parse().ok()
+}
+
+/// 换入新 npm：隔离旧 npm → 移入新 npm → 校验可运行 → 删除隔离。
+/// 任一步失败都还原旧 npm（`live_ok` 判定新 npm 是否可用，便于单测注入）。
+fn npm_swap_in(
+    live: &Path,
+    quarantine: &Path,
+    staged: &Path,
+    live_ok: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    std::fs::rename(live, quarantine).map_err(|e| {
+        crate::locale::owned(
+            format!("隔离旧 npm 失败：{e}"),
+            format!("Failed to quarantine the old npm: {e}"),
+        )
+    })?;
+    let swapped_in = std::fs::rename(staged, live)
+        .and_then(|()| {
+            if live_ok(live) {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("npm verification failed"))
+            }
+        })
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("换入新 npm 失败：{e}"),
+                format!("Failed to swap in the new npm: {e}"),
+            )
+        });
+    match swapped_in {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(quarantine);
+            Ok(())
+        }
+        Err(e) => {
+            // 还原旧 npm：先移除未通过校验的新目录再改回名字
+            if live.exists() {
+                let _ = std::fs::remove_dir_all(live);
+            }
+            match std::fs::rename(quarantine, live) {
+                Ok(()) => {}
+                Err(restore) => {
+                    return Err(crate::locale::owned(
+                        format!("{e}；还原旧 npm 也失败：{restore}"),
+                        format!("{e}; restoring the old npm also failed: {restore}"),
+                    ))
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// 收敛上次 npm 换入中断的残留（隔离目录的存在即标记）：
+/// 新 npm 未就位 → 还原旧；两者都在 → 新 npm 可用则清隔离，不可用则还原旧。
+fn npm_recover_interrupted(live: &Path, quarantine: &Path, live_ok: impl Fn(&Path) -> bool) {
+    if !quarantine.exists() {
+        return;
+    }
+    crate::logging::log("runtime: 发现上次 npm 升级中断的残留，开始收敛");
+    if !live.exists() {
+        if let Err(e) = std::fs::rename(quarantine, live) {
+            crate::logging::log(&format!("runtime: 还原旧 npm 失败：{e}"));
+        }
+        return;
+    }
+    if live_ok(live) {
+        let _ = std::fs::remove_dir_all(quarantine);
+    } else {
+        let _ = std::fs::remove_dir_all(live);
+        if let Err(e) = std::fs::rename(quarantine, live) {
+            crate::logging::log(&format!("runtime: 还原旧 npm 失败：{e}"));
+        }
+    }
+}
+
 /// 升级 Node 自带 npm 到 12。strict=false（启动自动升级）：失败降级沿用
 /// 自带版、不阻断；strict=true（检查更新手动触发）：失败返回具体错误展示给
 /// 用户。走官方 registry，失败切 npmmirror 兜底；外层 150s 超时。
+///
+/// 事务化：新 npm 先装入独立 staging 前缀并校验版本，再把旧 npm 隔离、
+/// 一次性换入——`npm install -g` 不再直接改写受管 node 目录，任何失败
+/// （含超时杀进程、断电）都保得住旧 npm 或在下次启动时收敛（隔离目录
+/// 存在即未完成标记）。shims 不替换：新旧布局一致，旧 shim 指向的
+/// `node_modules/npm/bin/npm-cli.js` 换入后即新 npm。
 pub(crate) fn upgrade_portable_npm(
     app: &AppHandle,
     config: &Config,
@@ -470,7 +658,14 @@ pub(crate) fn upgrade_portable_npm(
             "The Node.js executable path has no parent directory",
         )
     })?;
-    let npm_cli = node_dir.join("node_modules/npm/bin/npm-cli.js");
+    let npm_rel = portable_npm_rel();
+    let live_npm = node_dir.join(npm_rel);
+    let npm_cli = live_npm.join("bin/npm-cli.js");
+    let quarantine = npm_quarantine_dir(node_dir);
+    let live_ok = |dir: &Path| {
+        npm_major_version(&node_exe, &dir.join("bin/npm-cli.js")).is_some_and(|m| m >= 12)
+    };
+    npm_recover_interrupted(&live_npm, &quarantine, live_ok);
     if !npm_cli.exists() {
         let msg = crate::locale::text("未找到 npm", "npm was not found");
         if strict {
@@ -480,19 +675,9 @@ pub(crate) fn upgrade_portable_npm(
         return Ok(());
     }
     // 已是 12+ 则跳过（首次 dsh 安装与手动检查都可能进入，不能重复升级联网）。
-    let mut version_cmd = std::process::Command::new(&node_exe);
-    version_cmd.arg(&npm_cli).arg("--version");
-    processes::hide_console(&mut version_cmd);
-    let cur = version_cmd
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    if let Some(v) = cur {
-        if let Some(major) = v.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
-            if major >= 12 {
-                return Ok(());
-            }
+    if let Some(major) = npm_major_version(&node_exe, &npm_cli) {
+        if major >= 12 {
+            return Ok(());
         }
     }
     emit_status(
@@ -501,7 +686,24 @@ pub(crate) fn upgrade_portable_npm(
         crate::locale::text("正在升级 npm…", "Upgrading npm…"),
         "",
     );
-    let prefix = node_dir.to_string_lossy().into_owned();
+    let staging = npm_upgrade_staging(config);
+    // 清掉上次崩溃遗留的半成品 staging 与隔离残留，全新开始
+    let _ = std::fs::remove_dir_all(&staging);
+    // 暂存目录创建失败同样遵守 strict 契约：非 strict 静默沿用自带版，
+    // 绝不阻断启动链路（ensure_node 对非 strict 结果直接 ?）
+    if let Err(e) = std::fs::create_dir_all(&staging) {
+        let msg = crate::locale::owned(
+            format!("创建 npm 升级暂存目录失败：{e}"),
+            format!("Failed to create the npm upgrade staging directory: {e}"),
+        );
+        if strict {
+            return Err(msg);
+        }
+        crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
+        return Ok(());
+    }
+    let prefix = staging.to_string_lossy().into_owned();
+    let mut staged = false;
     for (registry, source) in registries(config) {
         emit_status(
             app,
@@ -530,9 +732,11 @@ pub(crate) fn upgrade_portable_npm(
                 Err(e) => {
                     let msg = format!("运行 npm 失败：{e}");
                     if strict {
+                        let _ = std::fs::remove_dir_all(&staging);
                         return Err(msg);
                     }
                     crate::logging::log(&format!("runtime: 升级 npm 启动失败：{e}，沿用自带版"));
+                    let _ = std::fs::remove_dir_all(&staging);
                     return Ok(());
                 }
             };
@@ -545,12 +749,14 @@ pub(crate) fn upgrade_portable_npm(
                     if install_cancelled(app) {
                         processes::kill_tree(child.id());
                         super::package_manager::wait_after_kill(&mut child);
+                        let _ = std::fs::remove_dir_all(&staging);
                         return Err(install_cancelled_error());
                     }
                     if std::time::Instant::now() > deadline {
                         // 超时先杀进程树（strict/非 strict 都杀，避免泄漏）
                         processes::kill_tree(child.id());
                         super::package_manager::wait_after_kill(&mut child);
+                        let _ = std::fs::remove_dir_all(&staging);
                         if strict {
                             return Err(crate::locale::text(
                                 "升级 npm 超时（150s）",
@@ -565,6 +771,7 @@ pub(crate) fn upgrade_portable_npm(
                 }
                 Err(e) => {
                     let msg = format!("等待 npm 失败：{e}");
+                    let _ = std::fs::remove_dir_all(&staging);
                     if strict {
                         return Err(msg);
                     }
@@ -575,22 +782,48 @@ pub(crate) fn upgrade_portable_npm(
         };
         drop(child);
         if code == 0 {
-            crate::logging::log("runtime: npm 已升级到 12");
-            return Ok(());
+            // 校验 staging 产物：版本达到 12 才进入换入（防止空/残缺产物）
+            let staged_cli = staging.join(npm_rel).join("bin/npm-cli.js");
+            if npm_major_version(&node_exe, &staged_cli).is_some_and(|m| m >= 12) {
+                staged = true;
+                break;
+            }
+            crate::logging::log(&format!(
+                "runtime: npm 已下载但校验失败（{registry}），尝试兜底源"
+            ));
+        } else {
+            crate::logging::log(&format!(
+                "runtime: 升级 npm 到 12 失败（{registry} 退出码 {code}），尝试兜底源"
+            ));
         }
-        crate::logging::log(&format!(
-            "runtime: 升级 npm 到 12 失败（{registry} 退出码 {code}），尝试兜底源"
-        ));
     }
-    if strict {
-        return Err(crate::locale::text(
-            "升级 npm 失败（官方源与镜像均失败）",
-            "Failed to upgrade npm (both the default registry and mirror failed)",
-        )
-        .into());
+    if !staged {
+        let _ = std::fs::remove_dir_all(&staging);
+        if strict {
+            return Err(crate::locale::text(
+                "升级 npm 失败（官方源与镜像均失败）",
+                "Failed to upgrade npm (both the default registry and mirror failed)",
+            )
+            .into());
+        }
+        crate::logging::log("runtime: 升级 npm 到 12 失败，沿用自带版");
+        return Ok(());
     }
-    crate::logging::log("runtime: 升级 npm 到 12 失败，沿用自带版");
-    Ok(())
+    let result = npm_swap_in(&live_npm, &quarantine, &staging.join(npm_rel), live_ok);
+    let _ = std::fs::remove_dir_all(&staging);
+    match result {
+        Ok(()) => {
+            crate::logging::log("runtime: npm 已升级到 12");
+            Ok(())
+        }
+        Err(e) => {
+            if strict {
+                return Err(e);
+            }
+            crate::logging::log(&format!("runtime: {e}，沿用自带版"));
+            Ok(())
+        }
+    }
 }
 
 /// 当前平台的 Node 官方包：返回（包目录名、官方下载 URL、国内镜像 URL、是否 zip）。
@@ -826,6 +1059,112 @@ mod npm_cli_tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod npm_swap_tests {
+    use super::{npm_recover_interrupted, npm_swap_in};
+
+    fn touch(path: &std::path::Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dsh-box-npm-swap-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn swap_replaces_live_and_clears_quarantine_on_success() {
+        let root = scratch("ok");
+        let (live, quarantine, staged) = (
+            root.join("live"),
+            root.join("quarantine"),
+            root.join("staged"),
+        );
+        touch(&live.join("bin/npm-cli.js"), "old");
+        touch(&staged.join("bin/npm-cli.js"), "new");
+        npm_swap_in(&live, &quarantine, &staged, |_| true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(live.join("bin/npm-cli.js")).unwrap(),
+            "new"
+        );
+        assert!(!quarantine.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn swap_restores_old_npm_when_new_fails_verification() {
+        let root = scratch("restore");
+        let (live, quarantine, staged) = (
+            root.join("live"),
+            root.join("quarantine"),
+            root.join("staged"),
+        );
+        touch(&live.join("bin/npm-cli.js"), "old");
+        touch(&staged.join("bin/npm-cli.js"), "new");
+        let err = npm_swap_in(&live, &quarantine, &staged, |_| false).unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(live.join("bin/npm-cli.js")).unwrap(),
+            "old"
+        );
+        assert!(!quarantine.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recover_restores_old_when_new_npm_missing() {
+        let root = scratch("miss");
+        let (live, quarantine) = (root.join("live"), root.join("quarantine"));
+        touch(&quarantine.join("bin/npm-cli.js"), "old");
+        npm_recover_interrupted(&live, &quarantine, |_| false);
+        assert_eq!(
+            std::fs::read_to_string(live.join("bin/npm-cli.js")).unwrap(),
+            "old"
+        );
+        assert!(!quarantine.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recover_clears_quarantine_when_live_is_healthy() {
+        let root = scratch("healthy");
+        let (live, quarantine) = (root.join("live"), root.join("quarantine"));
+        touch(&live.join("bin/npm-cli.js"), "new");
+        touch(&quarantine.join("bin/npm-cli.js"), "old");
+        npm_recover_interrupted(&live, &quarantine, |_| true);
+        assert_eq!(
+            std::fs::read_to_string(live.join("bin/npm-cli.js")).unwrap(),
+            "new"
+        );
+        assert!(!quarantine.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recover_restores_old_when_live_is_broken() {
+        let root = scratch("broken");
+        let (live, quarantine) = (root.join("live"), root.join("quarantine"));
+        touch(&live.join("bin/npm-cli.js"), "broken");
+        touch(&quarantine.join("bin/npm-cli.js"), "old");
+        npm_recover_interrupted(&live, &quarantine, |_| false);
+        assert_eq!(
+            std::fs::read_to_string(live.join("bin/npm-cli.js")).unwrap(),
+            "old"
+        );
+        assert!(!quarantine.exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 

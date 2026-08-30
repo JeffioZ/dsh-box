@@ -461,8 +461,12 @@ pub(crate) fn run() {
                 } else if !state.inner().is_quitting() {
                     api.prevent_close();
                     state.set_quitting(true);
-                    dsh::shutdown(window.app_handle());
-                    window.app_handle().exit(0);
+                    // 先藏窗给即时反馈；停服收尾挪到后台线程——shutdown 的
+                    // 进程 wait 会阻塞事件循环，主线程同步执行时关窗会冻结
+                    // 数秒（与托盘退出同一模式，见 tray::quit）
+                    let _ = window.hide();
+                    let handle = window.app_handle().clone();
+                    std::thread::spawn(move || quit_sequence(&handle));
                 }
             }
             tauri::WindowEvent::Focused(focused) => {
@@ -537,9 +541,22 @@ pub(crate) fn run() {
 
     app.run(|app_handle, event| {
         match event {
-            tauri::RunEvent::ExitRequested { .. } => {
+            tauri::RunEvent::ExitRequested { api, .. } => {
                 window::save_window_state_now(app_handle);
-                dsh::shutdown(app_handle);
+                // 退出已由某入口发起（关窗/托盘/quit 命令）：后台线程正在
+                // 停服并会再次 exit。这里若同步再跑一次 shutdown，
+                // take_running 的竞速可能让主线程拿到 Child 并阻塞在 wait
+                // 上——正是本次修复要消除的退出冻结。
+                if app_handle.state::<AppState>().inner().is_quitting() {
+                    return;
+                }
+                // 未经发起的直接退出请求（如 macOS Cmd+Q / 系统会话结束）：
+                // 同样不在主线程同步停服。先拦下本次退出，后台停服完成后
+                // 再 exit（第二次 ExitRequested 走上面的 is_quitting 分支放行）。
+                app_handle.state::<AppState>().set_quitting(true);
+                let handle = app_handle.clone();
+                std::thread::spawn(move || quit_sequence(&handle));
+                api.prevent_exit();
             }
             // macOS：点击系统通知/从后台恢复时恢复隐藏窗口（Windows 的通知
             // 点击走系统激活 + 单实例回调 show_main，此处兜底 macOS/Linux）
@@ -547,6 +564,14 @@ pub(crate) fn run() {
             _ => {}
         }
     });
+}
+
+/// 退出的收尾序列：停服 → 给进程树收尾时间 → 退出。必须在后台线程执行
+/// （shutdown 的进程 wait 会阻塞调用线程），三处退出入口共用。
+pub(crate) fn quit_sequence(app: &AppHandle) {
+    dsh::shutdown(app);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    app.exit(0);
 }
 
 #[cfg(test)]
