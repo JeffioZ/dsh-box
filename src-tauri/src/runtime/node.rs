@@ -337,8 +337,20 @@ fn ensure_node_inner(app: &AppHandle, config: &Config) -> Result<NodeRuntime, St
         .unwrap_or_else(|| install_runtime(app, config))
 }
 
-/// 下载并安装便携版 Node 到应用数据目录。
-pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<PathBuf, String> {
+/// prepare 阶段产物：已下载并通过 SHA-256 校验的归档与解压所需元信息。
+pub(crate) struct PreparedNodeArchive {
+    archive_path: PathBuf,
+    dir_name: String,
+    source_label: String,
+}
+
+/// 下载并校验便携 Node 归档（prepare 半段）。只写 config.root 下的临时
+/// 归档文件、不触碰 node 目录——可安全放在更新事务停服**之前**的
+/// prepare 钩子里执行，网络/下载失败不产生停机窗口。
+pub(crate) fn prepare_node_archive(
+    app: &AppHandle,
+    config: &Config,
+) -> Result<PreparedNodeArchive, String> {
     if install_cancelled(app) {
         return Err(install_cancelled_error());
     }
@@ -352,15 +364,6 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
 
     // 按平台选择官方包（Windows zip / macOS、Linux tar.gz）
     let (dir_name, url, mirror_url, is_zip) = node_package(&version);
-    let node_dir = config.node_dir();
-    if node_dir.exists() {
-        std::fs::remove_dir_all(&node_dir).map_err(|e| {
-            crate::locale::owned(
-                format!("清理旧 Node.js 安装目录失败：{e}"),
-                format!("Failed to remove the previous Node.js directory: {e}"),
-            )
-        })?;
-    }
     let archive_name = if is_zip {
         "node-download.zip"
     } else {
@@ -375,7 +378,6 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     let expected_sha256 =
         node_archive_sha256(&version, official_archive_name, &config.download_source)?;
     let archive_path = config.root.join(archive_name);
-    std::fs::create_dir_all(&node_dir).map_err(|e| e.to_string())?;
 
     let download_message = if crate::locale::is_chinese() {
         format!("正在下载 Node.js {version}…")
@@ -433,21 +435,47 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
             }
         }
     }
+    Ok(PreparedNodeArchive {
+        archive_path,
+        dir_name,
+        source_label: source.to_string(),
+    })
+}
+
+/// 从已校验的归档安装便携 Node（install 半段）：重建 node 目录、解压、
+/// 拍平并验证可执行文件。更新事务里此刻 current 目录已被改名备份，
+/// 这里的"清理旧目录"只处理首次安装/事务外的残留。
+pub(crate) fn install_node_from_archive(
+    app: &AppHandle,
+    config: &Config,
+    prepared: &PreparedNodeArchive,
+) -> Result<PathBuf, String> {
+    let node_dir = config.node_dir();
+    if node_dir.exists() {
+        std::fs::remove_dir_all(&node_dir).map_err(|e| {
+            crate::locale::owned(
+                format!("清理旧 Node.js 安装目录失败：{e}"),
+                format!("Failed to remove the previous Node.js directory: {e}"),
+            )
+        })?;
+    }
+    std::fs::create_dir_all(&node_dir).map_err(|e| e.to_string())?;
 
     emit_status(
         app,
         BootPhase::InstallingNode,
         crate::locale::text("正在解压 Node.js…", "Extracting Node.js…"),
-        source,
+        &prepared.source_label,
     );
+    // Windows 官方包恒为 zip；is_zip 仅影响 prepare 阶段的归档命名
     #[cfg(windows)]
-    extract_zip(&archive_path, &node_dir)?;
+    extract_zip(&prepared.archive_path, &node_dir)?;
     #[cfg(not(windows))]
-    extract_tar(&archive_path, &node_dir)?;
-    let _ = std::fs::remove_file(&archive_path);
+    extract_tar(&prepared.archive_path, &node_dir)?;
+    let _ = std::fs::remove_file(&prepared.archive_path);
 
     // 包内是 node-<ver>-<platform>/ 单层目录，拍平（对文件/目录残留分别处理，保证幂等）
-    let inner = node_dir.join(&dir_name);
+    let inner = node_dir.join(&prepared.dir_name);
     if inner.exists() {
         for entry in std::fs::read_dir(&inner).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -471,6 +499,12 @@ pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<
     }
 
     Ok(config.node_exe())
+}
+
+/// 下载并安装便携版 Node 到应用数据目录（首次安装路径：两段连续执行）。
+pub(crate) fn install_portable_node(app: &AppHandle, config: &Config) -> Result<PathBuf, String> {
+    let prepared = prepare_node_archive(app, config)?;
+    install_node_from_archive(app, config, &prepared)
 }
 
 /// npm 包在便携 Node 前缀下的相对位置（Windows 官方包与 `npm -g` 的布局

@@ -4,7 +4,7 @@ use super::*;
 
 // ---------- Node 更新 ----------
 
-/// 更新 Node：停服务 → 下载新版便携 Node → 换目录 → 重启（失败回滚）。
+/// 更新 Node：下载新版归档（prepare，未停服）→ 停服务 → 换目录 → 重启（失败回滚）。
 /// 系统 Node 拒绝自动更新；事务骨架复用 `with_directory_transaction`。
 pub(super) fn update_node(
     app: &AppHandle,
@@ -29,10 +29,12 @@ pub(super) fn update_node(
         "Node.js",
         false,
         RollbackRecoveryNote::KeepMarker,
-        || Ok(()),
-        |()| {
-            // 下载并安装新版便携 Node。
-            let _ = runtime::install_portable_node(app, config)?;
+        // 下载与校验前移到 prepare：网络失败不产生停机窗口（此前整个
+        // 下载都发生在停服之后，慢网/换源重试期间用户全程无服务）。
+        || runtime::prepare_node_archive(app, config),
+        |prepared| {
+            // 停服与备份完成后：解压、拍平、验证（失败走既有回滚路径）。
+            runtime::install_node_from_archive(app, config, &prepared)?;
             Ok(())
         },
     )
