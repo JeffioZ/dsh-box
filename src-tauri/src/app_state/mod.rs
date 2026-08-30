@@ -316,6 +316,15 @@ pub struct AppState {
 /// boot_loop 的“重试”信号接收端（启动时存入，仅取一次）。
 pub static RETRY_RX: std::sync::Mutex<Option<Receiver<()>>> = std::sync::Mutex::new(None);
 
+/// 版本探测失败的负缓存期限（见 snapshot 内注释）。
+static VERSION_PROBE_RETRY_AT: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+/// 负缓存判定（纯逻辑，供单测）：`until` 未设或已到期则允许探测。
+fn version_probe_allowed(until: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    !until.is_some_and(|t| t > now)
+}
+
 impl AppState {
     pub fn new() -> AppState {
         // 随机数失败退化为时间+PID 派生 token 而非 panic：release 构建
@@ -658,30 +667,50 @@ impl AppState {
         // 缓存缺失时即时检测一次：启动页首帧就显示完整的版本信息
         // （Node 版本由 boot 线程稍后检测，直接等会导致信息出现太晚、
         // 启动快时刚显示就随页面导航消失）。node/npm 版本仅检测成功后才
-        // 写入缓存，失败不缓存——下次 snapshot 会重新检测；dsh 版本不缓存，
-        // 每次读 package.json，保证安装/更新后立即反映。
+        // 写入缓存；失败进入 30s 负缓存——snapshot 在每次 emit_status
+        // 广播时都会调用，无 Node 的机器上此前每次都重新 PATH 搜索 +
+        // spawn，启动期间每秒多次进程创建。安装完成由 boot 线程直接写入
+        // 版本缓存，不依赖这里的探测；dsh 版本不缓存，每次读
+        // package.json，保证安装/更新后立即反映。
+        let probe_now = version_probe_allowed(
+            *VERSION_PROBE_RETRY_AT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            std::time::Instant::now(),
+        );
         let node_version = if external_service.is_some() {
             None
         } else if node_version.is_some() {
             node_version
-        } else {
+        } else if probe_now {
             let version = crate::runtime::current_node_version(&config);
             if version.is_some() {
                 self.set_node_version(version.clone());
             }
             version
+        } else {
+            None
         };
         let npm_version = if external_service.is_some() {
             None
         } else if npm_version.is_some() {
             npm_version
-        } else {
+        } else if probe_now {
             let version = crate::runtime::npm_version(&config);
             if version.is_some() {
                 self.set_npm_version(version.clone());
             }
             version
+        } else {
+            None
         };
+        if external_service.is_none() && probe_now {
+            let failed = node_version.is_none() || npm_version.is_none();
+            *VERSION_PROBE_RETRY_AT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
+                failed.then(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
+        }
         StatusPayload {
             phase: phase.as_str().to_string(),
             message,
@@ -1065,8 +1094,20 @@ impl AppState {
 mod tests {
     use super::{
         begin_onboarding_probe, complete_onboarding_probe, merge_section_field,
-        onboarding_required_for, wait_onboarding_probe, AppState,
+        onboarding_required_for, version_probe_allowed, wait_onboarding_probe, AppState,
     };
+
+    #[test]
+    fn version_probe_backoff_gate_allows_only_after_expiry() {
+        let now = std::time::Instant::now();
+        assert!(version_probe_allowed(None, now));
+        let until = now + std::time::Duration::from_secs(30);
+        assert!(!version_probe_allowed(Some(until), now));
+        assert!(version_probe_allowed(
+            Some(until),
+            now + std::time::Duration::from_secs(30)
+        ));
+    }
 
     #[test]
     fn onboarding_gate_distinguishes_dev_processes_from_internal_navigation() {

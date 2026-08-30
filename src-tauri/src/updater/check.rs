@@ -509,17 +509,9 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
     }
     let tags = parse_releases_atom(&text);
     // 过滤 prerelease tag（-rc/-preview/-beta/-alpha）：atom 首个 entry 是
-    // 最近发布，可能未切 latest 的 rc 版，会误报"有更新"
-    let Some(latest) = tags
-        .iter()
-        .map(|t| t.trim_start_matches('v').to_string())
-        .find(|t| {
-            !t.contains("-rc")
-                && !t.contains("-preview")
-                && !t.contains("-beta")
-                && !t.contains("-alpha")
-        })
-    else {
+    // 最近发布，可能未切 latest 的 rc 版，会误报"有更新"。与 pwsh 检查
+    // 共用同一过滤实现（powershell::latest_stable_tag）。
+    let Some(latest) = super::powershell::latest_stable_tag(&tags) else {
         return fail("更新源中未找到稳定发布版本".into());
     };
     let installed = env!("CARGO_PKG_VERSION").to_string();

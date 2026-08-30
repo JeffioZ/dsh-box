@@ -1,10 +1,12 @@
 //! 运行时安装与维护入口：Node、自管 pnpm、dsh 包与服务启动。
 
+mod download;
 mod dsh_package;
 mod node;
 mod package_manager;
 mod server;
 
+pub(crate) use download::{sha256_file, stream_to_file, DownloadError, StreamRequest};
 #[cfg(test)]
 use dsh_package::read_log_tail;
 pub(crate) use dsh_package::{ensure_dsh, install_dsh_version, prepare_dsh_installer};
@@ -21,11 +23,10 @@ use server::version_supports_no_open;
 pub(crate) use server::{base_envs, start_server};
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::app_state::{AppState, BootPhase, Config};
@@ -36,9 +37,9 @@ use crate::{emit_status, emit_status_progress};
 const NODEJS_INDEX: &str = "https://nodejs.org/dist/index.json";
 /// npmmirror 国内镜像（阿里开源镜像，302 到 CDN）：官方直连失败时兜底，
 /// 缓解 nodejs.org 在国内下载慢/超时。包下载与版本索引 index.json 都会
-/// 走镜像；SHASUMS256 校验清单位置随 download_source——mirror 模式同样
-/// 走镜像（完整性锚点为镜像自身，见 node.rs 与 docs/security.md 的说明），
-/// official/auto 始终走官方校验。
+/// 走镜像；SHASUMS256 校验清单始终优先官方（完整性锚点不与下载同源），
+/// 仅 mirror 模式下官方不可达才降级镜像清单（见 node.rs 的
+/// checksums_urls 与 docs/security.md）。
 const NODE_MIRROR_BASE: &str = "https://npmmirror.com/mirrors/node";
 const NPM_DIST_TAGS: &str = "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags";
 /// npm 包自身的 dist-tags（查询 npm 最新版用于检查更新）。

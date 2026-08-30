@@ -150,109 +150,70 @@ fn download_node_archive(
     expected_sha256: &str,
     source: &str,
 ) -> Result<(), NodeDownloadError> {
-    let resp = download_client().get(url).call().map_err(|error| {
-        NodeDownloadError::Source(crate::locale::owned(
+    // 下载本体（分块/上限/取消/进度节流）复用 download::stream_to_file；
+    // 这里只保留 Node 特有的进度文案与 Source/Fatal 错误映射。
+    let on_progress = |done: u64, total: u64| {
+        let pct = (((done as f64 / total as f64) * 100.0) as i64).min(100);
+        let message = if crate::locale::is_chinese() {
+            format!("正在下载 Node.js {version}… {pct}%")
+        } else {
+            format!("Downloading Node.js {version}… {pct}%")
+        };
+        emit_status_progress(
+            app,
+            BootPhase::InstallingNode,
+            &message,
+            &format!(
+                "{} · {:.1}/{:.1} MB",
+                source,
+                done as f64 / 1048576.0,
+                total as f64 / 1048576.0
+            ),
+            Some(pct as f64),
+        );
+    };
+    let cancelled = || install_cancelled(app);
+    let error_text = |error: &str| {
+        crate::locale::owned(
             format!("Node.js 下载失败（{source}）：{error}"),
             format!("Failed to download Node.js ({source}): {error}"),
-        ))
-    })?;
-    let total: u64 = resp
-        .headers()
-        .get("content-length")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    if total > MAX_NODE_ARCHIVE_BYTES {
-        return Err(NodeDownloadError::Source(
+        )
+    };
+    super::download::stream_to_file(super::download::StreamRequest {
+        url,
+        path: archive_path,
+        max_bytes: MAX_NODE_ARCHIVE_BYTES,
+        user_agent: None,
+        progress: Some(&on_progress),
+        cancelled: Some(&cancelled),
+    })
+    .map_err(|error| match error {
+        super::download::DownloadError::Transport(e) => NodeDownloadError::Source(error_text(&e)),
+        super::download::DownloadError::Body(e) => NodeDownloadError::Source(crate::locale::owned(
+            format!("下载 Node.js 响应体失败：{e}"),
+            format!("Failed to read the Node.js download: {e}"),
+        )),
+        super::download::DownloadError::Local(e) => NodeDownloadError::Fatal(crate::locale::owned(
+            format!("写入临时文件失败：{e}"),
+            format!("Failed to write the temporary download file: {e}"),
+        )),
+        super::download::DownloadError::Limit => NodeDownloadError::Source(
             crate::locale::text(
                 "Node.js 下载文件超过 256 MB 安全上限",
                 "The Node.js download exceeds the 256 MB safety limit",
             )
             .into(),
-        ));
-    }
-    let mut reader = resp.into_body().into_reader();
-    let mut file = std::fs::File::create(archive_path).map_err(|error| {
+        ),
+        super::download::DownloadError::Cancelled => {
+            NodeDownloadError::Fatal(install_cancelled_error())
+        }
+    })?;
+    let actual_sha256 = super::download::sha256_file(archive_path).map_err(|e| {
         NodeDownloadError::Fatal(crate::locale::owned(
-            format!("写入临时文件失败：{error}"),
-            format!("Failed to create the temporary download file: {error}"),
+            format!("校验下载文件失败：{e}"),
+            format!("Failed to verify the downloaded file: {e}"),
         ))
     })?;
-    let mut buf = [0u8; 65536];
-    let mut done = 0u64;
-    let mut last_pct = -1i64;
-    let mut last_emit = std::time::Instant::now() - Duration::from_secs(1);
-    loop {
-        if install_cancelled(app) {
-            drop(file);
-            let _ = std::fs::remove_file(archive_path);
-            return Err(NodeDownloadError::Fatal(install_cancelled_error()));
-        }
-        let n = match reader.read(&mut buf) {
-            Ok(n) => n,
-            Err(error) => {
-                drop(file);
-                let _ = std::fs::remove_file(archive_path);
-                return Err(NodeDownloadError::Source(crate::locale::owned(
-                    format!("下载 Node.js 响应体失败：{error}"),
-                    format!("Failed to read the Node.js download: {error}"),
-                )));
-            }
-        };
-        if n == 0 {
-            break;
-        }
-        done += n as u64;
-        if done > MAX_NODE_ARCHIVE_BYTES {
-            drop(file);
-            let _ = std::fs::remove_file(archive_path);
-            return Err(NodeDownloadError::Source(
-                crate::locale::text(
-                    "Node.js 下载文件超过 256 MB 安全上限",
-                    "The Node.js download exceeds the 256 MB safety limit",
-                )
-                .into(),
-            ));
-        }
-        if let Err(error) = file.write_all(&buf[..n]) {
-            drop(file);
-            let _ = std::fs::remove_file(archive_path);
-            return Err(NodeDownloadError::Fatal(crate::locale::owned(
-                format!("写入临时文件失败：{error}"),
-                format!("Failed to write the temporary download file: {error}"),
-            )));
-        }
-        if total > 0 {
-            let pct = (((done as f64 / total as f64) * 100.0) as i64).min(100);
-            if pct > last_pct && last_emit.elapsed() >= Duration::from_millis(200) {
-                last_pct = pct;
-                last_emit = std::time::Instant::now();
-                let message = if crate::locale::is_chinese() {
-                    format!("正在下载 Node.js {version}… {pct}%")
-                } else {
-                    format!("Downloading Node.js {version}… {pct}%")
-                };
-                emit_status_progress(
-                    app,
-                    BootPhase::InstallingNode,
-                    &message,
-                    &format!(
-                        "{} · {:.1}/{:.1} MB",
-                        source,
-                        done as f64 / 1048576.0,
-                        total as f64 / 1048576.0
-                    ),
-                    Some(pct as f64),
-                );
-            }
-        }
-    }
-    drop(file);
-    if install_cancelled(app) {
-        let _ = std::fs::remove_file(archive_path);
-        return Err(NodeDownloadError::Fatal(install_cancelled_error()));
-    }
-    let actual_sha256 = sha256_file(archive_path).map_err(NodeDownloadError::Fatal)?;
     if actual_sha256 != expected_sha256 {
         let _ = std::fs::remove_file(archive_path);
         return Err(NodeDownloadError::Source(crate::locale::owned(
@@ -730,7 +691,10 @@ pub(crate) fn upgrade_portable_npm(
             match processes::spawn_process(&node_exe, &args, &envs, Some(&config.root), None) {
                 Ok(c) => c,
                 Err(e) => {
-                    let msg = format!("运行 npm 失败：{e}");
+                    let msg = crate::locale::owned(
+                        format!("运行 npm 失败：{e}"),
+                        format!("Failed to run npm: {e}"),
+                    );
                     if strict {
                         let _ = std::fs::remove_dir_all(&staging);
                         return Err(msg);
@@ -770,7 +734,10 @@ pub(crate) fn upgrade_portable_npm(
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(e) => {
-                    let msg = format!("等待 npm 失败：{e}");
+                    let msg = crate::locale::owned(
+                        format!("等待 npm 失败：{e}"),
+                        format!("Failed while waiting for npm: {e}"),
+                    );
                     let _ = std::fs::remove_dir_all(&staging);
                     if strict {
                         return Err(msg);
@@ -890,26 +857,44 @@ fn node_archive_sha256(
     archive_name: &str,
     download_source: &str,
 ) -> Result<String, String> {
-    let checksums_url = node_checksums_url(version, download_source);
-    let checksums = get_text(&checksums_url).map_err(|e| {
-        crate::locale::owned(
-            format!("获取 Node.js 校验信息失败：{e}"),
-            format!("Failed to retrieve the Node.js checksum list: {e}"),
-        )
-    })?;
-    parse_node_sha256(&checksums, archive_name).ok_or_else(|| {
-        crate::locale::owned(
-            format!("Node.js 校验列表中未找到 {archive_name}"),
-            format!("{archive_name} was not found in the Node.js checksum list"),
-        )
-    })
+    // 候选清单按序尝试：任一清单解析出目标条目即返回
+    let mut last_err = String::new();
+    for (index, url) in checksums_urls(version, download_source).iter().enumerate() {
+        match get_text(url) {
+            Ok(checksums) => {
+                if index > 0 {
+                    crate::logging::log(
+                        "runtime: 官方校验清单不可达，降级使用镜像清单（完整性锚点为镜像信任域）",
+                    );
+                }
+                if let Some(hash) = parse_node_sha256(&checksums, archive_name) {
+                    return Ok(hash);
+                }
+                return Err(crate::locale::owned(
+                    format!("Node.js 校验列表中未找到 {archive_name}"),
+                    format!("{archive_name} was not found in the Node.js checksum list"),
+                ));
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    Err(crate::locale::owned(
+        format!("获取 Node.js 校验信息失败：{last_err}"),
+        format!("Failed to retrieve the Node.js checksum list: {last_err}"),
+    ))
 }
 
-/// 校验清单地址：镜像模式走 npmmirror 对应路径，其余（official/auto）走官方。
-fn node_checksums_url(version: &str, download_source: &str) -> String {
+/// 校验清单候选地址：official/auto 只用官方；mirror 先官方（完整性锚点
+/// 不与下载同源——镜像被投毒时同源校验照样通过；官方清单仅几 KB，不
+/// 构成速度负担），官方不可达才退回镜像清单（锚点降级为镜像信任域）。
+fn checksums_urls(version: &str, download_source: &str) -> Vec<String> {
+    let official = format!("https://nodejs.org/dist/{version}/SHASUMS256.txt");
     match download_source {
-        "mirror" => format!("{NODE_MIRROR_BASE}/{version}/SHASUMS256.txt"),
-        _ => format!("https://nodejs.org/dist/{version}/SHASUMS256.txt"),
+        "mirror" => vec![
+            official,
+            format!("{NODE_MIRROR_BASE}/{version}/SHASUMS256.txt"),
+        ],
+        _ => vec![official],
     }
 }
 
@@ -923,34 +908,6 @@ pub(super) fn parse_node_sha256(checksums: &str, archive_name: &str) -> Option<S
             && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| hash.to_ascii_lowercase())
     })
-}
-
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| {
-        crate::locale::owned(
-            format!("读取下载文件失败：{e}"),
-            format!("Failed to read the downloaded file: {e}"),
-        )
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer).map_err(|e| {
-            crate::locale::owned(
-                format!("校验下载文件失败：{e}"),
-                format!("Failed to verify the downloaded file: {e}"),
-            )
-        })?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
 }
 
 /// Windows：zip 解压（bsdtar 优先，PowerShell 回退）。
@@ -1170,20 +1127,23 @@ mod npm_swap_tests {
 
 #[cfg(test)]
 mod checksums_url_tests {
-    use super::node_checksums_url;
+    use super::checksums_urls;
 
     #[test]
-    fn checksums_url_follows_the_download_source() {
-        // mirror：清单与归档同一信任域（镜像自身）
+    fn checksums_urls_anchor_official_even_in_mirror_mode() {
+        // mirror：官方清单优先（锚点不与下载同源），镜像仅兜底
         assert_eq!(
-            node_checksums_url("v24.1.0", "mirror"),
-            "https://npmmirror.com/mirrors/node/v24.1.0/SHASUMS256.txt"
+            checksums_urls("v24.1.0", "mirror"),
+            vec![
+                "https://nodejs.org/dist/v24.1.0/SHASUMS256.txt".to_string(),
+                "https://npmmirror.com/mirrors/node/v24.1.0/SHASUMS256.txt".to_string(),
+            ]
         );
-        // official / auto：始终锚定官方清单
+        // official / auto：只用官方清单
         for source in ["official", "auto"] {
             assert_eq!(
-                node_checksums_url("v24.1.0", source),
-                "https://nodejs.org/dist/v24.1.0/SHASUMS256.txt"
+                checksums_urls("v24.1.0", source),
+                vec!["https://nodejs.org/dist/v24.1.0/SHASUMS256.txt".to_string()]
             );
         }
     }
