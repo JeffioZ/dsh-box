@@ -212,10 +212,6 @@ pub(super) fn update_app_exe(
 /// 预下载文件是否可应用：存在 + 体积下限 + MZ 头 + GitHub 资产 SHA-256。
 #[cfg(windows)]
 fn verify_downloaded_exe(target: &std::path::Path, expected_sha256: &str) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write as _;
-    use std::io::Seek as _;
-
     let Ok(meta) = target.metadata() else {
         return Err(crate::locale::text(
             "已下载的程序文件不存在。",
@@ -240,20 +236,8 @@ fn verify_downloaded_exe(target: &std::path::Path, expected_sha256: &str) -> Res
         )
         .into());
     }
-    file.rewind().map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buf).map_err(|e| e.to_string())?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buf[..read]);
-    }
-    let mut actual = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        let _ = write!(&mut actual, "{byte:02x}");
-    }
+    drop(file);
+    let actual = runtime::sha256_file(target).map_err(|e| e.to_string())?;
     if actual != expected_sha256.to_ascii_lowercase() {
         return Err(crate::locale::text(
             "应用更新包 SHA-256 校验失败。",
@@ -291,40 +275,43 @@ fn download_app_exe_inner(
     target: &std::path::Path,
     release: &AppReleaseAsset,
 ) -> Result<(), String> {
-    use std::io::Write as _;
-
     emit_progress(
         app,
         crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
     );
-    let resp = runtime::download_client()
-        .get(&release.url)
-        .header("User-Agent", "DSHBox")
-        .call()
-        .map_err(|e| crate::locale::error("下载失败", "Download failed", e))?;
-    // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘
+    // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘。
+    // 下载本体（分块/上限/失败清理）复用 runtime::download::stream_to_file。
     const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
-    let mut reader = resp.into_body().into_reader().take(MAX_APP_EXE_BYTES + 1);
     let part = target.with_extension("exe.part");
     let _ = std::fs::remove_file(&part);
-    let mut file = std::fs::File::create(&part)
-        .map_err(|e| crate::locale::error("写入失败", "Failed to write the update", e))?;
-    let copied = std::io::copy(&mut reader, &mut file)
-        .map_err(|e| crate::locale::error("下载中断", "Download interrupted", e))?;
-    if copied > MAX_APP_EXE_BYTES {
-        return Err(crate::locale::text(
+    runtime::stream_to_file(runtime::StreamRequest {
+        url: &release.url,
+        path: &part,
+        max_bytes: MAX_APP_EXE_BYTES,
+        user_agent: Some("DSHBox"),
+        progress: None,
+        cancelled: None,
+    })
+    .map_err(|error| match error {
+        runtime::DownloadError::Transport(e) => {
+            crate::locale::error("下载失败", "Download failed", &e)
+        }
+        runtime::DownloadError::Body(e) => {
+            crate::locale::error("下载中断", "Download interrupted", &e)
+        }
+        runtime::DownloadError::Local(e) => {
+            crate::locale::error("写入失败", "Failed to write the update", &e)
+        }
+        runtime::DownloadError::Limit => crate::locale::text(
             "下载内容超出预期大小，已取消更新。",
             "The downloaded content exceeds the expected size. Update cancelled.",
         )
-        .into());
-    }
-    file.flush().map_err(|e| {
-        crate::locale::error("写入更新包失败", "Failed to write the update package", e)
+        .into(),
+        // 应用更新未接取消回调，此分支不可达；保守映射为中断
+        runtime::DownloadError::Cancelled => {
+            crate::locale::text("下载中断", "Download interrupted").into()
+        }
     })?;
-    file.sync_all().map_err(|e| {
-        crate::locale::error("写入更新包失败", "Failed to write the update package", e)
-    })?;
-    drop(file);
     verify_downloaded_exe(&part, &release.sha256)?;
     if target.exists() {
         std::fs::remove_file(target).map_err(|e| {
