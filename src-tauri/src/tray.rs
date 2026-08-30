@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 use crate::app_state::AppState;
 #[cfg(windows)]
 use crate::processes;
-use crate::{dsh, show_main, APP_TITLE};
+use crate::{show_main, APP_TITLE};
 
 #[cfg(windows)]
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -532,12 +532,8 @@ fn quit(app: &AppHandle) {
     let state = app.state::<AppState>();
     state.set_quitting(true);
     // 停服与收尾等待挪到后台线程：macOS/Linux 下本函数在托盘事件（主线程）
-    // 里执行，shutdown 的进程 wait 与 sleep 会阻塞事件循环
+    // 里执行，shutdown 的进程 wait 与 sleep 会阻塞事件循环（与关窗/quit
+    // 命令共用 bootstrap::quit_sequence）
     let handle = app.clone();
-    std::thread::spawn(move || {
-        dsh::shutdown(&handle);
-        // 给进程树一点收尾时间
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        handle.exit(0);
-    });
+    std::thread::spawn(move || crate::bootstrap::quit_sequence(&handle));
 }

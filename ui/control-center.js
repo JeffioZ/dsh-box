@@ -901,7 +901,6 @@ const NAV_TITLE_KEY = {
 };
 const NAV_ICONS = {
   chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path></svg>',
-  wallet: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 7H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h13"></path><path d="M3 5v14a2 2 0 0 0 2 2h16V7"></path><path d="M16 13h3"></path></svg>',
   download: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path></svg>',
   puzzle: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M8.5 3H5a2 2 0 0 0-2 2v3.5a2.5 2.5 0 1 1 0 5V19a2 2 0 0 0 2 2h3.5a2.5 2.5 0 1 1 5 0H19a2 2 0 0 0 2-2v-5.5a2.5 2.5 0 1 1 0-5V5a2 2 0 0 0-2-2h-5.5a2.5 2.5 0 1 1-5 0Z"></path></svg>',
   gear: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
@@ -1093,7 +1092,7 @@ window.__dshdReset = () => {
   const nav = $('nav');
   if (nav) nav.innerHTML = '';
 };
-listen('app-dialog-open', (e) => applyOpen(e.payload));
+listen('app-dialog-open', (e) => applyOpen(e.payload)).catch(() => {});
 listen('dsh-status', (e) => {
   if (!currentOpen || !e.payload) return;
   currentOpen.initial = currentOpen.initial || {};
@@ -1101,7 +1100,7 @@ listen('dsh-status', (e) => {
   currentOpen.initial.service_ready = e.payload.phase === 'ready'
     && (e.payload.service_mode === 'managed' || e.payload.service_mode === 'external');
   renderNav(openKind);
-});
+}).catch(() => {});
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'visible') {
     // 不做动效重放：该 WebView 对“隐藏→显示”的可见性事件不可靠，
@@ -1112,10 +1111,10 @@ document.addEventListener('visibilitychange', async () => {
 });
 listen('update-result', (e) => {
   if (openKind === 'check') renderCheckResult(e.payload);
-});
+}).catch(() => {});
 listen('update-progress', (e) => {
   if (e.payload && e.payload.message) renderProgress(e.payload.message);
-});
+}).catch(() => {});
 window.addEventListener('dshd-language-changed', () => {
   if (!currentOpen) return;
   applyTruncationTips(document);

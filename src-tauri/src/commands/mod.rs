@@ -121,8 +121,11 @@ pub fn startup_transition_done(app: AppHandle, webview: tauri::Webview) -> Resul
 pub fn quit(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     app.state::<AppState>().set_quitting(true);
-    dsh::shutdown(&app);
-    app.exit(0);
+    // 停服收尾在后台线程执行（与托盘退出/关窗退出共用 quit_sequence），
+    // 命令立即返回；后台完成后 exit 触发的 ExitRequested 会因
+    // is_quitting 跳过主线程的同步停服
+    let handle = app.clone();
+    std::thread::spawn(move || crate::bootstrap::quit_sequence(&handle));
     Ok(())
 }
 

@@ -2,9 +2,16 @@
 //!
 //! 全部经由 dsh CLI 的 `plugin` 子命令（转发 pnpm 到 profile 目录），
 //! 不改 dsh 代码；变更先合并，用户确认或后台空闲后只重启一次服务使其生效。
+//!
+//! 模块分工：`transaction.rs` 管落盘事务标记与启动收敛（并发协议所在），
+//! `restart.rs` 管变更合并与服务重启协调，`maintenance.rs` 管内置清单/
+//! 定期同步/退避，`runner.rs` 管 CLI 执行与 pnpm virtual-store 自愈；
+//! 本文件保留插件目录查询（list/search/recommended）、手动增删与更新检查。
 
 mod maintenance;
+mod restart;
 mod runner;
+mod transaction;
 
 pub use maintenance::start_market_bootstrap;
 use maintenance::*;
@@ -12,315 +19,25 @@ pub(crate) use maintenance::{bootstrap_once_blocking, bootstrap_work_pending};
 pub use maintenance::{RecommendedPlugin, ReinstallableBuiltinPlugin};
 use runner::{run_dsh_plugin_auto, run_dsh_plugin_auto_user_remove};
 
-use serde::{Deserialize, Serialize};
+// 拆分后的域内绑定：maintenance/runner/测试经 super::* 或 super::X 继续
+// 引用这些名字；对 crate 其他模块的路径（crate::plugins::X）保持不变。
+pub(crate) use restart::deferred_restart_pending;
+use restart::mark_plugin_changes;
+pub use restart::{apply_plugin_changes, plugin_apply_status, PluginApplyStatus};
+use transaction::{
+    clear_install_marker, save_install_marker, spec_package_name, try_mark_user_removed,
+    PluginMutationKind,
+};
+pub(crate) use transaction::{
+    clear_resolved_install_marker, recover_interrupted_plugin_mutation, try_acquire_pnpm_lock,
+    PnpmGuard,
+};
+
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Manager;
 
 use crate::app_state::AppState;
-
-const PLUGIN_INSTALL_MARKER_KEY: &str = "plugin_install_in_progress";
-
-#[derive(Clone, Copy, Default, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum PluginMutationKind {
-    #[default]
-    Add,
-    Remove,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct PluginInstallMarker {
-    #[serde(default)]
-    package: Option<String>,
-    spec: String,
-    #[serde(default)]
-    kind: PluginMutationKind,
-    #[serde(default)]
-    user_removal: bool,
-    #[serde(default)]
-    original_manifest: Option<String>,
-}
-
-/// 从 npm 依赖规格中提取 package.json dependency 名。无法可靠识别的 git、
-/// URL 或本地路径规格返回 None，崩溃恢复不会据此删除 manifest 内容。
-fn spec_package_name(spec: &str) -> Option<&str> {
-    let spec = spec.trim().split('#').next()?.trim();
-    if spec.is_empty() || spec.contains("://") || spec.starts_with("git+") || spec.starts_with('.')
-    {
-        return None;
-    }
-    let end = if spec.starts_with('@') {
-        let slash = spec.find('/')?;
-        spec[slash + 1..]
-            .rfind('@')
-            .map(|at| slash + 1 + at)
-            .unwrap_or(spec.len())
-    } else {
-        spec.rfind('@').filter(|at| *at > 0).unwrap_or(spec.len())
-    };
-    let name = &spec[..end];
-    let valid_shape = if let Some(scoped) = name.strip_prefix('@') {
-        scoped.split_once('/').is_some_and(|(scope, package)| {
-            !scope.is_empty() && !package.is_empty() && !package.contains('/')
-        })
-    } else {
-        !name.contains('/')
-    };
-    (valid_shape
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '/' | '-' | '_' | '.')))
-    .then_some(name)
-}
-
-fn install_marker(config: &crate::app_state::Config) -> Option<PluginInstallMarker> {
-    crate::app_state::load_state_value(&config.root, PLUGIN_INSTALL_MARKER_KEY)
-        .and_then(|value| serde_json::from_value(value).ok())
-}
-
-fn save_install_marker(
-    config: &crate::app_state::Config,
-    spec: &str,
-    package: Option<&str>,
-    kind: PluginMutationKind,
-    user_removal: bool,
-    original_manifest: Option<&str>,
-) -> Result<(), String> {
-    if let Some(marker) = install_marker(config) {
-        return Err(crate::locale::owned(
-            format!(
-                "上次插件操作尚未完成（{}），请先重启应用完成恢复后再试。",
-                marker.spec
-            ),
-            format!(
-                "The previous plugin operation ({}) is still unfinished. Restart the app to complete recovery before trying again.",
-                marker.spec
-            ),
-        ));
-    }
-    crate::app_state::save_state_value(
-        &config.root,
-        PLUGIN_INSTALL_MARKER_KEY,
-        serde_json::to_value(PluginInstallMarker {
-            package: package.map(str::to_string),
-            spec: spec.to_string(),
-            kind,
-            user_removal,
-            original_manifest: original_manifest.map(str::to_string),
-        })
-        .map_err(|e| e.to_string())?,
-    )
-}
-
-fn clear_install_marker(config: &crate::app_state::Config) -> Result<(), String> {
-    // 真删键而非写 Null：语义相同（Null 反序列化失败按无标记处理），
-    // 但避免 state.json 永久残留无意义键
-    crate::app_state::remove_state_value(&config.root, PLUGIN_INSTALL_MARKER_KEY)
-}
-
-fn try_mark_user_removed(config: &crate::app_state::Config, package: &str) -> Result<(), String> {
-    crate::app_state::save_state_value(
-        &config.root,
-        &format!("market_user_removed_{package}"),
-        serde_json::json!(true),
-    )
-}
-
-fn dependency_installed(config: &crate::app_state::Config, package: &str) -> bool {
-    let path = config.dsh_home().join("profiles/web/package.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|json| {
-            json.get("dependencies")
-                .and_then(|deps| deps.get(package))
-                .cloned()
-        })
-        .is_some()
-}
-
-/// 服务能够启动说明 profile 已完整解析；完成可能在命令提交后、事务标记
-/// 清理前被中断的附属状态，再清除旧事务记录。
-pub(crate) fn clear_resolved_install_marker(config: &crate::app_state::Config) {
-    let Some(marker) = install_marker(config) else {
-        return;
-    };
-    match marker.kind {
-        PluginMutationKind::Remove if marker.user_removal => match marker.package.as_deref() {
-            Some(package) if !dependency_installed(config, package) => {
-                if let Err(e) = try_mark_user_removed(config, package) {
-                    crate::logging::log(&format!(
-                        "plugins: 完成中断卸载的用户状态记录失败，保留事务标记：{e}"
-                    ));
-                    return;
-                }
-            }
-            // 卸载命令未生效（依赖仍在）或包名不可识别：不能记录用户卸载状态
-            // （否则仍在安装的包会失去内置维护身份），仅记日志后按完成收敛。
-            _ => {
-                crate::logging::log(&format!(
-                    "plugins: 中断的卸载事务未生效（{} 仍在安装或包名不可识别），不记录用户卸载状态",
-                    marker.package.as_deref().unwrap_or(marker.spec.as_str())
-                ));
-            }
-        },
-        // 安装命令未生效（依赖未写入）：事务按完成收敛但插件并未装上，记日志
-        // 便于诊断；不在此重跑 CLI（服务已就绪，重跑不属于启动收敛职责）。
-        PluginMutationKind::Add => {
-            if let Some(package) = marker.package.as_deref() {
-                if !dependency_installed(config, package) {
-                    crate::logging::log(&format!(
-                        "plugins: 中断的安装事务未生效（{package} 未写入依赖），按未完成丢弃"
-                    ));
-                }
-            }
-        }
-        _ => {}
-    }
-    if let Err(e) = clear_install_marker(config) {
-        crate::logging::log(&format!("plugins: 清理已完成的插件事务标记失败：{e}"));
-    }
-}
-
-#[derive(Default)]
-struct RestartState {
-    generation: u64,
-    pending: bool,
-    applying: bool,
-    deferred: bool,
-    waiting_for_idle: bool,
-    error: Option<String>,
-}
-
-static RESTART_STATE: std::sync::Mutex<RestartState> = std::sync::Mutex::new(RestartState {
-    generation: 0,
-    pending: false,
-    applying: false,
-    deferred: false,
-    waiting_for_idle: false,
-    error: None,
-});
-static RESTART_COORDINATOR_RUNNING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-#[derive(Clone, Serialize)]
-pub struct PluginApplyStatus {
-    pub pending: bool,
-    pub applying: bool,
-    pub waiting_for_idle: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-fn apply_status() -> PluginApplyStatus {
-    let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-    PluginApplyStatus {
-        pending: state.pending,
-        applying: state.applying,
-        waiting_for_idle: state.waiting_for_idle,
-        error: state.error.clone(),
-    }
-}
-
-pub fn plugin_apply_status() -> PluginApplyStatus {
-    apply_status()
-}
-
-pub(crate) fn deferred_restart_pending() -> bool {
-    let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-    state.pending && state.deferred
-}
-
-fn mark_plugin_changes(app: &AppHandle, apply_when_idle: bool) {
-    {
-        let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-        state.generation = state.generation.wrapping_add(1);
-        state.pending = true;
-        state.error = None;
-        if apply_when_idle {
-            state.deferred = true;
-        }
-    }
-    if apply_when_idle {
-        start_restart_coordinator(app);
-    }
-}
-
-pub fn apply_plugin_changes(app: &AppHandle) -> PluginApplyStatus {
-    {
-        let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-        if state.pending {
-            state.deferred = true;
-            state.error = None;
-        }
-    }
-    start_restart_coordinator(app);
-    apply_status()
-}
-
-fn start_restart_coordinator(app: &AppHandle) {
-    use std::sync::atomic::Ordering;
-    if RESTART_COORDINATOR_RUNNING.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        loop {
-            if handle.state::<AppState>().is_quitting() {
-                break;
-            }
-            let should_apply = {
-                let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-                state.pending && state.deferred && !state.applying
-            };
-            if !should_apply {
-                break;
-            }
-            let config = handle.state::<AppState>().config();
-            if crate::usage::session_activity(&config) != Some(false) {
-                RESTART_STATE
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .waiting_for_idle = true;
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                continue;
-            }
-            let generation = {
-                let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-                state.applying = true;
-                state.waiting_for_idle = false;
-                state.generation
-            };
-            let result = crate::updater::restart_service(&handle);
-            let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-            state.applying = false;
-            match result {
-                Ok(()) => {
-                    state.error = None;
-                    if state.generation == generation {
-                        state.pending = false;
-                        state.deferred = false;
-                    }
-                }
-                Err(error) => {
-                    crate::logging::log(&format!(
-                        "plugins: 重启服务失败（插件变更仍待应用）：{error}"
-                    ));
-                    state.error = Some(error);
-                    state.deferred = false;
-                }
-            }
-        }
-        RESTART_COORDINATOR_RUNNING.store(false, Ordering::Release);
-        let needs_restart = {
-            let state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
-            state.pending && state.deferred
-        };
-        if needs_restart {
-            start_restart_coordinator(&handle);
-        }
-    });
-}
 
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -623,120 +340,6 @@ fn manifest_package_names(
     Some((dependencies, bundles))
 }
 
-fn marker_targets_package(
-    marker: &PluginInstallMarker,
-    current_manifest: &str,
-    package: &str,
-) -> bool {
-    if let Some(recorded) = marker.package.as_deref() {
-        return recorded == package;
-    }
-    let Some(original) = marker.original_manifest.as_deref() else {
-        return false;
-    };
-    let Some((before_dependencies, before_bundles)) = manifest_package_names(original) else {
-        return false;
-    };
-    let Some((after_dependencies, after_bundles)) = manifest_package_names(current_manifest) else {
-        return false;
-    };
-    match marker.kind {
-        PluginMutationKind::Add => {
-            (!before_dependencies.contains(package) && after_dependencies.contains(package))
-                || (!before_bundles.contains(package) && after_bundles.contains(package))
-        }
-        PluginMutationKind::Remove => {
-            (before_dependencies.contains(package) && !after_dependencies.contains(package))
-                || (before_bundles.contains(package) && !after_bundles.contains(package))
-        }
-    }
-}
-
-/// 仅修复由 DSHBox 记录、且包名与启动错误完全一致的中断插件写操作。
-/// add 的半成品会回退，remove 的半成品会完成卸载，二者都以可启动的
-/// manifest 为收敛目标；没有事务记录或目标不匹配时保持用户配置不动。
-pub(crate) fn recover_interrupted_plugin_mutation(
-    config: &crate::app_state::Config,
-    name: &str,
-) -> Result<bool, String> {
-    let Some(marker) = install_marker(config) else {
-        return Ok(false);
-    };
-    let path = config.dsh_home().join("profiles/web/package.json");
-    let current_manifest = std::fs::read_to_string(&path).map_err(|e| {
-        crate::locale::owned(
-            format!("读取 package.json 失败：{e}"),
-            format!("Failed to read package.json: {e}"),
-        )
-    })?;
-    if !marker_targets_package(&marker, &current_manifest, name) {
-        crate::logging::log(&format!(
-            "plugins: 启动错误指向 {name}，但中断事务记录的是 {}，不自动修改 manifest",
-            marker.package.as_deref().unwrap_or(marker.spec.as_str())
-        ));
-        return Ok(false);
-    }
-    let _guard = runner::MARKET_PNPM_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let removed = prune_manifest_package_locked(config, name)?;
-    if matches!(marker.kind, PluginMutationKind::Remove)
-        && marker.user_removal
-        && is_market_pkg(name)
-    {
-        try_mark_user_removed(config, name)?;
-    }
-    clear_install_marker(config)?;
-    Ok(removed)
-}
-
-fn prune_manifest_package_locked(
-    config: &crate::app_state::Config,
-    name: &str,
-) -> Result<bool, String> {
-    let path = config.dsh_home().join("profiles/web/package.json");
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        crate::locale::owned(
-            format!("读取 package.json 失败：{e}"),
-            format!("Failed to read package.json: {e}"),
-        )
-    })?;
-    let mut json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        crate::locale::owned(
-            format!("解析 package.json 失败：{e}"),
-            format!("Failed to parse package.json: {e}"),
-        )
-    })?;
-    let mut removed = false;
-    if let Some(deps) = json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
-        removed |= deps.remove(name).is_some();
-    }
-    if let Some(bundles) = json
-        .get_mut("dsh")
-        .and_then(|d| d.get_mut("profile"))
-        .and_then(|p| p.get_mut("bundles"))
-        .and_then(|b| b.as_array_mut())
-    {
-        let before = bundles.len();
-        bundles.retain(|item| item.as_str() != Some(name));
-        removed |= bundles.len() < before;
-    }
-    if !removed {
-        return Ok(false);
-    }
-    crate::app_state::atomic_write(
-        &path,
-        &serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| {
-        crate::locale::owned(
-            format!("写回 package.json 失败：{e}"),
-            format!("Failed to write package.json back: {e}"),
-        )
-    })?;
-    Ok(true)
-}
-
 /// 已安装插件名列表（web profile 的 package.json dependencies 全部 key）。
 fn installed_pkgs(config: &crate::app_state::Config) -> Vec<String> {
     let pkg_file = config.dsh_home().join("profiles/web/package.json");
@@ -943,7 +546,19 @@ pub fn update_pkg(app: &AppHandle, pkg: &str) -> Result<UpdateStatus, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::restart::*;
+    use super::transaction::*;
     use super::*;
+
+    #[test]
+    fn restart_backoff_grows_exponentially_with_cap() {
+        assert_eq!(restart_backoff_secs(1), 30);
+        assert_eq!(restart_backoff_secs(2), 60);
+        assert_eq!(restart_backoff_secs(3), 120);
+        assert_eq!(restart_backoff_secs(6), 600);
+        // 连续失败很多次后封顶在 10 分钟，不再增长
+        assert_eq!(restart_backoff_secs(20), 600);
+    }
 
     #[test]
     fn exact_plugin_spec_supports_scoped_packages_and_rejects_ranges() {
@@ -1203,7 +818,7 @@ mod tests {
             None,
         )
         .unwrap();
-        clear_resolved_install_marker(&config);
+        clear_resolved_install_marker_locked(&config, install_marker(&config).unwrap());
         assert!(!market_user_removed(&config, "dshmarket"));
         assert!(install_marker(&config).is_none());
 
@@ -1218,7 +833,7 @@ mod tests {
             None,
         )
         .unwrap();
-        clear_resolved_install_marker(&config);
+        clear_resolved_install_marker_locked(&config, install_marker(&config).unwrap());
         assert!(market_user_removed(&config, "dshmarket"));
         assert!(install_marker(&config).is_none());
         let _ = std::fs::remove_dir_all(root);

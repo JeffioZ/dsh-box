@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::app_state::{AppState, BootPhase, Config, ServiceOwnership};
+use crate::app_state::{AppState, Config};
 
 use super::balance::AccountSnapshot;
 use super::subscriptions::SubscriptionSnapshot;
@@ -37,27 +37,18 @@ pub struct AccountsPayload {
     pub subscriptions: Vec<SubscriptionSnapshot>,
 }
 
-/// 门控判定：仅本地托管服务且 Ready 时允许刷新；外部服务（含已断开）
-/// 不查——凭据归外部 dsh 环境管理。
-fn refresh_allowed(ownership: ServiceOwnership, phase: BootPhase) -> bool {
-    ownership == ServiceOwnership::Managed && phase == BootPhase::Ready
-}
-
-/// 启动账户后台监测（后台线程，退出中自动停止；外部模式空转不查询）。
+/// 启动账户后台监测（后台线程，退出中自动停止；外部模式空转不查询；
+/// 就绪门控统一走 background::service_gate——仅本地托管且 Ready 放行，
+/// 凭据归外部 dsh 环境管理）。
 pub(crate) fn start_account_monitor(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        if state.is_quitting() {
-            return;
-        }
-        if !refresh_allowed(state.service_ownership(), state.phase()) {
-            std::thread::sleep(GATE_POLL);
-            continue;
-        }
+    crate::background::spawn_gated_periodic(
+        app,
+        "account-monitor",
+        ACCOUNT_REFRESH_MS,
+        GATE_POLL,
         // 立即一轮（single-flight：与手动触发合并，不并发两轮）。
-        request_account_refresh(app.clone());
-        std::thread::sleep(ACCOUNT_REFRESH_MS);
-    });
+        |app| request_account_refresh(app.clone()),
+    );
 }
 
 /// 缓存的账户/订阅快照（None = 从未刷新过，调用方回退同步查询）。
@@ -413,6 +404,8 @@ mod tests {
 
     #[test]
     fn refresh_allowed_requires_managed_and_ready() {
+        use crate::app_state::{BootPhase, ServiceOwnership};
+        use crate::background::refresh_allowed;
         assert!(refresh_allowed(ServiceOwnership::Managed, BootPhase::Ready));
         for ownership in [
             ServiceOwnership::None,

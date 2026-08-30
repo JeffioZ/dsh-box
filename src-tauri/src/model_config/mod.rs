@@ -77,19 +77,13 @@ pub fn has_custom_providers(config: &Config) -> bool {
     let Ok(text) = std::fs::read_to_string(config.dsh_home().join("settings.yaml")) else {
         return false;
     };
-    // 独立扫描 llm-pi-ai 顶层段（容忍段行 `llm-pi-ai:`、`llm-pi-ai: {}`、
-    // `llm-pi-ai: # 注释` 等），在段内查找 providers 键。不依赖
-    // extract_section_text（它对精确 `llm-pi-ai:` 行匹配，会漏判带值/注释的段行）。
+    // 独立扫描 llm-pi-ai 顶层段，在段内查找 providers 键。段起始判定与
+    // upsert/extract 共用 is_section_start_line（同一口径，见其注释）。
     let mut in_section = false;
     for line in text.lines() {
         let stripped = line.trim_start();
         if !in_section {
-            // 顶层 llm-pi-ai 段起始：无缩进且 `llm-pi-ai` 后紧跟 `:`（值可空/注释/{}）。
-            let is_llm_section = !line.starts_with(' ')
-                && stripped
-                    .strip_prefix(SECTION_KEY)
-                    .is_some_and(|rest| rest.trim_start().starts_with(':'));
-            if is_llm_section {
+            if is_section_start_line(line) {
                 in_section = true;
             }
             continue;
@@ -157,12 +151,11 @@ pub fn export_yaml(config: &Config) -> Result<Option<String>, String> {
 
 /// 从 settings.yaml 文本中提取 llm-pi-ai 顶层段（纯逻辑，供单测）。
 fn extract_section_text(text: &str) -> String {
-    let section = format!("{SECTION_KEY}:");
     let mut out = String::new();
     let mut in_section = false;
     for line in text.lines() {
         if !in_section {
-            if line.trim_end() == section && !line.starts_with(' ') {
+            if is_section_start_line(line) {
                 in_section = true;
                 out.push_str(line);
                 out.push('\n');
@@ -411,11 +404,21 @@ fn apply_inner(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), Strin
     Ok(())
 }
 
+/// 顶层 `llm-pi-ai` 段起始行判定：无缩进且键后紧跟 `:`——值可为空、行内
+/// 注释或流式空表（`llm-pi-ai: {}`）。段识别三处（has/upsert/extract）必须
+/// 共用同一口径：此前 upsert/extract 只认精确 `llm-pi-ai:` 行，遇 dsh 序列化
+/// 或手写产出的 `llm-pi-ai: {}` 段行会漏判，导入时在文件末尾追加第二个
+/// `llm-pi-ai:` 顶层键，造成重复键的损坏文件且后续导入无法自愈。
+fn is_section_start_line(line: &str) -> bool {
+    !line.starts_with(' ')
+        && line
+            .strip_prefix(SECTION_KEY)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+}
+
 /// settings.yaml 文本是否已含 llm-pi-ai 顶层段。
 fn settings_has_section(text: &str) -> bool {
-    let section = format!("{SECTION_KEY}:");
-    text.lines()
-        .any(|line| !line.starts_with(' ') && line.trim_end() == section)
+    text.lines().any(is_section_start_line)
 }
 
 /// 行级替换（或追加）一个顶层段。`new_section` 必须是完整顶层段（含键行）。
@@ -424,11 +427,10 @@ fn settings_has_section(text: &str) -> bool {
 fn upsert_section(text: &str, new_section: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut replaced = false;
-    let section = format!("{SECTION_KEY}:");
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let is_top = !line.starts_with(' ') && !line.trim().is_empty();
-        if is_top && line.trim_end() == section {
+        if is_top && is_section_start_line(line) {
             if replaced {
                 return Err(crate::locale::text(
                     "settings.yaml 中存在重复的 llm-pi-ai 段，请先手动修复后再导入。",
@@ -466,6 +468,16 @@ fn upsert_section(text: &str, new_section: &str) -> Result<String, String> {
         if !new_section.ends_with('\n') {
             out.push('\n');
         }
+    }
+    // 防御：合并结果必须恰好含一个顶层 llm-pi-ai 段。段行形态识别若再有
+    // 遗漏（上游新序列化形态），在这里拦截为 Err——update_text_file 的
+    // 约定是 transform 出错即不写盘，宁可导入失败也不产出重复键文件。
+    if out.lines().filter(|l| is_section_start_line(l)).count() != 1 {
+        return Err(crate::locale::text(
+            "合并后的 settings.yaml 校验失败（llm-pi-ai 段数量异常），已取消写入。",
+            "Merged settings.yaml failed validation (unexpected llm-pi-ai section count); write cancelled.",
+        )
+        .into());
     }
     Ok(out)
 }
@@ -755,6 +767,54 @@ llm-pi-ai:
         let old = "llm-pi-ai:\n  providers:\n    a:\n      models:\n        - id: x\nllm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
         let new = "llm-pi-ai:\n  providers:\n    c:\n      models:\n        - id: z\n";
         assert!(upsert_section(old, new).is_err());
+    }
+
+    #[test]
+    fn upsert_rejects_duplicate_sections_across_forms() {
+        // 精确段行与流式空段行属于同一顶层键：混用同样是重复，必须报错
+        let old = "llm-pi-ai:\n  providers:\n    a:\n      models:\n        - id: x\nllm-pi-ai: {}\nlocale:\n  preference: zh\n";
+        let new = "llm-pi-ai:\n  providers:\n    c:\n      models:\n        - id: z\n";
+        assert!(upsert_section(old, new).is_err());
+    }
+
+    #[test]
+    fn upsert_replaces_flow_style_empty_section() {
+        // dsh 序列化/手写可能产出 `llm-pi-ai: {}`：必须识别为既有段并整体
+        // 替换，而不是在末尾追加第二个段（重复顶层键会损坏文件）
+        let old = "locale:\n  preference: zh\nllm-pi-ai: {}\nui-theme:\n  preference: dark\n";
+        let new = "llm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
+        let merged = upsert_section(old, new).unwrap();
+        assert!(!merged.contains("{}"));
+        assert!(merged.contains("id: y"));
+        assert!(merged.contains("locale:\n  preference: zh"));
+        assert!(merged.contains("ui-theme:\n  preference: dark"));
+        assert_eq!(merged.matches("llm-pi-ai").count(), 1);
+    }
+
+    #[test]
+    fn upsert_replaces_section_line_with_trailing_comment() {
+        let old = "locale:\n  preference: zh\nllm-pi-ai: # 模型路由\n  providers:\n    a:\n      models:\n        - id: x\n";
+        let new = "llm-pi-ai:\n  providers:\n    b:\n      models:\n        - id: y\n";
+        let merged = upsert_section(old, new).unwrap();
+        assert!(!merged.contains("id: x"));
+        assert!(merged.contains("id: y"));
+        assert_eq!(merged.matches("llm-pi-ai").count(), 1);
+    }
+
+    #[test]
+    fn section_detection_accepts_variant_forms() {
+        // settings_has_section 与段起始判定接受空值/注释/流式空表三种段行
+        assert!(settings_has_section("llm-pi-ai:\n  providers:\n"));
+        assert!(settings_has_section("llm-pi-ai: {}\n"));
+        assert!(settings_has_section("llm-pi-ai: # note\n  providers:\n"));
+        assert!(!settings_has_section("llm-pi-ai-extra:\n  providers:\n"));
+        assert!(!settings_has_section("  llm-pi-ai:\n"));
+    }
+
+    #[test]
+    fn extract_section_accepts_flow_style_section_line() {
+        let out = extract_section_text("locale:\n  preference: zh\nllm-pi-ai: {}\n");
+        assert_eq!(out, "llm-pi-ai: {}\n");
     }
 
     #[test]
