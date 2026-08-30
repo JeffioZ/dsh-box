@@ -865,18 +865,23 @@ mod tests {
     #[cfg(all(test, unix))]
     #[test]
     fn unix_local_offset_respects_tz() {
+        // libc crate 未绑定 tzset（macOS/Linux 的 Unit tests 曾因此编译失败），
+        // 直接声明 POSIX 原型：无参无返回，仅重载 TZ 相关内部状态。
+        extern "C" {
+            fn tzset();
+        }
         let _guard = crate::credentials::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("TZ").ok();
         std::env::set_var("TZ", "Asia/Shanghai");
-        unsafe { libc::tzset() };
+        unsafe { tzset() };
         assert_eq!(compute_local_offset_seconds(), 28_800);
         match prev {
             Some(v) => std::env::set_var("TZ", v),
             None => std::env::remove_var("TZ"),
         }
-        unsafe { libc::tzset() };
+        unsafe { tzset() };
     }
 
     #[test]
