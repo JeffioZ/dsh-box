@@ -410,6 +410,28 @@
   .dshd-password-action { transition: none; }
 }
 
+/* 滑块开关（dshmarket 规格 38×22、knob 16px、行程 18px），设置页与首次
+   引导页共用；行级 hover/禁用联动由各页面的行容器规则提供 */
+.sswitch {
+  appearance: none; -webkit-appearance: none; flex: none;
+  width: 38px; height: 22px; border-radius: 999px; margin: 0;
+  background: var(--dshd-switch-bg); border: 1px solid var(--dshd-border-strong);
+  position: relative; cursor: pointer; outline: none;
+  transition: background-color var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease;
+}
+.sswitch::before {
+  content: ""; position: absolute; left: 2px; top: 50%;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transform: translateY(-50%);
+  transition: transform var(--dshd-m-fast) ease, background-color var(--dshd-m-fast) ease;
+}
+.sswitch:checked { background: var(--dshd-switch-on); border-color: var(--dshd-switch-on); }
+.sswitch:checked::before { transform: translate(18px, -50%); background: #fff; }
+.sswitch:active:not(:disabled) { filter: brightness(.9); }
+.sswitch:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
+.sswitch:disabled { opacity: .55; cursor: default; }
+
 /* 弹窗头部/关闭按钮 */
 .dshd-head {
   display: flex;

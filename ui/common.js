@@ -107,27 +107,26 @@ async function dshdListen(event, handler) {
 }
 
 // —— 共享图标：路径数据唯一定义点，页面经 dshdIcon 生成带各自属性的 svg ——
+// 条目统一取自 lucide 官方路径数据（ISC，见 THIRD_PARTY_NOTICES.md），
+// 24×24 描边式，与各上下文的 stroke 渲染规则天然一致。
 const DSHD_ICON_PATHS = {
-  download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path>',
-  // 插件：复用 dsh 官方设置界面的“个性化”滑杆图标（IconPersonalizationOutline16，
-  // 16×16 填充式，与官方设置导航同款）。键名沿用 puzzle：与 Rust 侧菜单模型
-  // （tray_menu.rs 的 icon 字符串）耦合，改动需两端同步。
-  puzzle: {
-    vb: '0 0 16 16',
-    body: '<path transform="translate(1.292 1.3)" style="fill:currentColor;stroke:none" d="M10.3232 9.18164C11.2868 9.18164 12.0985 9.82833 12.3506 10.7109L13.415 10.7109L13.415 11.8711L12.3496 11.8711C12.0971 12.7532 11.2864 13.3994 10.3232 13.3994C9.36031 13.3992 8.55012 12.7531 8.29785 11.8711L0 11.8711L0 10.7109L8.29688 10.7109C8.54876 9.82845 9.35988 9.18186 10.3232 9.18164ZM10.3232 10.3418C9.7999 10.3421 9.37534 10.7667 9.375 11.29C9.375 11.8137 9.79969 12.239 10.3232 12.2393C10.847 12.2393 11.2725 11.8138 11.2725 11.29C11.2721 10.7666 10.8468 10.3418 10.3232 10.3418ZM12.4326 11.291C12.4326 11.3549 12.4284 11.418 12.4229 11.4805C12.4287 11.4181 12.4326 11.355 12.4326 11.291ZM8.21484 11.2832C8.21484 11.2856 8.21484 11.2886 8.21484 11.291L8.21484 11.29C8.21484 11.2878 8.21484 11.2855 8.21484 11.2832ZM3.08301 4.59082C4.04605 4.59095 4.85696 5.23717 5.10938 6.11914L13.415 6.11914L13.415 7.2793L5.11035 7.2793C4.85833 8.16202 4.04648 8.80846 3.08301 8.80859C2.11972 8.80843 1.30963 8.16179 1.05762 7.2793L0 7.2793L0 6.11914L1.05762 6.11914C1.30994 5.23728 2.12006 4.59098 3.08301 4.59082ZM3.08301 5.75098C2.55962 5.75117 2.13512 6.17587 2.13477 6.69922C2.13477 7.22287 2.5594 7.64824 3.08301 7.64844C3.60665 7.64828 4.03223 7.2229 4.03223 6.69922C4.03187 6.17585 3.60643 5.75113 3.08301 5.75098ZM5.19238 6.69922C5.19238 6.763 5.18816 6.82633 5.18262 6.88867C5.18846 6.82629 5.19238 6.76313 5.19238 6.69922C5.19236 6.63495 5.18853 6.57152 5.18262 6.50879C5.18826 6.57154 5.19236 6.635 5.19238 6.69922ZM0.982422 6.52344C0.977382 6.58136 0.97463 6.63999 0.974609 6.69922C0.974609 6.75775 0.977496 6.81579 0.982422 6.87305C0.977758 6.81579 0.974609 6.75767 0.974609 6.69922C0.974628 6.64 0.977618 6.58142 0.982422 6.52344ZM10.3232 0C11.2869 0 12.0986 0.646596 12.3506 1.5293L13.415 1.5293L13.415 2.68945L12.3496 2.68945C12.363 2.64266 12.3754 2.59488 12.3857 2.54688C12.1838 3.50118 11.3376 4.21777 10.3232 4.21777C9.36037 4.21756 8.55018 3.57139 8.29785 2.68945L0 2.68945L0 1.5293L8.29688 1.5293C8.5487 0.646717 9.35981 0.00021854 10.3232 0ZM10.3232 1.16016C9.79984 1.16042 9.37524 1.58499 9.375 2.1084C9.375 2.63201 9.79969 3.05735 10.3232 3.05762C10.847 3.05762 11.2725 2.63217 11.2725 2.1084C11.2722 1.58483 10.8469 1.16016 10.3232 1.16016ZM12.4229 2.29883C12.4287 2.23641 12.4326 2.17331 12.4326 2.10938C12.4326 2.17327 12.4284 2.23638 12.4229 2.29883ZM8.21484 2.10938L8.21484 2.1084L8.21484 2.10938ZM8.22266 1.93359C8.21785 1.98897 8.21506 2.04499 8.21484 2.10156C8.21503 2.04501 8.2181 1.98902 8.22266 1.93359ZM8.22266 11.1162C8.2179 11.1713 8.21507 11.227 8.21484 11.2832C8.21504 11.227 8.21814 11.1713 8.22266 11.1162Z"></path>',
-  },
-  gear: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
-  info: '<circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path>',
-  clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
+  download: '<path d="M12 17V3"></path><path d="m6 11 6 6 6-6"></path><path d="M19 21H5"></path>',
+  // 插件：lucide「puzzle」（与 ZCode 同源的图标体系，ISC 许可）。
+  // 键名沿用 puzzle：与 Rust 侧菜单模型（tray_menu.rs 的 icon 字符串）耦合，
+  // 改动需两端同步。
+  puzzle: '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>',
+  gear: '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle>',
+  info: '<circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path>',
+  clock: '<circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path>',
   chevronDown: '<path d="m6 9 6 6 6-6"></path>',
-  // —— morph 图标对（同 24×24 网格、描边式，经 morphicons 弹簧变形）——
-  // 注意：这里必须是裸 d 字符串（morphTo 的解析输入），与上方给 dshdIcon 用的
-  // 完整 <path> 标签条目（如 chevronDown）不可混用；键名故意的区分开
-  winMax: 'M5 5h14v14H5Z',
-  winRestore: 'M5 9h10v10H5Z M9 9V5h10v10h-4',
-  menuArrowDown: 'M6 9L12 15L18 9',
-  menuArrowUp: 'M6 15L12 9L18 15',
-  // 密码可见性：眼睛 ⇄ 眼睛斜杠（瞳孔圆转 path 子路径以便整对变形）
+  // —— 直接换 d 的图标条目（运行时 setAttribute 切换，非 dshdIcon 标签形态）——
+  // 注意：这些是裸 d 字符串，与上方给 dshdIcon 用的完整标签条目不可混用，
+  // 键名故意的区分开
+  winMax: 'M4 4h16v16H4z',
+  // 还原图标：完整框在左下，被盖住的框在右上（只露上+右两边）
+  winRestore: 'M4 8h12v12H4z M8 4h12v12',
+  // 密码可见性：眼睛 ⇄ 眼睛斜杠（lucide eye/eye-off 衍生：瞳孔 r2.5，
+  // 16px 下比原版 r3 圆润可辨；保持单 path 直接换 d 切换）
   eyeShow: 'M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z M14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0Z',
   eyeHide: 'M3 3l18 18 M10.6 5.7A10.8 10.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.2 3.1 M6.2 6.3A16.7 16.7 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.4 10.4 0 0 0 4-.8 M10.2 10.2a2.5 2.5 0 0 0 3.6 3.6',
 };
@@ -135,16 +134,11 @@ const DSHD_ICON_PATHS = {
 /**
  * 生成线性图标 svg。attrs 传元素级属性串（如
  * 'focusable="false" aria-hidden="true"'）；路径数据见 DSHD_ICON_PATHS，
- * 各页面不得再复制图标 path 字面量。字符串条目为 24×24 描边式；对象条目
- * 自带 viewBox 与完整 body（官方 16×16 填充式图标，body 内以内联 style
- * 覆盖各上下文的 stroke 渲染规则）。
+ * 各页面不得再复制图标 path 字面量。条目统一为 24×24 描边式（与各上下文
+ * 的 stroke 渲染规则天然一致，不再需要对象形态/内联样式特例）。
  */
 function dshdIcon(name, attrs) {
   const def = DSHD_ICON_PATHS[name];
-  if (def && typeof def === 'object') {
-    return '<svg viewBox="' + def.vb + '"' + (attrs ? ' ' + attrs : '') + '>'
-      + def.body + '</svg>';
-  }
   return '<svg viewBox="0 0 24 24"' + (attrs ? ' ' + attrs : '') + '>'
     + (def || '') + '</svg>';
 }
@@ -173,61 +167,20 @@ function dshdIcon(name, attrs) {
   watch();
 })();
 
-// —— 图标 morph（vendored morphicons，见 ui/vendor/morphicons/README.md）——
-// 模块懒加载：未就绪、加载失败或身处无动态 import 的环境（vm 检查等）时，
-// 调用方拿到的 setD 退化为直接替换 path 的 d，交互不因动画缺失而降级。
-let dshdMorphCreate = null;
-let dshdMorphLoading = null;
-function dshdEnsureMorph() {
-  if (dshdMorphLoading) return dshdMorphLoading;
-  try {
-    dshdMorphLoading = import('vendor/morphicons/dom.js')
-      .then((mod) => { dshdMorphCreate = mod.createMorph; })
-      .catch(() => {});
-  } catch (e) {
-    dshdMorphLoading = Promise.resolve();
-  }
-  return dshdMorphLoading;
-}
-
-/**
- * 把单个 <path> 绑定为可变形图标，返回 setD(d)。morph 就绪后带弹簧动画切换，
- * 否则直接换 d。reducedMotion 固定 'user'：跟随系统减弱动效偏好（本仓库
- * 强制约定；该库默认不尊重系统设置）。描边/网格要求见 vendor README。
- */
-function dshdMorphIcon(pathEl) {
-  let handle = null;
-  let currentD = pathEl.getAttribute('d') || '';
-  dshdEnsureMorph().then(() => {
-    if (!dshdMorphCreate || !pathEl.isConnected) return;
-    handle = dshdMorphCreate(pathEl, currentD, { reducedMotion: 'user' });
-  });
-  return (nextD) => {
-    currentD = nextD;
-    if (handle) handle.morphTo(nextD);
-    else pathEl.setAttribute('d', nextD);
-  };
-}
-
 /** API Key 等密码输入框共用的可见性按钮、焦点保持与空值状态。 */
 function dshdBindPasswordToggle(input, toggle) {
   if (!input || !toggle) return;
-  let setGlyph = null;
-  const ensureGlyph = () => {
-    // 首次渲染眼睛图标（单 path，后续经 morph 变形切换）
-    if (toggle.firstElementChild) return;
-    toggle.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="'
-      + DSHD_ICON_PATHS.eyeShow + '"></path></svg>';
-    const pathEl = toggle.querySelector('path');
-    if (pathEl) setGlyph = dshdMorphIcon(pathEl);
-  };
   const sync = () => {
     const hasValue = String(input.value || '').length > 0;
     if (!hasValue && input.type === 'text') input.type = 'password';
     const visible = input.type === 'text';
     const label = dshdT(visible ? 'settingsApiKeyHideAria' : 'settingsApiKeyShowAria');
-    ensureGlyph();
-    if (setGlyph) setGlyph(visible ? DSHD_ICON_PATHS.eyeHide : DSHD_ICON_PATHS.eyeShow);
+    if (!toggle.firstElementChild) {
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="'
+        + DSHD_ICON_PATHS.eyeShow + '"></path></svg>';
+    }
+    const pathEl = toggle.querySelector('path');
+    if (pathEl) pathEl.setAttribute('d', visible ? DSHD_ICON_PATHS.eyeHide : DSHD_ICON_PATHS.eyeShow);
     toggle.hidden = !hasValue;
     toggle.setAttribute('aria-label', label);
     toggle.title = label;
