@@ -158,33 +158,73 @@ pub fn precreate(app: &AppHandle) {
         };
         centered_dialog_pos(rect, status_h, dialog_w, dialog_h)
     });
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        app,
-        APP_DIALOG_WINDOW,
-        WebviewUrl::App("control-center.html".into()),
-    )
-    .title(crate::APP_TITLE)
-    .inner_size(dialog_w, dialog_h);
-    if let Some((dx, dy)) = initial_pos {
-        builder = builder.position(dx, dy);
-    }
-    // 透明窗口：仅有 Windows/Linux 提供 Public API（macOS 需 macos-private-api
-    // feature，未启用）。macOS 上跳过 transparent，卡片层在非透明窗口内以
-    // 24px 圆角自绘，效果一致（仅系统阴影差异）。
+    // 基础链拆成可重复构造的闭包：owner 挂接与回退置顶两条路径各自需要
+    // 一条完整的 builder 链。
+    let base = || {
+        let mut builder = tauri::WebviewWindowBuilder::new(
+            app,
+            APP_DIALOG_WINDOW,
+            WebviewUrl::App("control-center.html".into()),
+        )
+        .title(crate::APP_TITLE)
+        .inner_size(dialog_w, dialog_h);
+        if let Some((dx, dy)) = initial_pos {
+            builder = builder.position(dx, dy);
+        }
+        // 透明窗口：仅有 Windows/Linux 提供 Public API（macOS 需 macos-private-api
+        // feature，未启用）。macOS 上跳过 transparent，卡片层在非透明窗口内以
+        // 24px 圆角自绘，效果一致（仅系统阴影差异）。
+        #[cfg(not(target_os = "macos"))]
+        {
+            builder = builder
+                .background_color(tauri::window::Color(0, 0, 0, 0))
+                .transparent(true)
+                .shadow(false);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.shadow(false);
+        }
+        builder
+            .initialization_script(crate::locale::init_script())
+            .resizable(false)
+            .decorations(false)
+            // 固定尺寸卡片：禁止最大化/最小化，防止 Win+Up 把透明宿主窗口
+            // 拉成全屏不可见点击阻挡层、Win+Down 让 skip_taskbar 弹窗无处召回
+            .maximizable(false)
+            .minimizable(false)
+            .skip_taskbar(true)
+            .visible(false)
+    };
+    // 层级：非 macOS 把主窗口挂为 owner（Windows）/transient（Linux）——弹窗
+    // 恒在主窗口之上、随应用整体激活或退到后台，替代原先的全系统置顶。
+    // macOS 的 parent 是 addChildWindow：弹窗会随主窗口隐藏而消失，仅托盘
+    // 场景直接不可用，维持置顶旧语义；主窗口缺失或挂接失败同样回退置顶。
     #[cfg(not(target_os = "macos"))]
-    let builder = builder
-        .background_color(tauri::window::Color(0, 0, 0, 0))
-        .transparent(true)
-        .shadow(false);
+    let builder = match crate::main_window(app) {
+        Some(main) => {
+            // 主窗口经 get_window 获取（带子 webview 时 get_webview_window
+            // 返回 None），层级挂接落到平台的 owner/transient 原语上
+            #[cfg(windows)]
+            let parented = main.hwnd().map(|h| base().owner_raw(h));
+            #[cfg(not(windows))]
+            let parented = main.gtk_window().map(|g| base().transient_for_raw(&g));
+            match parented {
+                Ok(parented) => parented,
+                Err(e) => {
+                    crate::logging::log(&format!("app-dialog: owner 挂接失败，回退置顶：{e}"));
+                    base().always_on_top(true)
+                }
+            }
+        }
+        None => {
+            crate::logging::log("app-dialog: 主窗口不存在，回退置顶");
+            base().always_on_top(true)
+        }
+    };
     #[cfg(target_os = "macos")]
-    let builder = builder.shadow(false);
+    let builder = base().always_on_top(true);
     match builder
-        .initialization_script(crate::locale::init_script())
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
         .on_navigation(move |url| {
             let allowed =
                 crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
@@ -242,63 +282,6 @@ fn show_with_update_token(
             w
         }
     };
-    // 尺寸与位置只计算不应用：更新提示的 token 可能已过期（被普通页面抢占），
-    // 过期路径不得对共享窗口产生任何副作用（尺寸/位置/代次），一律挪到
-    // 下方的 commit 门控之后。
-    let (ww, wh) = dialog_size(app, kind);
-    let mut pending_size = tauri::Size::Logical(tauri::LogicalSize::new(ww, wh));
-    let mut pending_pos: Option<tauri::Position> = None;
-    let mut center_fallback = false;
-    let mut target_pos: Option<(f64, f64)> = None;
-    let main = crate::main_window(app);
-    let main_presented = main.as_ref().is_some_and(main_is_presented);
-    if main_presented {
-        // 主窗口正常显示时相对主窗口内容区居中（inner 口径，与卡片尺寸同源）。
-        if let Some((mlx, mly, mlw, mlh)) = main_inner_logical_rect(app) {
-            let status_h = if app.state::<AppState>().config().hide_statusbar {
-                0.0
-            } else {
-                crate::titlebar::STATUSBAR_HEIGHT
-            };
-            let (dx, dy) = centered_dialog_pos((mlx, mly, mlw, mlh), status_h, ww, wh);
-            crate::logging::log(&format!(
-                "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
-            ));
-            target_pos = Some((dx, dy));
-            pending_pos = Some(tauri::Position::Logical(tauri::LogicalPosition::new(
-                dx, dy,
-            )));
-        }
-    } else {
-        // 仅托盘运行时（主窗口不可见/最小化），按鼠标所在屏幕的工作区居中
-        crate::logging::log("app-dialog: 主窗口不可见/最小化，屏幕居中");
-        let monitor = app
-            .cursor_position()
-            .ok()
-            .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
-            .or_else(|| app.primary_monitor().ok().flatten());
-        if let Some(monitor) = monitor {
-            let scale = monitor.scale_factor();
-            let area = monitor.work_area();
-            // 卡片视觉居中（窗口含不对称阴影空间，需按卡片尺寸计算并补偿偏移）
-            let card_w = ((ww - SHADOW_SIDES * 2.0) * scale).round() as u32;
-            let card_h = ((wh - SHADOW_TOP - SHADOW_BOTTOM) * scale).round() as u32;
-            let x = area.position.x + (area.size.width.saturating_sub(card_w) / 2) as i32
-                - (SHADOW_SIDES * scale) as i32;
-            let y = area.position.y + (area.size.height.saturating_sub(card_h) / 2) as i32
-                - (SHADOW_TOP * scale) as i32;
-            pending_size = tauri::Size::Physical(tauri::PhysicalSize::new(
-                (ww * scale).round() as u32,
-                (wh * scale).round() as u32,
-            ));
-            target_pos = Some((x as f64 / scale, y as f64 / scale));
-            pending_pos = Some(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                x, y,
-            )));
-        } else {
-            center_fallback = true;
-        }
-    }
     // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。
     let mut initial = if initial.is_object() {
         initial
@@ -348,8 +331,74 @@ fn show_with_update_token(
         crate::logging::log("app-dialog: 更新提示展示权已失效，取消旧展示");
         return;
     }
+    // 更新提示 token 过期的路径已在上方门控返回：以下窗口副作用（拉起主
+    // 窗口、尺寸/位置、代次）都只属于有效展示。模态前置：弹窗以主窗口为
+    // owner，主窗口隐藏/最小化（仅托盘运行）时先拉起主窗口，再统一走
+    // “内容区居中 + 禁用主窗口”的模态路径，弹窗不脱离主窗口悬浮。
+    let main = crate::main_window(app);
+    let mut main_presented = main.as_ref().is_some_and(main_is_presented);
+    if !main_presented {
+        if let Some(w) = main.as_ref() {
+            let _ = w.show();
+            let _ = w.unminimize();
+            main_presented = true;
+            crate::logging::log("app-dialog: 主窗口未呈现，已拉起后再显示弹窗");
+        }
+    }
+    let (ww, wh) = dialog_size(app, kind);
+    let mut pending_size = tauri::Size::Logical(tauri::LogicalSize::new(ww, wh));
+    let mut pending_pos: Option<tauri::Position> = None;
+    let mut center_fallback = false;
+    let mut target_pos: Option<(f64, f64)> = None;
+    if main_presented {
+        // 主窗口正常显示时相对主窗口内容区居中（inner 口径，与卡片尺寸同源）。
+        if let Some((mlx, mly, mlw, mlh)) = main_inner_logical_rect(app) {
+            let status_h = if app.state::<AppState>().config().hide_statusbar {
+                0.0
+            } else {
+                crate::titlebar::STATUSBAR_HEIGHT
+            };
+            let (dx, dy) = centered_dialog_pos((mlx, mly, mlw, mlh), status_h, ww, wh);
+            crate::logging::log(&format!(
+                "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
+            ));
+            target_pos = Some((dx, dy));
+            pending_pos = Some(tauri::Position::Logical(tauri::LogicalPosition::new(
+                dx, dy,
+            )));
+        }
+    } else {
+        // 主窗口不存在（启动极早期/异常兜底）：按鼠标所在屏幕的工作区居中
+        crate::logging::log("app-dialog: 主窗口不存在，屏幕居中");
+        let monitor = app
+            .cursor_position()
+            .ok()
+            .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+            .or_else(|| app.primary_monitor().ok().flatten());
+        if let Some(monitor) = monitor {
+            let scale = monitor.scale_factor();
+            let area = monitor.work_area();
+            // 卡片视觉居中（窗口含不对称阴影空间，需按卡片尺寸计算并补偿偏移）
+            let card_w = ((ww - SHADOW_SIDES * 2.0) * scale).round() as u32;
+            let card_h = ((wh - SHADOW_TOP - SHADOW_BOTTOM) * scale).round() as u32;
+            let x = area.position.x + (area.size.width.saturating_sub(card_w) / 2) as i32
+                - (SHADOW_SIDES * scale) as i32;
+            let y = area.position.y + (area.size.height.saturating_sub(card_h) / 2) as i32
+                - (SHADOW_TOP * scale) as i32;
+            pending_size = tauri::Size::Physical(tauri::PhysicalSize::new(
+                (ww * scale).round() as u32,
+                (wh * scale).round() as u32,
+            ));
+            target_pos = Some((x as f64 / scale, y as f64 / scale));
+            pending_pos = Some(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                x, y,
+            )));
+        } else {
+            center_fallback = true;
+        }
+    }
     // 通过提交门控后才产生副作用：代次 +1（若上次关闭的延迟隐藏尚未执行，
-    // 令其失效，避免误藏本次弹窗），并应用之前算好的尺寸/位置。
+    // 令其失效，避免误藏本次弹窗），并应用尺寸/位置。
     let dialog_gen = app.state::<AppState>().bump_dialog_gen();
     let _ = win.set_size(pending_size);
     if let Some(pos) = pending_pos {
@@ -453,6 +502,18 @@ fn restore_main_after_dialog(app: &AppHandle) {
     if let Some(main) = crate::main_window(app) {
         let _ = main.set_enabled(true);
         let _ = main.set_focus();
+    }
+}
+
+/// 主窗口唤醒路径（托盘打开/单实例/Resumed）的焦点归还：弹窗模态打开期间
+/// 主窗口被禁用，唤醒时应聚焦弹窗本身而非不可交互的主窗口。返回是否聚焦了弹窗。
+pub fn focus_dialog_if_visible(app: &AppHandle) -> bool {
+    match app.get_webview_window(APP_DIALOG_WINDOW) {
+        Some(w) if w.is_visible().unwrap_or(false) => {
+            let _ = w.set_focus();
+            true
+        }
+        _ => false,
     }
 }
 

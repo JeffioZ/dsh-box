@@ -240,7 +240,11 @@ pub fn show_main(app: &AppHandle) {
     if let Some(w) = main_window(app) {
         let _ = w.show();
         let _ = w.unminimize();
-        let _ = w.set_focus();
+        // 弹窗模态打开期间主窗口被禁用：唤醒时优先把焦点还给弹窗，
+        // 避免焦点落在不可交互的主窗口上
+        if !crate::control_center::focus_dialog_if_visible(app) {
+            let _ = w.set_focus();
+        }
     }
     crate::usage::refresh_once(app.clone());
     crate::balance::refresh_once(app.clone());
