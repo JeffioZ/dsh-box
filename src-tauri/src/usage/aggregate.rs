@@ -150,9 +150,13 @@ pub struct FoldState {
     /// 折叠数据来源（对齐上游 v0.3 `state.kind`）。本壳只扫持久化日志，
     /// 恒为 `Persisted`；保留字段是为缓存结构与上游对齐。
     pub kind: FoldKind,
-    /// 上次折叠时会话日志的文件长度：追加式日志 len 未变即无新事件，
-    /// `fold_log` 据此跳过全量解码（serde 默认值兼容旧缓存）。
+    /// 上次折叠时会话日志的文件长度（诊断用；短路判断改用 byte_offset）。
     pub file_len: u64,
+    /// 已消费的**原始压缩字节**偏移：折叠只解码该偏移之后的完整 zstd 帧，
+    /// 每轮开销 O(新增) 而非 O(全部历史)（撕裂尾帧不推进，等下一轮补全）。
+    pub byte_offset: u64,
+    /// 跨轮残留的半行（帧文本按换行切分后的尾段；完整行不会滞留）。
+    pub(crate) pending_line: String,
 }
 
 impl FoldState {
@@ -164,6 +168,8 @@ impl FoldState {
         self.current_model = None;
         self.current_route = None;
         self.consumed = 0;
+        self.byte_offset = 0;
+        self.pending_line.clear();
     }
 }
 

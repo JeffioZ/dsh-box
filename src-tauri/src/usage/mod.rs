@@ -63,28 +63,57 @@ pub fn subscriptions(config: &crate::app_state::Config) -> Vec<SubscriptionSnaps
 
 /// 把一次会话日志的**新增**事件折叠进状态（增量：只应用 `seq > consumed`）。
 ///
-/// 会话日志为追加式：全量解码后只折叠游标之后的事件；游标前的样本已经
-/// 计入 `state.days`。`last_sample` 跨折叠边界保留，保证同一 `(turn, step)`
-/// 的替换语义在分次折叠时仍然精确。
+/// 会话日志为追加式的独立 zstd 帧序列：按 `byte_offset` 只解码上次消费之后
+/// 的**完整**新帧（撕裂尾帧本轮跳过、下一轮补全），每轮开销 O(新增数据)
+/// 而非 O(全部历史)——此前每次都对整个文件全量解压+解析再按游标过滤，
+/// 长会话期间每 2-5 秒重复重算全部历史。`last_sample` 跨折叠边界保留，
+/// 保证同一 `(turn, step)` 的替换语义在分次折叠时仍然精确。
 ///
-/// IO 增量：文件长度与上次折叠一致即无新事件，直接跳过全量解码
-/// （`state.file_len`；只省 IO，不改变折叠语义）。
+/// 重建兜底：文件变短（截断/重建）或新事件 seq 回退（同长度重建）时，
+/// 退回一次性整段重折，旧聚合清零重来。
 pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), String> {
     let file_len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if state.file_len == file_len {
+    if state.byte_offset == file_len {
         return Ok(());
     }
-    let text = log::read_full(path)?;
-    let events: Vec<aggregate::Event> = text.lines().filter_map(aggregate::Event::parse).collect();
-    // 日志被截断/重建（事件数少于游标）——退回整段重折。
-    let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
-    if max_seq < state.consumed {
+    if file_len < state.byte_offset {
+        // 截断/重建为更短文件：清零游标后走下面的增量路径从 0 重折
         state.reset_fold();
     }
-    let fresh: Vec<aggregate::Event> = events
-        .into_iter()
-        .filter(|e| e.seq > state.consumed)
-        .collect();
+    if state.byte_offset > 0
+        && state.byte_offset < file_len
+        && !log::starts_with_frame_magic(path, state.byte_offset)?
+    {
+        // 偏移未落在帧边界：文件被原地重写（同长/更长但内容不同）。
+        // 若继续增量解码，偏移落在新帧中间、伪 magic 扫描会跳过帧头
+        // "恢复"出半截事件流，seq 回退检测也会失明——必须整段重折。
+        return refold_full(state, path, file_len);
+    }
+    let (new_text, new_offset) = log::read_frames_from(path, state.byte_offset)?;
+    // 拼上跨轮残留的半行后按行切分；尾段（无换行结尾）留待下一轮
+    let mut combined = std::mem::take(&mut state.pending_line);
+    combined.push_str(&new_text);
+    let mut lines: Vec<&str> = combined.split('\n').collect();
+    if let Some(tail) = lines.pop() {
+        state.pending_line = tail.to_string();
+    }
+    let mut fresh = Vec::new();
+    let mut seq_regressed = false;
+    for line in lines {
+        if let Some(event) = aggregate::Event::parse(line) {
+            if event.seq < state.consumed {
+                seq_regressed = true;
+                break;
+            }
+            if event.seq > state.consumed {
+                fresh.push(event);
+            }
+        }
+    }
+    if seq_regressed {
+        // 同长度/更长但 seq 重启：日志被重建，一次性整段重折
+        return refold_full(state, path, file_len);
+    }
     aggregate::apply_delta(state, &fresh);
     if let Some(last) = fresh.last() {
         state.consumed = last.seq;
@@ -92,6 +121,26 @@ pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), Str
     // 本壳唯一的数据来源是持久化会话日志（对齐上游 state.kind 的
     // live/persisted 标记；无 live 内存事件源，恒为 Persisted）。
     state.kind = aggregate::FoldKind::Persisted;
+    state.byte_offset = new_offset;
+    state.file_len = file_len;
+    Ok(())
+}
+
+/// 一次性整段重折（重建兜底）：清零游标后全量读取解码。
+fn refold_full(state: &mut FoldState, path: &std::path::Path, file_len: u64) -> Result<(), String> {
+    state.reset_fold();
+    let text = log::read_full(path)?;
+    let fresh: Vec<aggregate::Event> = text
+        .lines()
+        .filter_map(aggregate::Event::parse)
+        .filter(|e| e.seq > state.consumed)
+        .collect();
+    aggregate::apply_delta(state, &fresh);
+    if let Some(last) = fresh.last() {
+        state.consumed = last.seq;
+    }
+    state.kind = aggregate::FoldKind::Persisted;
+    state.byte_offset = file_len;
     state.file_len = file_len;
     Ok(())
 }
@@ -264,6 +313,62 @@ mod tests {
 
     fn total_tokens(state: &FoldState) -> u64 {
         state.days.values().map(|d| d.totals.total()).sum()
+    }
+
+    #[test]
+    fn incremental_fold_decodes_only_new_frames_and_survives_torn_tail() {
+        let path = temp_log("torn");
+        let frame1 = frames(&[usage_line(1, 1, 10, 5)]);
+        std::fs::write(&path, &frame1).unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 1);
+        assert_eq!(total_tokens(&state), 15);
+        assert_eq!(state.byte_offset as usize, frame1.len());
+
+        // 追加一个撕裂的半帧（砍掉尾部字节）：本轮跳过，状态不被破坏
+        let full2 = frames(&[usage_line(2, 2, 20, 0)]);
+        let torn = &full2[..full2.len() - 5];
+        let mut with_torn = frame1.clone();
+        with_torn.extend_from_slice(torn);
+        std::fs::write(&path, &with_torn).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 1, "撕裂帧不得部分计入");
+        assert_eq!(state.byte_offset as usize, frame1.len(), "偏移不推进");
+        assert_eq!(total_tokens(&state), 15);
+
+        // 帧补全后：只折新增事件，历史不重复计
+        let mut complete = frame1.clone();
+        complete.extend_from_slice(&full2);
+        std::fs::write(&path, &complete).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 2);
+        assert_eq!(total_tokens(&state), 35);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn incremental_fold_refolds_when_seq_regresses_on_rebuild() {
+        // 同长度/更长但 seq 重启的重建日志：走整段重折，旧聚合清零
+        let path = temp_log("rebuild");
+        let first = frames(&[usage_line(1, 1, 10, 5), usage_line(2, 2, 20, 0)]);
+        std::fs::write(&path, &first).unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 2);
+        assert_eq!(total_tokens(&state), 35);
+
+        // 重建：seq 从 1 重启（内容不同、文件也可能更长）
+        let rebuilt = frames(&[
+            usage_line(1, 1, 7, 3),
+            usage_line(2, 2, 8, 2),
+            usage_line(3, 3, 9, 1),
+        ]);
+        std::fs::write(&path, &rebuilt).unwrap();
+        fold_log(&mut state, &path).unwrap();
+        assert_eq!(state.consumed, 3);
+        assert_eq!(total_tokens(&state), 7 + 8 + 9 + 3 + 2 + 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

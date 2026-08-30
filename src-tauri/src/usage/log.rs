@@ -93,6 +93,63 @@ fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
     Some((text, consumed))
 }
 
+/// 从字节偏移起增量解码：只处理 `offset` 之后的**完整** zstd 帧，返回
+/// （新增文本, 推进后的安全偏移）。安全偏移只前进到最后一个完整帧的
+/// 末尾——撕裂的尾帧（写者正在追加的半帧）本轮直接跳过，文件补全后的
+/// 下一轮自然接上，因此无需错误回退路径。伪 magic 的处理与 `read_full`
+/// 相同（候选解码失败即按帧内字节跳过）。
+pub(crate) fn read_frames_from(path: &Path, offset: u64) -> Result<(String, u64), String> {
+    use std::io::Seek as _;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(std::io::SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let mut out = String::new();
+    let mut cursor = 0usize;
+    let mut safe = 0usize;
+    while cursor + 4 <= raw.len() {
+        if raw[cursor..cursor + 4] == ZSTD_MAGIC {
+            match decode_one_frame(&raw[cursor..]) {
+                Some((text, consumed)) => {
+                    if out.len() + text.len() > MAX_TOTAL_DECOMPRESSED {
+                        return Err(format!(
+                            "会话日志解压总量超过上限（{} MiB）",
+                            MAX_TOTAL_DECOMPRESSED / 1024 / 1024
+                        ));
+                    }
+                    out.push_str(&text);
+                    cursor += consumed;
+                    // 只有完整帧才推进安全偏移；撕裂尾帧留在下一轮
+                    safe = cursor;
+                    continue;
+                }
+                None => cursor += 1, // 伪 magic 或撕裂尾帧
+            }
+        } else {
+            cursor += 1;
+        }
+    }
+    Ok((out, offset + safe as u64))
+}
+
+/// `offset` 处是否为合法帧边界（紧跟 zstd magic）。增量折叠的偏移只前进
+/// 到完整帧末尾，因此合法偏移后必然是下一帧的 magic 或文件尾；不满足即
+/// 说明文件被原地重写（长度不变/变长但内容不同），调用方应整段重折。
+pub(crate) fn starts_with_frame_magic(path: &Path, offset: u64) -> Result<bool, String> {
+    use std::io::Seek as _;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(std::io::SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 4];
+    use std::io::Read as _;
+    match file.read_exact(&mut magic) {
+        Ok(()) => Ok(magic == ZSTD_MAGIC),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(true), // 文件尾
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// 列举 `$DSH_HOME/sessions` 下所有含 `session.jsonl.zstd` 的会话目录，
 /// 返回 `(session_id, log_path)`。
 ///
@@ -156,6 +213,57 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root.join("session.jsonl.zstd")
+    }
+
+    #[test]
+    fn read_frames_from_decodes_only_complete_frames_after_offset() {
+        use super::read_frames_from;
+        let path = temp_log("incr");
+        let frame1 = zstd::encode_all(
+            "one
+"
+            .as_bytes(),
+            3,
+        )
+        .unwrap();
+        let frame2 = zstd::encode_all(
+            "two
+"
+            .as_bytes(),
+            3,
+        )
+        .unwrap();
+        let mut stream = frame1.clone();
+        stream.extend_from_slice(&frame2);
+        std::fs::write(&path, &stream).unwrap();
+        // 从 0 读：两帧全出，偏移推进到文件尾
+        let (text, off) = read_frames_from(&path, 0).unwrap();
+        assert_eq!(
+            text,
+            "one
+two
+"
+        );
+        assert_eq!(off as usize, stream.len());
+        // 从 frame1 之后读：只有 two
+        let (text, off) = read_frames_from(&path, frame1.len() as u64).unwrap();
+        assert_eq!(
+            text,
+            "two
+"
+        );
+        assert_eq!(off as usize, stream.len());
+        // 尾帧撕裂（砍掉一半字节）：安全偏移停在 frame1 末尾，无文本输出
+        let torn = &stream[..stream.len() - 4];
+        std::fs::write(&path, torn).unwrap();
+        let (text, off) = read_frames_from(&path, 0).unwrap();
+        assert_eq!(
+            text,
+            "one
+"
+        );
+        assert_eq!(off as usize, frame1.len());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

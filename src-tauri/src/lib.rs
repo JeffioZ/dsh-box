@@ -258,7 +258,9 @@ mod event_sign_tests {
     fn sign_payload_injects_nonce_into_objects() {
         let signed = sign_payload(serde_json::json!({ "phase": "ready" }));
         assert_eq!(signed["phase"], "ready");
-        assert!(signed["__dshdNonce"].as_str().is_some_and(|n| n.len() == 32));
+        assert!(signed["__dshdNonce"]
+            .as_str()
+            .is_some_and(|n| n.len() == 32));
         // 非对象载荷原样返回，不 panic
         assert_eq!(sign_payload(serde_json::json!(42)), serde_json::json!(42));
     }

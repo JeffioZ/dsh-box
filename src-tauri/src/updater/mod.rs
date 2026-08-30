@@ -281,7 +281,11 @@ fn emit_progress(app: &AppHandle, message: &str) {
     // 仍能经轮询（app_dialog_check_get）拉取——事件通道对隐藏窗口不可靠。
     app.state::<AppState>()
         .set_check_progress(Some(message.to_string()));
-    crate::emit_signed(app, "update-progress", &serde_json::json!({ "message": message }));
+    crate::emit_signed(
+        app,
+        "update-progress",
+        &serde_json::json!({ "message": message }),
+    );
 }
 
 // ---------- 应用更新 ----------
