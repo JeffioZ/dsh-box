@@ -91,6 +91,58 @@ pub fn log_panic(line: &str) {
     }
 }
 
+/// 内置页面事件签名 nonce：`core:event` 的 listen/emit 不区分来源，dsh 页
+/// （及其内 iframe）可伪造事件驱动内置 UI（app-dialog-open 甚至直接渲染
+/// 载荷内容）。Rust 发射的事件载荷统一注入 `__dshdNonce`，内置页经
+/// origin 守卫的 `event_nonce` 命令取值校验——dsh 页拿不到正确值，
+/// 伪造事件在消费端被丢弃。随机数失败退化为时间+PID 派生（同协议令牌
+/// 政策：仅削弱防伪造强度，不阻断）。
+pub(crate) fn event_nonce() -> &'static str {
+    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NONCE.get_or_init(|| {
+        let mut bytes = [0u8; 16];
+        if getrandom::fill(&mut bytes).is_err() {
+            crate::logging::log("app-state: 事件签名 nonce 退化为时间+PID 派生");
+            let mut mixed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+                ^ ((std::process::id() as u128) << 64);
+            for byte in bytes.iter_mut() {
+                *byte = (mixed & 0xff) as u8;
+                mixed = mixed.rotate_left(13) ^ (mixed >> 7);
+            }
+        }
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
+
+/// 载荷注入签名（纯逻辑，供单测）。非对象载荷无法注入，原样返回。
+pub(crate) fn sign_payload(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("__dshdNonce".to_string(), serde_json::json!(event_nonce()));
+    }
+    value
+}
+
+/// 带签名的事件广播（内置页面消费的事件一律走此入口）。
+pub(crate) fn emit_signed<S: serde::Serialize>(app: &AppHandle, event: &str, payload: &S) {
+    let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    let _ = app.emit(event, sign_payload(value));
+}
+
+/// 带签名的定向事件（emit_to 的签名版）。
+pub(crate) fn emit_signed_to<S: serde::Serialize>(
+    app: &AppHandle,
+    label: &str,
+    event: &str,
+    payload: &S,
+) {
+    use tauri::Emitter as _;
+    let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    let _ = app.emit_to(label, event, sign_payload(value));
+}
+
 /// 对外产品名（窗口标题/托盘/exe 属性等统一显示名）。
 pub const APP_TITLE: &str = "DSHBox";
 
@@ -139,7 +191,7 @@ pub fn emit_status_progress(
         service_mode: snapshot.service_mode,
         external_service: snapshot.external_service,
     };
-    let _ = app.emit("dsh-status", payload);
+    emit_signed(app, "dsh-status", &payload);
     crate::tray::sync_menu_state(app);
 }
 
@@ -196,6 +248,20 @@ pub fn show_main(app: &AppHandle) {
 
 pub fn run() {
     bootstrap::run();
+}
+
+#[cfg(test)]
+mod event_sign_tests {
+    use super::sign_payload;
+
+    #[test]
+    fn sign_payload_injects_nonce_into_objects() {
+        let signed = sign_payload(serde_json::json!({ "phase": "ready" }));
+        assert_eq!(signed["phase"], "ready");
+        assert!(signed["__dshdNonce"].as_str().is_some_and(|n| n.len() == 32));
+        // 非对象载荷原样返回，不 panic
+        assert_eq!(sign_payload(serde_json::json!(42)), serde_json::json!(42));
+    }
 }
 
 #[cfg(test)]

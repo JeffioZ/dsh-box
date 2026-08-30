@@ -2,7 +2,7 @@
 //! 安全：所有命令仅允许内置 App 页面调用；dsh 页面及其他任意来源一律拒绝，
 //! 避免 withGlobalTauri 暴露的 IPC 被远程内容用于控制桌面端。
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::{self, AppState, InstallAction};
 use crate::{dsh, logging, processes, updater};
@@ -60,6 +60,14 @@ pub(crate) fn ensure_local_service_scope(app: &AppHandle) -> Result<(), String> 
         .into());
     }
     Ok(())
+}
+
+/// 事件签名 nonce（供内置页面校验 __dshdNonce；origin 守卫使 dsh 页
+/// 无法获取，伪造事件在消费端被丢弃）。
+#[tauri::command]
+pub fn event_nonce(webview: tauri::Webview) -> Result<String, String> {
+    ensure_local_origin(&webview)?;
+    Ok(crate::event_nonce().to_string())
 }
 
 #[tauri::command]
@@ -182,6 +190,7 @@ pub fn apply_updates(app: AppHandle, webview: tauri::Webview, which: String) -> 
 pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         get_status,
+        event_nonce,
         retry_boot,
         choose_service,
         use_local_service,

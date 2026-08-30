@@ -85,7 +85,7 @@ pub fn set_deepseek_api_key(
     app.state::<AppState>().set_last_balance(None);
     crate::balance::refresh_once(app.clone());
     let settings = settings_state(&app);
-    let _ = app.emit("settings-changed", &settings);
+    crate::emit_signed(&app, "settings-changed", &settings);
     Ok(settings)
 }
 
@@ -105,7 +105,7 @@ pub fn set_window_behavior(
     }
     crate::logging::log(&format!("settings: {key}={value}"));
     let settings = settings_state(&app);
-    let _ = app.emit("settings-changed", &settings);
+    crate::emit_signed(&app, "settings-changed", &settings);
     Ok(settings)
 }
 
@@ -163,7 +163,7 @@ pub fn settings_set(
     crate::logging::log(&format!("settings: {key}={value}"));
     // 广播给其他内建窗口（状态栏据此隐藏/显示余额 chip）
     let st = settings_state(&app);
-    let _ = app.emit("settings-changed", &st);
+    crate::emit_signed(&app, "settings-changed", &st);
     Ok(st)
 }
 
@@ -185,6 +185,6 @@ pub fn set_dsh_channel(
     }
     // 与其他设置命令一致：持久化后广播，其他内建窗口据此刷新
     let settings = settings_state(&app);
-    let _ = app.emit("settings-changed", &settings);
+    crate::emit_signed(&app, "settings-changed", &settings);
     Ok(settings)
 }

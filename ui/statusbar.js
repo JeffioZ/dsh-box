@@ -280,10 +280,10 @@ function init() {
     new ResizeObserver(() => fitGroups()).observe(statsEl);
   }
   window.addEventListener('dshd-language-changed', onLanguageChanged);
-  listen('session-stats-updated', (e) => onStats(e.payload)).catch(() => {});
-  listen('live-rate-updated', (e) => onLiveRate(e.payload)).catch(() => {});
-  listen('balance-updated', (e) => onBalance(e.payload)).catch(() => {});
-  listen('dsh-status', (e) => {
+  dshdListen('session-stats-updated', (e) => onStats(e.payload));
+  dshdListen('live-rate-updated', (e) => onLiveRate(e.payload));
+  dshdListen('balance-updated', (e) => onBalance(e.payload));
+  dshdListen('dsh-status', (e) => {
     const payload = e.payload || {};
     const previousMode = serviceMode;
     const previousReady = serviceReady;
@@ -297,7 +297,7 @@ function init() {
       invoke('api_balance').then(onBalance).catch(() => {});
     }
   }).catch(() => {});
-  listen('settings-changed', (e) => {
+  dshdListen('settings-changed', (e) => {
     currentSettings = e.payload || null;
     renderBalance();
   }).catch(() => {});

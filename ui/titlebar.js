@@ -211,7 +211,7 @@ async function init() {
     applyCloseBehavior(closeBehavior);
     refreshMainMenu();
   });
-  listen('settings-changed', (event) => {
+  dshdListen('settings-changed', (event) => {
     applyCloseBehavior(event.payload && event.payload.close_behavior);
   }).catch(() => {});
 

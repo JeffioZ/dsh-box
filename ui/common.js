@@ -84,6 +84,28 @@ function dshdCssDurationMs(name, fallback) {
   return raw.endsWith('s') && !raw.endsWith('ms') ? value * 1000 : value;
 }
 
+// —— 事件签名校验：core:event 的 listen/emit 不区分来源，dsh 页可伪造
+//    事件驱动内置 UI；Rust 发射的载荷带 __dshdNonce，本助手先经 origin
+//    守卫的 event_nonce 命令取值（dsh 页拿不到），不匹配的事件直接丢弃。
+let dshdEventNonceCache = null;
+function dshdEventNonce() {
+  if (!dshdEventNonceCache) {
+    dshdEventNonceCache = window.__TAURI__.core.invoke('event_nonce').catch(() => null);
+  }
+  return dshdEventNonceCache;
+}
+async function dshdListen(event, handler) {
+  try {
+    const nonce = await dshdEventNonce();
+    return await window.__TAURI__.event.listen(event, (e) => {
+      if (!nonce || !e.payload || e.payload.__dshdNonce !== nonce) return;
+      handler(e);
+    });
+  } catch {
+    return null;
+  }
+}
+
 // —— 共享图标：路径数据唯一定义点，页面经 dshdIcon 生成带各自属性的 svg ——
 const DSHD_ICON_PATHS = {
   download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path>',

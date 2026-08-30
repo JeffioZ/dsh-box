@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::{AppState, Config};
 
@@ -165,7 +165,7 @@ fn run_round(app: &AppHandle) {
             subscriptions: payload.subscriptions.clone(),
         });
     }
-    let _ = app.emit("usage-accounts-updated", payload);
+    crate::emit_signed(app, "usage-accounts-updated", &payload);
 }
 
 /// 全量刷新：逐路由查余额 + 全部订阅适配器，并与旧缓存做瞬错保旧合并。

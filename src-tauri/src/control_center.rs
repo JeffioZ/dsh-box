@@ -7,7 +7,7 @@
 //! （不在事件回调里创建/销毁窗口）。
 
 use tauri::WebviewUrl;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::AppState;
 
@@ -362,9 +362,7 @@ fn show_with_update_token(
     // 事件通道对隐藏窗口不可靠，下方 emit 仅作兜底（页面按载荷印章去重）
     let json = serde_json::to_string(&payload).unwrap_or_default();
     let _ = win.eval(format!("window.__dshdOpen && window.__dshdOpen({json})"));
-    if let Err(e) = app.emit_to(APP_DIALOG_WINDOW, "app-dialog-open", payload) {
-        crate::logging::log(&format!("app-dialog: 事件下发失败：{e}"));
-    }
+    crate::emit_signed_to(app, APP_DIALOG_WINDOW, "app-dialog-open", &payload);
     // 尺寸/位置设置交给事件循环处理一帧后再显示，既保留首帧位置稳定性，
     // 又不在主线程用最多 1.2 秒的 sleep 轮询阻塞标题栏与菜单响应。
     let handle = app.clone();

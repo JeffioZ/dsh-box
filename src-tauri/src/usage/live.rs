@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::{AppState, Config};
 
@@ -73,7 +73,7 @@ pub(crate) fn start_periodic(app: AppHandle) {
             continue;
         }
         let payload = poll_once(&config);
-        let _ = app.emit("session-stats-updated", payload);
+        crate::emit_signed(&app, "session-stats-updated", &payload);
     });
 }
 
@@ -86,7 +86,7 @@ pub(crate) fn refresh_once(app: AppHandle) {
             return;
         }
         let payload = poll_once(&config);
-        let _ = app.emit("session-stats-updated", payload);
+        crate::emit_signed(&app, "session-stats-updated", &payload);
     });
 }
 
@@ -431,7 +431,7 @@ pub(crate) fn start_live_rate(app: AppHandle) {
             if state.service_ownership().is_external() {
                 cached_sid = None;
                 cached_at = std::time::Instant::now() - SESSION_ID_TTL;
-                let _ = app.emit("live-rate-updated", serde_json::json!({ "tps": null }));
+                crate::emit_signed(&app, "live-rate-updated", &serde_json::json!({ "tps": null }));
                 continue;
             }
             if state.service_ownership() != crate::app_state::ServiceOwnership::Managed
@@ -452,7 +452,7 @@ pub(crate) fn start_live_rate(app: AppHandle) {
             let tps = cached_sid
                 .as_deref()
                 .and_then(|sid| live_rate_once(sid, &config));
-            let _ = app.emit("live-rate-updated", serde_json::json!({ "tps": tps }));
+            crate::emit_signed(&app, "live-rate-updated", &serde_json::json!({ "tps": tps }));
         }
     });
 }

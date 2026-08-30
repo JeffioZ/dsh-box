@@ -548,7 +548,7 @@ let usageAccountsUnlisten = null;
 async function ensureUsageAccountsListener() {
   if (usageAccountsUnlisten) return;
   try {
-    usageAccountsUnlisten = await listen('usage-accounts-updated', (e) => {
+    usageAccountsUnlisten = await dshdListen('usage-accounts-updated', (e) => {
       if (openKind !== 'usage' || !e.payload) return;
       const box = document.querySelector('.usage-accounts');
       const section = box ? box.closest('.usage-card') : null;
@@ -1170,8 +1170,8 @@ window.__dshdReset = () => {
   const nav = $('nav');
   if (nav) nav.innerHTML = '';
 };
-listen('app-dialog-open', (e) => applyOpen(e.payload)).catch(() => {});
-listen('dsh-status', (e) => {
+dshdListen('app-dialog-open', (e) => applyOpen(e.payload));
+dshdListen('dsh-status', (e) => {
   if (!currentOpen || !e.payload) return;
   currentOpen.initial = currentOpen.initial || {};
   currentOpen.initial.service_mode = e.payload.service_mode || 'none';
@@ -1187,10 +1187,10 @@ document.addEventListener('visibilitychange', async () => {
     try { applyOpen(await invoke('app_dialog_get')); } catch (e) {}
   }
 });
-listen('update-result', (e) => {
+dshdListen('update-result', (e) => {
   if (openKind === 'check') renderCheckResult(e.payload);
 }).catch(() => {});
-listen('update-progress', (e) => {
+dshdListen('update-progress', (e) => {
   if (e.payload && e.payload.message) renderProgress(e.payload.message);
 }).catch(() => {});
 window.addEventListener('dshd-language-changed', () => {

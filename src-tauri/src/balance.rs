@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::{AppState, Config};
 
@@ -227,7 +227,7 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
                 return;
             }
             let payload = query_balance(&config);
-            let _ = app.emit("balance-updated", payload);
+            crate::emit_signed(app, "balance-updated", &payload);
         },
     );
 }
@@ -247,7 +247,7 @@ pub(crate) fn refresh_once(app: AppHandle) {
         let config = state.config();
         if !config.hide_statusbar && !config.hide_balance && crate::main_is_visible(&app) {
             let payload = query_balance(&config);
-            let _ = app.emit("balance-updated", payload);
+            crate::emit_signed(&app, "balance-updated", &payload);
         }
     });
 }

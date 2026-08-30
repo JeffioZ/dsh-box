@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::{AppState, BootPhase};
 #[cfg(windows)]
@@ -281,7 +281,7 @@ fn emit_progress(app: &AppHandle, message: &str) {
     // 仍能经轮询（app_dialog_check_get）拉取——事件通道对隐藏窗口不可靠。
     app.state::<AppState>()
         .set_check_progress(Some(message.to_string()));
-    let _ = app.emit("update-progress", serde_json::json!({ "message": message }));
+    crate::emit_signed(app, "update-progress", &serde_json::json!({ "message": message }));
 }
 
 // ---------- 应用更新 ----------

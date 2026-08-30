@@ -794,9 +794,9 @@ async function init() {
     if (lastUpdateResult) renderUpdate(lastUpdateResult);
   });
   const { listen } = window.__TAURI__.event;
-  await listen('dsh-status', (e) => renderStatus(e.payload));
-  await listen('update-result', (e) => renderUpdate(e.payload));
-  await listen('update-progress', (e) => {
+  await dshdListen('dsh-status', (e) => renderStatus(e.payload));
+  await dshdListen('update-result', (e) => renderUpdate(e.payload));
+  await dshdListen('update-progress', (e) => {
     if (e.payload && e.payload.message) {
       // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
       // 且 Rust 文本是旧语言快照，语言切换后不重译）

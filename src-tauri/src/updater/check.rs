@@ -53,7 +53,7 @@ pub fn check_and_report(app: &AppHandle) -> Result<(), String> {
         crate::locale::text("正在检查更新…", "Checking for updates…"),
     );
     let result = check(app);
-    let _ = app.emit("update-result", &result);
+    crate::emit_signed(app, "update-result", &&result);
     Ok(())
 }
 
@@ -104,7 +104,7 @@ pub fn silent_check(app: &AppHandle) {
                     }
                 ));
                 // 启动页若仍可见则展示结果
-                let _ = handle.emit("update-result", &result);
+                crate::emit_signed(&handle, "update-result", &result);
                 if d.update_available {
                     show_update_dialog(&handle, d);
                 }
@@ -218,7 +218,7 @@ pub(crate) fn apply_dsh_update(app: &AppHandle) {
                 .state::<AppState>()
                 .set_last_check(Some(result.clone()));
             handle.state::<AppState>().set_check_progress(None);
-            let _ = handle.emit("update-result", &result);
+            crate::emit_signed(&handle, "update-result", &result);
         }
         Err(e) => {
             let result = CheckResult {
@@ -232,7 +232,7 @@ pub(crate) fn apply_dsh_update(app: &AppHandle) {
                 .state::<AppState>()
                 .set_last_check(Some(result.clone()));
             handle.state::<AppState>().set_check_progress(None);
-            let _ = handle.emit("update-result", &result);
+            crate::emit_signed(&handle, "update-result", &result);
             // 弹窗未显示时才弹原生兜底（弹窗开着已显示失败原因，不再重复打扰）
             if !crate::control_center::is_check_open(&handle) {
                 crate::native_dialog::show_message(
