@@ -19,8 +19,7 @@ const MIME = {
   '.json': 'application/json',
 };
 
-http
-  .createServer((req, res) => {
+const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });
       res.end('method not allowed');
@@ -55,7 +54,13 @@ http
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
-  })
-  .listen(port, '127.0.0.1', () => {
-    console.log(`dev UI server: http://127.0.0.1:${port} (root: ${root})`);
   });
+server.listen(port, '127.0.0.1', () => {
+  console.log(`dev UI server: http://127.0.0.1:${port} (root: ${root})`);
+});
+server.on('error', (err) => {
+  // 端口竞态被占（EADDRINUSE）等启动失败要有明确输出，而不是未捕获异常栈
+  console.error(`dev UI server failed to start on port ${port}: ${err.message}`);
+  console.error('If the port is in use, stop the conflicting process or change DEV_UI_PORT.');
+  process.exit(1);
+});

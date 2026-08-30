@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 // 12px 渲染下控制细节密度：气泡去三点、圆柱去中间弧，保证剪影清晰
 const GROUP_ICONS = {
   counts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"></path></svg>',
-  durations: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>',
+  durations: dshdIcon('clock', 'aria-hidden="true"'),
   speeds: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>',
   cache: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z"></path><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path></svg>',
   tokens: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3 21 7 17 11"></path><path d="M21 7H9"></path><path d="M7 13 3 17 7 21"></path><path d="M3 17h12"></path></svg>',

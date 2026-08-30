@@ -330,57 +330,7 @@ fn guarded_balance_url(api_base: &str) -> Result<String, BalanceError> {
     }
 }
 
-fn hostname_is_private(hostname: &str) -> bool {
-    let host = hostname
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_lowercase();
-    host == "localhost" || host.ends_with(".localhost") || is_private_address(&host)
-}
-
-/// 私有/回环网段判定（IPv4 与 IPv6 简化版；与 usage/balance.rs 同一实现）。
-fn is_private_address(host: &str) -> bool {
-    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
-    // IPv6 回环/链路本地/ULA。
-    if host.contains(':') {
-        let lower = host.to_lowercase();
-        if lower == "::1" {
-            return true;
-        }
-        if lower.starts_with("fe80") || lower.starts_with("fc") || lower.starts_with("fd") {
-            return true;
-        }
-        // IPv4-mapped IPv6 ::ffff:a.b.c.d
-        if let Some(rest) = lower.strip_prefix("::ffff:") {
-            return is_private_ipv4(rest);
-        }
-        return false;
-    }
-    is_private_ipv4(host)
-}
-
-fn is_private_ipv4(host: &str) -> bool {
-    let octets: Vec<u32> = match host
-        .split('.')
-        .map(|p| p.parse::<u32>())
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(v) if v.len() == 4 => v,
-        _ => return false,
-    };
-    let [a, b, c, _] = [octets[0], octets[1], octets[2], octets[3]];
-    a == 0
-        || a == 10
-        || a == 127
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 168)
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 192 && b == 0 && (c == 0 || c == 2))
-        || (a == 198 && (b == 18 || b == 19))
-        || a >= 224
-}
+use crate::net_guard::hostname_is_private;
 
 /// 金额字符串解析为 f64（空串/非数值/非有限值一律 None，不向客户端
 /// 吐 NaN/Infinity——serde_json 无法序列化非有限浮点）。

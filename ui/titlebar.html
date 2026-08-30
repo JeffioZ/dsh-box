@@ -21,9 +21,7 @@ body {
   background: transparent;
   color: var(--dshd-text);
   /* dsh 字体栈（dsw-font-family） */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
+  font-family: var(--dshd-font);
   user-select: none;
 }
 /* 窗口失焦：品牌文字与窗口按钮变暗，与系统窗口失焦标题栏一致；
@@ -57,9 +55,7 @@ body.window-inactive .tb-btn { color: #5b5c66; }
   box-sizing: border-box; z-index: 10;
   /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px + dsh 字体栈）：
      标题栏页面无基础字号，不显式设置会落到浏览器默认 16px */
-  font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
+  font: 14px/22px var(--dshd-font);
 }
 #main-menu-list { display: flex; flex-direction: column; }
 

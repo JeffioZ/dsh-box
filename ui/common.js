@@ -84,6 +84,25 @@ function dshdCssDurationMs(name, fallback) {
   return raw.endsWith('s') && !raw.endsWith('ms') ? value * 1000 : value;
 }
 
+// —— 共享图标：路径数据唯一定义点，页面经 dshdIcon 生成带各自属性的 svg ——
+const DSHD_ICON_PATHS = {
+  download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path>',
+  puzzle: '<path d="M8.5 3H5a2 2 0 0 0-2 2v3.5a2.5 2.5 0 1 1 0 5V19a2 2 0 0 0 2 2h3.5a2.5 2.5 0 1 1 5 0H19a2 2 0 0 0 2-2v-5.5a2.5 2.5 0 1 1 0-5V5a2 2 0 0 0-2-2h-5.5a2.5 2.5 0 1 1-5 0Z"></path>',
+  gear: '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
+  info: '<circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path>',
+  clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
+};
+
+/**
+ * 生成 24px 线性图标 svg。attrs 传元素级属性串（如
+ * 'focusable="false" aria-hidden="true"'）；路径数据见 DSHD_ICON_PATHS，
+ * 各页面不得再复制图标 path 字面量。
+ */
+function dshdIcon(name, attrs) {
+  return '<svg viewBox="0 0 24 24"' + (attrs ? ' ' + attrs : '') + '>'
+    + (DSHD_ICON_PATHS[name] || '') + '</svg>';
+}
+
 const DSHD_PASSWORD_ICONS = {
   show: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>',
   hide: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 5.7A10.8 10.8 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.2 3.1"></path><path d="M6.2 6.3A16.7 16.7 0 0 0 2.5 12s3.5 6.5 9.5 6.5a10.4 10.4 0 0 0 4-.8"></path><path d="M10.2 10.2a2.5 2.5 0 0 0 3.6 3.6"></path></svg>',

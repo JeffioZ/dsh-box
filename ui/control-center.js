@@ -180,7 +180,7 @@ function providerMark(item) {
 
 const WARN_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
 const CRIT_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9L7.9 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>';
-const CLOCK_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>';
+const CLOCK_ICON = dshdIcon('clock', 'focusable="false" aria-hidden="true"');
 
 // —— 最近 14 天：本地日历窗口，只列有用量的日期（无用量省略、未来日不计）——
 function renderRecentDays(wrap, report) {
@@ -830,8 +830,12 @@ function renderUpdatePrompt(p) {
     ? dshdT('appUpdateReadyDesc', { version })
     : dshdT('dshUpdatePromptDesc', { version, current });
   const body = $('body');
-  const viewLink = p && p.release_url
-    ? '<a class="up-link" id="up-view-release" href="' + esc(p.release_url) +
+  // href 只接受 https：中键/新标签等绕过 click 处理器的边缘路径下，
+  // javascript: 等伪协议不应有生效机会（click 常规路径已由 Rust 校验）
+  const releaseHref = p && p.release_url && String(p.release_url).startsWith('https:')
+    ? esc(p.release_url) : '';
+  const viewLink = releaseHref
+    ? '<a class="up-link" id="up-view-release" href="' + releaseHref +
       '" rel="noopener noreferrer">' + dshdT('viewReleaseNotes') + ' ↗</a>'
     : '';
   body.innerHTML =
@@ -901,10 +905,10 @@ const NAV_TITLE_KEY = {
 };
 const NAV_ICONS = {
   chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path></svg>',
-  download: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 21h16"></path></svg>',
-  puzzle: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M8.5 3H5a2 2 0 0 0-2 2v3.5a2.5 2.5 0 1 1 0 5V19a2 2 0 0 0 2 2h3.5a2.5 2.5 0 1 1 5 0H19a2 2 0 0 0 2-2v-5.5a2.5 2.5 0 1 1 0-5V5a2 2 0 0 0-2-2h-5.5a2.5 2.5 0 1 1-5 0Z"></path></svg>',
-  gear: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
-  info: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7.5v.01"></path></svg>',
+  download: dshdIcon('download', 'focusable="false" aria-hidden="true"'),
+  puzzle: dshdIcon('puzzle', 'focusable="false" aria-hidden="true"'),
+  gear: dshdIcon('gear', 'focusable="false" aria-hidden="true"'),
+  info: dshdIcon('info', 'focusable="false" aria-hidden="true"'),
 };
 function renderNav(activeKind) {
   const nav = $('nav');
