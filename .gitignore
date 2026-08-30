@@ -30,5 +30,8 @@ Thumbs.db
 .idea/
 *.pdb
 
-# 本地 AI 会话配置
+# 本地 AI 会话配置与项目记忆（私有，勿提交）
 reasonix.toml
+AGENTS.md
+CLAUDE.md
+AGENTS.local.md

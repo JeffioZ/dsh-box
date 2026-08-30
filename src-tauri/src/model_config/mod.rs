@@ -177,7 +177,8 @@ fn extract_section_text(text: &str) -> String {
 /// pi-ai 官方目录路由名单（`@earendil-works/pi-ai/dist/providers/*.models.js`
 /// 的文件名列表，37 个）。导出时过滤掉这些——它们是官方目录路由，同事
 /// 自己也能配置，没必要随分享带走。
-/// ⚠️ 上游 pi-ai 升级新增官方 provider 时需同步此名单（维护点记录于 AGENTS.md）。
+/// ⚠️ 上游 pi-ai 升级新增官方 provider 时，须对照上游目录同步此名单，
+/// 否则新的官方路由会被误当作自定义路由随导出带出。
 const BUILTIN_ROUTES: &[&str] = &[
     "amazon-bedrock",
     "ant-ling",
