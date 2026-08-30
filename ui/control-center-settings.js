@@ -69,7 +69,7 @@ async function renderSettings() {
     settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
     settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
     settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
-    settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc', 'srow-dependent') +
+    settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc') +
     '</section>';
   const runtimeSec =
     '<section class="psection settings-section" aria-labelledby="settings-runtime-heading">' +

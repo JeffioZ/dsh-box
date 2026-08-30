@@ -9,6 +9,7 @@ src-tauri/gen/
 
 # 本地 AI 辅助会话元数据（勿提交）
 .reasonix/
+.zcode/
 
 # 日志
 *.log
