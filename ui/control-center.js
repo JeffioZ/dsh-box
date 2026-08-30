@@ -76,6 +76,35 @@ function formatPercent(p) {
   return (p === null || p === undefined) ? '—' : String(p) + '%';
 }
 
+// 估算成本（USD，两位小数 + 千分位）。cost_complete 为 false 或金额为 0 时
+// 显示「—」（含未定价样本 → fail-closed，不低估）；title 提示原因。
+function costText(entry) {
+  if (!entry || !entry.cost_complete) {
+    return '<span class="usage-cost-unknown" title="' + esc(dshdT('usageCostUnknown')) + '">—</span>';
+  }
+  const usd = Number(entry.cost_usd) || 0;
+  if (usd <= 0) {
+    return '<span class="usage-cost-unknown">—</span>';
+  }
+  const locale = (typeof dshdLocale === 'function' && dshdLocale()) || undefined;
+  return '$' + usd.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// 跨天聚合成本（按模型）：任一天该模型不可信 → 整体「—」
+function aggregateModelCostText(days, modelKey) {
+  let usd = 0;
+  let any = false;
+  for (const d of days) {
+    for (const m of (d.models || [])) {
+      if (m.model !== modelKey) continue;
+      any = true;
+      if (!m.cost_complete) return costText(null);
+      usd += Number(m.cost_usd) || 0;
+    }
+  }
+  return costText(any ? { cost_complete: true, cost_usd: usd } : null);
+}
+
 function renderUsageReport(report, seq) {
   const wrap = document.querySelector('.usage-wrap');
   const summary = $('usage-summary');
@@ -84,12 +113,23 @@ function renderUsageReport(report, seq) {
   const todayInfo = todayEntry(report);
   const todayHit = todayInfo ? todayInfo.cache_hit_rate : null;
   const totalHit = report.total ? report.total.cache_hit_rate : null;
+  // 本月成本 = 当月各天求和；任一天不可信即整月「—」（与 Rust 总账同款
+  // fail-closed 口径，前端不重新发明阈值）
+  const monthPrefix = localDayKey(Date.now()).slice(0, 7);
+  const monthDays = (report.days || []).filter((d) => d.date.startsWith(monthPrefix));
+  let monthCost = { cost_complete: true, cost_usd: 0 };
+  for (const d of monthDays) {
+    if (!d.cost_complete) { monthCost = null; break; }
+    monthCost.cost_usd += Number(d.cost_usd) || 0;
+  }
   summary.innerHTML =
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageToday') + '</span><b data-trunc-tip>' + fmtTokens(todayTokens(report)) + '</b></div>' +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageThisMonth') + '</span><b data-trunc-tip>' + fmtTokens(monthTokens(report)) + '</b></div>' +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotal') + '</span><b data-trunc-tip>' + fmtTokens(total.tokens || 0) + '</b></div>' +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTodayHit') + '</span><b>' + formatPercent(todayHit) + '</b></div>' +
-    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotalHit') + '</span><b>' + formatPercent(totalHit) + '</b></div>';
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotalHit') + '</span><b>' + formatPercent(totalHit) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageMonthCost') + '</span><b>' + costText(monthCost) + '</b></div>' +
+    '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotalCost') + '</span><b>' + costText(total) + '</b></div>';
   // 汇总区 token 数值可能因列宽不足被截断：仅截断时才给悬停 title 显示完整值。
   applyTruncationTips(summary);
   const load = $('usage-load');
@@ -215,6 +255,7 @@ function renderRecentDays(wrap, report) {
     li.innerHTML =
       '<span class="usage-model-name usage-recent-date">' + esc(usageDayLabel(d.date)) + '</span>' +
       '<span class="usage-model-hit">' + (hit !== null && Number.isFinite(hit) ? hit + '%' : '—') + '</span>' +
+      '<span class="usage-model-cost">' + costText(d) + '</span>' +
       '<b>' + fmtTokens(d.tokens || 0) + '</b>' +
       '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * (d.tokens || 0) / max)) + '%"></span></span>';
     ul.appendChild(li);
@@ -366,6 +407,7 @@ function usageRenderDayDetail(detail, dayKey, dayMap) {
     '<li class="usage-model">' +
     '<span class="usage-model-name" data-trunc-tip>' + esc(m.model) + '</span>' +
     '<span class="usage-model-hit">' + (m.cache_hit_rate !== null && m.cache_hit_rate !== undefined ? m.cache_hit_rate + '%' : '—') + '</span>' +
+    '<span class="usage-model-cost">' + costText(m) + '</span>' +
     '<b>' + fmtTokens(m.tokens) + '</b>' +
     '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * m.tokens / max)) + '%"></span></span>' +
     '</li>'
@@ -396,6 +438,10 @@ function renderModelBreakdown(wrap, report) {
     // 聚合命中率没有来源，占位列只会误导（按天下钻行有真实命中率）
     li.innerHTML =
       '<span class="usage-model-name" data-trunc-tip>' + esc(model) + '</span>' +
+      // 占位对齐：与最近 14 天/按天下钻行同为 4 列（此处无命中率列），
+      // 使成本与 token 列的右缘在各区块一致
+      '<span class="usage-model-hit" aria-hidden="true"></span>' +
+      '<span class="usage-model-cost">' + aggregateModelCostText(days, model) + '</span>' +
       '<b>' + fmtTokens(tokens) + '</b>' +
       '<span class="usage-model-bar" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(100 * tokens / maxTokens)) + '%"></span></span>';
     ul.appendChild(li);

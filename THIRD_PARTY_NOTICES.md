@@ -21,7 +21,7 @@ DSHBox 自身采用 MIT License。仓库、构建工具、编译产物和运行�
 
 ## dsh-usage-stats
 
-「用量与余额」功能衍生自此项目，按 MIT 条款保留版权声明。衍生范围：聚合模块 `src-tauri/src/usage/aggregate.rs`（逐函数移植）、`usage/balance.rs` 与 `usage/subscriptions.rs`（适配器契约与解析逻辑参考）、`usage/providers.rs`（供应商枚举口径）、控制中心用量页结构（视觉为本项目设计体系）。与上游的同步规程见 [docs/usage-sync.md](docs/usage-sync.md)。
+「用量与余额」功能衍生自此项目，按 MIT 条款保留版权声明。衍生范围：聚合模块 `src-tauri/src/usage/aggregate.rs`（逐函数移植）、`usage/pricing.rs`（DeepSeek 官方历史定价目录与峰谷判定移植）、`usage/balance.rs` 与 `usage/subscriptions.rs`（适配器契约与解析逻辑参考，含 OrcaRouter / New API / Sub2API）、`usage/providers.rs`（供应商枚举口径）、控制中心用量页结构（视觉为本项目设计体系）。与上游的同步规程见 [docs/usage-sync.md](docs/usage-sync.md)。
 
 - 项目：https://github.com/Ychris12138/dsh-usage-stats
 - 许可证：MIT

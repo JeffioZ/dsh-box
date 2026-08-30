@@ -72,6 +72,11 @@ fn num_of(value: &serde_json::Value, field: &str) -> Option<f64> {
     })
 }
 
+/// 按候选键序取第一个可解析数值（上游 snake/camel 双写兼容）。
+fn num_any(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|k| num_of(value, k))
+}
+
 fn clamp_percent(v: f64) -> f64 {
     v.clamp(0.0, 100.0)
 }
@@ -81,7 +86,7 @@ fn round1(v: f64) -> f64 {
 }
 
 /// epoch 秒或毫秒 → ISO8601。秒值 < 2e10 视为秒。
-fn to_iso(value: Option<f64>) -> Option<String> {
+pub(crate) fn to_iso(value: Option<f64>) -> Option<String> {
     let v = value?;
     let ms = if v < 20_000_000_000.0 { v * 1000.0 } else { v };
     let secs = (ms / 1000.0) as i64;
@@ -109,7 +114,7 @@ fn to_iso(value: Option<f64>) -> Option<String> {
 /// 订阅预警级别（与前端 warnLevelOf 同阈值）：最紧窗口（min
 /// remaining_percent，0..100）≤ 10 → "critical"，≤ 30 → "warning"；
 /// 无窗口为 "none"。
-fn warn_of_windows(windows: &[QuotaWindow]) -> &'static str {
+pub(crate) fn warn_of_windows(windows: &[QuotaWindow]) -> &'static str {
     let Some(min) = windows.iter().map(|w| w.remaining_percent).reduce(f64::min) else {
         return "none";
     };
@@ -122,29 +127,56 @@ fn warn_of_windows(windows: &[QuotaWindow]) -> &'static str {
     }
 }
 
-fn http_get(
-    agent: &ureq::Agent,
-    url: &str,
-    key: &str,
-) -> Result<serde_json::Value, (&'static str, String)> {
+/// 请求失败：status 为归一状态码；http_code 保留原始 HTTP 状态
+/// （MiniMax 多端点回退需要区分 404/405）。
+struct ReqError {
+    status: &'static str,
+    message: String,
+    http_code: Option<u16>,
+}
+
+impl ReqError {
+    /// 是否为「该主机不提供此端点」类失败（可尝试下一端点）；鉴权与限流
+    /// 是确定答案，不得回退（上游 v0.3.1 同款规则）。
+    fn endpoint_missing(&self) -> bool {
+        matches!(self.http_code, Some(404) | Some(405)) || self.status == "invalid-response"
+    }
+}
+
+/// `auth` 为完整 Authorization 头值：多数适配器 `Bearer <key>`，Z.ai 编码
+/// 计划端点要求裸 key。所有订阅端点都是固定云端主机：HTTPS-only、拒绝
+/// userinfo/私网（防硬编码清单被意外改向内网）。
+fn http_get(agent: &ureq::Agent, url: &str, auth: &str) -> Result<serde_json::Value, ReqError> {
+    let target = guard_url_https(url).map_err(|reason| ReqError {
+        status: "blocked",
+        message: reason.to_string(),
+        http_code: None,
+    })?;
     let resp = agent
-        .get(url)
-        .header("Authorization", &format!("Bearer {key}"))
+        .get(&target)
+        .header("Authorization", auth)
         .header("Accept", "application/json")
         .call()
         .map_err(|e| {
             // 与 balance::query_route 同一分类口径：401/403 与限流必须区别于
             // 一般网络错误，账户监测的瞬错保旧（stale）依赖该分类。
-            let status = match &e {
-                ureq::Error::StatusCode(401) | ureq::Error::StatusCode(403) => "unauthorized",
-                ureq::Error::StatusCode(429) => "rate-limited",
-                _ => "unavailable",
+            let (status, code) = match &e {
+                ureq::Error::StatusCode(c @ (401 | 403)) => ("unauthorized", Some(*c)),
+                ureq::Error::StatusCode(429) => ("rate-limited", Some(429)),
+                ureq::Error::StatusCode(c) => ("unavailable", Some(*c)),
+                _ => ("unavailable", None),
             };
-            (status, format!("{e}"))
+            ReqError {
+                status,
+                message: format!("{e}"),
+                http_code: code,
+            }
         })?;
-    resp.into_body()
-        .read_json()
-        .map_err(|e| ("invalid-response", format!("{e}")))
+    crate::net_guard::read_json_capped(resp.into_body()).map_err(|e| ReqError {
+        status: "invalid-response",
+        message: e,
+        http_code: None,
+    })
 }
 
 fn agent() -> &'static ureq::Agent {
@@ -211,66 +243,175 @@ fn parse_opencode_go(body: &serde_json::Value) -> Vec<QuotaWindow> {
     out
 }
 
-/// —— Z.ai ——
-fn parse_zai(quota: &serde_json::Value) -> Vec<QuotaWindow> {
+// —— Z.ai ——（上游 v0.3.1 parseZai：token 窗口按时长升序挑 session/weekly，
+// TIME_LIMIT 单列为 billing，订阅续费时间兜底 resetsAt）
+
+/// 窗口时长（分钟）：unit 5=分钟 3=小时 1=天 6=周（Z.ai 配额 API 约定）。
+fn zai_window_minutes(limit: &serde_json::Value) -> Option<f64> {
+    let unit = num_of(limit, "unit")?;
+    let number = num_of(limit, "number")?;
+    if number <= 0.0 {
+        return None;
+    }
+    match unit as i64 {
+        5 => Some(number),
+        3 => Some(number * 60.0),
+        1 => Some(number * 24.0 * 60.0),
+        6 => Some(number * 7.0 * 24.0 * 60.0),
+        _ => None,
+    }
+}
+
+fn zai_used_percent(limit: &serde_json::Value) -> Option<f64> {
+    // Z.ai 的 `usage` 字段是总量而非已用：已用 = 总量-剩余 与当前值取大。
+    let total = num_of(limit, "usage").filter(|t| *t > 0.0);
+    if let Some(total) = total {
+        let remaining = num_of(limit, "remaining");
+        let current = num_any(limit, &["currentValue", "current_value"]);
+        let used = match (remaining, current) {
+            (None, c) => c,
+            (Some(r), None) => Some(total - r),
+            (Some(r), Some(c)) => Some((total - r).max(c)),
+        };
+        if let Some(used) = used {
+            return Some(clamp_percent(used.clamp(0.0, total) / total * 100.0));
+        }
+    }
+    num_any(limit, &["percentage", "usedPercent", "used_percent"]).map(clamp_percent)
+}
+
+fn zai_window(
+    limit: &serde_json::Value,
+    kind: &str,
+    fallback_reset: Option<String>,
+) -> Option<QuotaWindow> {
+    let used = zai_used_percent(limit)?;
+    let resets_at =
+        to_iso(num_any(limit, &["nextResetTime", "next_reset_time"])).or(fallback_reset);
+    Some(QuotaWindow {
+        kind: kind.to_string(),
+        used_percent: round1(used),
+        remaining_percent: round1(100.0 - used),
+        resets_at,
+    })
+}
+
+/// 计划名美化：`_-` 转空格、GLM 大写、词首大写（上游 displayPlan）。
+fn display_plan(value: &str) -> String {
+    value
+        .trim()
+        .split(['_', '-'])
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            if word.eq_ignore_ascii_case("glm") {
+                "GLM".to_string()
+            } else {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn zai_plan(quota: &serde_json::Value, subscription: Option<&serde_json::Value>) -> String {
+    let row = subscription
+        .and_then(|s| s.get("data"))
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.iter().find(|e| e.is_object()));
+    for source in [row, quota.get("data")] {
+        let Some(source) = source else { continue };
+        for key in [
+            "product_name",
+            "productName",
+            "plan_name",
+            "planName",
+            "package_name",
+            "packageName",
+            "plan_type",
+            "planType",
+            "level",
+        ] {
+            if let Some(value) = source.get(key).and_then(|v| v.as_str()) {
+                let display = display_plan(value);
+                if !display.is_empty() {
+                    return display;
+                }
+            }
+        }
+    }
+    "GLM Coding Plan".to_string()
+}
+
+/// 解析 Z.ai 配额（+可选订阅列表）→ (窗口, 计划名)。
+fn parse_zai(
+    quota: &serde_json::Value,
+    subscription: Option<&serde_json::Value>,
+) -> (Vec<QuotaWindow>, String) {
     let limits = quota
         .get("data")
         .and_then(|d| d.get("limits"))
         .and_then(|v| v.as_array())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let mut out = Vec::new();
-    for limit in limits {
-        let kind_upper = limit
-            .get("type")
-            .or_else(|| limit.get("limit_type"))
+    let type_of = |l: &serde_json::Value| {
+        l.get("type")
+            .or_else(|| l.get("limit_type"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
-            .to_uppercase();
-        let used = num_of(limit, "usage")
-            .or_else(|| num_of(limit, "currentValue"))
-            .or_else(|| num_of(limit, "current_value"))
-            .or_else(|| num_of(limit, "percentage"))
-            .or_else(|| num_of(limit, "usedPercent"))
-            .or_else(|| num_of(limit, "used_percent"));
-        let remaining = num_of(limit, "remaining");
-        // 有显式 percentage 时按百分比直接用（部分字段是 0..100）。
-        let pct = limit
-            .get("percentage")
-            .or_else(|| limit.get("usedPercent"))
-            .or_else(|| limit.get("used_percent"))
-            .and_then(|v| v.as_f64());
-        let used_pct = match pct {
-            Some(p) => p,
-            None => {
-                let total = used.unwrap_or(0.0);
-                let rem = remaining.unwrap_or(0.0);
-                let limit_total = total + rem;
-                if limit_total > 0.0 {
-                    total / limit_total * 100.0
-                } else {
-                    continue;
-                }
-            }
-        };
-        let kind = match kind_upper.as_str() {
-            "TIME_LIMIT" => "billing",
-            _ => "session",
-        };
-        let resets_at = to_iso(
-            limit
-                .get("nextResetTime")
-                .or_else(|| limit.get("next_reset_time"))
-                .and_then(|v| v.as_f64()),
-        );
-        out.push(QuotaWindow {
-            kind: kind.to_string(),
-            used_percent: round1(clamp_percent(used_pct)),
-            remaining_percent: round1(100.0 - clamp_percent(used_pct)),
-            resets_at,
-        });
+            .to_uppercase()
+    };
+    let mut token_limits: Vec<&serde_json::Value> = limits
+        .iter()
+        .filter(|l| {
+            matches!(type_of(l).as_str(), "TOKENS_LIMIT" | "CREDIT_LIMIT")
+                && zai_used_percent(l).is_some()
+        })
+        .collect();
+    token_limits.sort_by(|a, b| {
+        zai_window_minutes(a)
+            .unwrap_or(f64::MAX)
+            .partial_cmp(&zai_window_minutes(b).unwrap_or(f64::MAX))
+            .unwrap()
+    });
+    let time_limit = limits
+        .iter()
+        .find(|l| type_of(l) == "TIME_LIMIT" && zai_used_percent(l).is_some());
+    let first = token_limits.first().copied();
+    let session = if token_limits.len() >= 2 {
+        first
+    } else {
+        // 单 token 窗口 ≤6h 才算 session（上游同款启发式）
+        first.filter(|l| zai_window_minutes(l).is_some_and(|m| m <= 360.0))
+    };
+    let weekly = if token_limits.len() >= 2 {
+        token_limits.last().copied()
+    } else if session.is_none() {
+        first
+    } else {
+        None
+    };
+    let renew_at = to_iso(
+        subscription
+            .and_then(|s| s.get("data"))
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.first())
+            .and_then(|r| num_any(r, &["next_renew_time", "nextRenewTime"])),
+    );
+    let mut windows = Vec::new();
+    if let Some(limit) = session.and_then(|l| zai_window(l, "session", None)) {
+        windows.push(limit);
     }
-    out
+    if let Some(limit) = weekly.and_then(|l| zai_window(l, "weekly", None)) {
+        windows.push(limit);
+    }
+    if let Some(limit) = time_limit.and_then(|l| zai_window(l, "billing", renew_at)) {
+        windows.push(limit);
+    }
+    (windows, zai_plan(quota, subscription))
 }
 
 /// —— Kimi ——
@@ -314,6 +455,37 @@ fn parse_kimi(body: &serde_json::Value) -> Vec<QuotaWindow> {
 }
 
 /// —— MiniMax ——
+/// 剩余毫秒数（相对 now 的持续时间）→ ISO 时间（上游 resetFromDuration）。
+fn reset_from_duration(ms: Option<f64>) -> Option<String> {
+    let ms = ms?;
+    if ms < 0.0 {
+        return None;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0);
+    to_iso(Some(now_ms + ms))
+}
+
+/// 聊天条目：精确 "general" 优先，其次按模型名（minimax-m*/coding-plan*，
+/// 新版载荷以模型自身命名，大小写不敏感）。
+fn minimax_chat_entry(remains: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    let name_of = |e: &serde_json::Value| {
+        e.get("model_name")
+            .or_else(|| e.get("modelName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase()
+    };
+    if let Some(named) = remains.iter().find(|e| name_of(e) == "general") {
+        return Some(named);
+    }
+    remains
+        .iter()
+        .find(|e| name_of(e).starts_with("minimax-m") || name_of(e).starts_with("coding-plan"))
+}
+
 fn parse_minimax(body: &serde_json::Value) -> Vec<QuotaWindow> {
     let status = body
         .get("base_resp")
@@ -330,43 +502,62 @@ fn parse_minimax(body: &serde_json::Value) -> Vec<QuotaWindow> {
         .and_then(|v| v.as_array())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let general = remains.iter().find(|e| {
-        let name = e
-            .get("model_name")
-            .or_else(|| e.get("modelName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        name == "general" || name.starts_with("minimax-m") || name.starts_with("coding-plan")
-    });
-    let Some(entry) = general else {
+    let Some(entry) = minimax_chat_entry(remains) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for (percent_field, total_field, used_field, status_field, kind) in [
+    for (
+        percent_fields,
+        total_field,
+        used_field,
+        status_field,
+        end_fields,
+        duration_fields,
+        kind,
+    ) in [
         (
-            "current_interval_remaining_percent",
+            [
+                "current_interval_remaining_percent",
+                "currentIntervalRemainingPercent",
+            ],
             "current_interval_total_count",
             "current_interval_usage_count",
             "current_interval_status",
+            [
+                "current_interval_end_time",
+                "currentIntervalEndTime",
+                "current_interval_reset_time",
+            ],
+            ["remains_time", "remainsTime"],
             "session",
         ),
         (
-            "current_weekly_remaining_percent",
+            [
+                "current_weekly_remaining_percent",
+                "currentWeeklyRemainingPercent",
+            ],
             "current_weekly_total_count",
             "current_weekly_usage_count",
             "current_weekly_status",
+            [
+                "current_weekly_end_time",
+                "currentWeeklyEndTime",
+                "current_weekly_reset_time",
+            ],
+            ["weekly_remains_time", "weeklyRemainsTime"],
             "weekly",
         ),
     ] {
-        let remaining_pct = num_of(entry, percent_field);
-        let st = num_of(entry, status_field);
+        let remaining_pct = num_any(entry, &percent_fields);
+        let st = num_any(entry, &[status_field]);
         let remaining = match remaining_pct {
             Some(r) => clamp_percent(r),
             None => {
+                // 旧版载荷是真实计数（新版把计数清零，只信 >0 的总量）。
                 let total = num_of(entry, total_field).unwrap_or(0.0);
-                let used = num_of(entry, used_field).unwrap_or(0.0);
-                if total > 0.0 {
-                    clamp_percent((1.0 - used / total) * 100.0)
+                let used = num_of(entry, used_field);
+                if total > 0.0 && used.is_some() {
+                    clamp_percent((1.0 - used.unwrap_or(0.0) / total) * 100.0)
                 } else if st == Some(2.0) {
                     0.0
                 } else if st == Some(3.0) {
@@ -376,11 +567,14 @@ fn parse_minimax(body: &serde_json::Value) -> Vec<QuotaWindow> {
                 }
             }
         };
+        // 窗口状态：1=限额 2=耗尽 3=不限（缺百分比时不得隐藏窗口）。
+        let resets_at = to_iso(num_any(entry, &end_fields))
+            .or_else(|| reset_from_duration(num_any(entry, &duration_fields)));
         out.push(QuotaWindow {
             kind: kind.to_string(),
             used_percent: round1(100.0 - remaining),
             remaining_percent: round1(remaining),
-            resets_at: None,
+            resets_at,
         });
     }
     out
@@ -414,6 +608,79 @@ fn default_key_env(adapter: SubscriptionAdapter) -> &'static str {
         SubscriptionAdapter::Kimi => "KIMI_API_KEY",
         SubscriptionAdapter::MiniMax => "MINIMAX_API_KEY",
         SubscriptionAdapter::Ollama => "OLLAMA_API_KEY",
+    }
+}
+
+/// 具名设置值：环境变量 → 凭据文件（区域开关如 `ZAI_API_REGION` 与凭据
+/// 同存放，上游同款约定）。
+fn named_setting(config: &Config, name: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(name) {
+        let value = value.trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    crate::credentials::value(config, name)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Z.ai 区域：显式 `ZAI_API_REGION`（"cn"/"bigmodel-cn"/含 bigmodel.cn）
+/// 优先；否则国内路由 id（zai-coding-cn）或 baseURL 指向 bigmodel.cn。
+fn zai_region(route: &ProviderRoute, config: &Config) -> &'static str {
+    if let Some(raw) = named_setting(config, "ZAI_API_REGION") {
+        let value = raw.to_lowercase();
+        return if value == "bigmodel-cn" || value == "cn" || value.contains("bigmodel.cn") {
+            "bigmodel-cn"
+        } else {
+            "global"
+        };
+    }
+    if route.id == "zai-coding-cn"
+        || route
+            .base_url
+            .as_deref()
+            .is_some_and(|u| u.contains("bigmodel.cn"))
+    {
+        return "bigmodel-cn";
+    }
+    "global"
+}
+
+fn zai_host(region: &str) -> &'static str {
+    if region == "bigmodel-cn" {
+        "https://open.bigmodel.cn"
+    } else {
+        "https://api.z.ai"
+    }
+}
+
+/// MiniMax 区域：显式 `MINIMAX_API_REGION`=="cn" 或 baseURL 含 minimaxi.com
+/// → 国内站。
+fn minimax_region(route: &ProviderRoute, config: &Config) -> &'static str {
+    if let Some(raw) = named_setting(config, "MINIMAX_API_REGION") {
+        return if raw.trim().eq_ignore_ascii_case("cn") {
+            "cn"
+        } else {
+            "global"
+        };
+    }
+    if route
+        .base_url
+        .as_deref()
+        .is_some_and(|u| u.contains("minimaxi.com"))
+    {
+        return "cn";
+    }
+    "global"
+}
+
+/// (www 主站, api 站)——token plan 端点两站都服务，api 站另有 legacy 路径。
+fn minimax_hosts(region: &str) -> (&'static str, &'static str) {
+    if region == "cn" {
+        ("https://www.minimaxi.com", "https://api.minimaxi.com")
+    } else {
+        ("https://www.minimax.io", "https://api.minimax.io")
     }
 }
 
@@ -478,6 +745,33 @@ pub fn query_subscription(
         SubscriptionAdapter::MiniMax => "MiniMax Coding Plan",
         SubscriptionAdapter::Ollama => "Ollama",
     };
+    // Ollama 只有云端有配额端点：本地/内网 Ollama（如 localhost:11434）
+    // 不得当作云端账户查询（上游 provider-identity 同款门控）。
+    if adapter == SubscriptionAdapter::Ollama {
+        if let Some(base) = route.base_url.as_deref() {
+            let host_private = url::Url::parse(base)
+                .ok()
+                .and_then(|u| u.host_str().map(crate::net_guard::hostname_is_private))
+                .unwrap_or(true);
+            if host_private {
+                return snapshot(
+                    route,
+                    adapter,
+                    display_name,
+                    plan,
+                    "unsupported",
+                    Vec::new(),
+                    Some(
+                        crate::locale::text(
+                            "本地 Ollama 无云端配额查询。",
+                            "Local Ollama has no cloud quota endpoint.",
+                        )
+                        .into(),
+                    ),
+                );
+            }
+        }
+    }
     let Some(key) = resolve_subscription_key(config, route, adapter) else {
         return snapshot(
             route,
@@ -492,52 +786,124 @@ pub fn query_subscription(
             )),
         );
     };
-    let (url, parse): (&str, fn(&serde_json::Value) -> Vec<QuotaWindow>) = match adapter {
-        SubscriptionAdapter::OpenCodeGo => {
-            ("https://opencode.ai/zen/go/v1/usage", parse_opencode_go)
-        }
-        SubscriptionAdapter::Zai => ("https://api.z.ai/api/monitor/usage/quota/limit", parse_zai),
-        SubscriptionAdapter::Kimi => ("https://api.kimi.com/coding/v1/usages", parse_kimi),
-        SubscriptionAdapter::MiniMax => (
-            "https://www.minimax.io/v1/token_plan/remains",
-            parse_minimax,
-        ),
-        SubscriptionAdapter::Ollama => ("https://ollama.com/api/usage", parse_ollama),
+    let outcome: Result<(Vec<QuotaWindow>, Option<String>), ReqError> = match adapter {
+        SubscriptionAdapter::Zai => collect_zai(config, route, &key),
+        SubscriptionAdapter::MiniMax => collect_minimax(config, route, &key),
+        SubscriptionAdapter::OpenCodeGo
+        | SubscriptionAdapter::Kimi
+        | SubscriptionAdapter::Ollama => collect_simple(adapter, &key),
     };
-    let target = match guard_url_https(url) {
-        Ok(u) => u,
-        Err(reason) => {
-            return snapshot(
-                route,
-                adapter,
-                display_name,
-                plan,
-                "blocked",
-                Vec::new(),
-                Some(reason.to_string()),
-            )
-        }
-    };
-    match http_get(agent(), &target, &key) {
-        Ok(body) => {
-            let windows = parse(&body);
+    match outcome {
+        Ok((windows, plan_override)) => {
             let status = if windows.is_empty() {
                 "invalid-response"
             } else {
                 "ok"
             };
+            if let Some(label) = plan_override {
+                return snapshot(route, adapter, display_name, &label, status, windows, None);
+            }
             snapshot(route, adapter, display_name, plan, status, windows, None)
         }
-        Err((status, e)) => snapshot(
+        Err(e) => snapshot(
             route,
             adapter,
             display_name,
             plan,
-            status,
+            e.status,
             Vec::new(),
-            Some(e),
+            Some(e.message),
         ),
     }
+}
+
+/// Z.ai：裸 key 鉴权的配额端点 + 可选订阅列表（计划名与续费时间）。
+fn collect_zai(
+    config: &Config,
+    route: &ProviderRoute,
+    key: &str,
+) -> Result<(Vec<QuotaWindow>, Option<String>), ReqError> {
+    let host = zai_host(zai_region(route, config));
+    // 编码计划端点要裸 API key（与推理 API 的 Bearer 不同）。
+    let auth = key.to_string();
+    let quota = http_get(
+        agent(),
+        &format!("{host}/api/monitor/usage/quota/limit"),
+        &auth,
+    )?;
+    // 计划名/续费元数据可选：失败不影响配额结果。
+    let subscription = http_get(agent(), &format!("{host}/api/biz/subscription/list"), &auth).ok();
+    let (windows, plan) = parse_zai(&quota, subscription.as_ref());
+    Ok((windows, if plan.is_empty() { None } else { Some(plan) }))
+}
+
+/// MiniMax：区域化主机 + token-plan → api 站 token-plan → legacy 路径
+/// 的端点回退链（404/405/非 JSON 才试下一个；鉴权与限流是确定答案）。
+fn collect_minimax(
+    config: &Config,
+    route: &ProviderRoute,
+    key: &str,
+) -> Result<(Vec<QuotaWindow>, Option<String>), ReqError> {
+    let auth = format!("Bearer {key}");
+    let urls: Vec<String> = if let Some(base) = route.base_url.as_deref() {
+        vec![format!(
+            "{}/v1/token_plan/remains",
+            base.trim_end_matches('/')
+        )]
+    } else {
+        let (www, api) = minimax_hosts(minimax_region(route, config));
+        vec![
+            format!("{www}/v1/token_plan/remains"),
+            format!("{api}/v1/token_plan/remains"),
+            format!("{api}/v1/api/openplatform/coding_plan/remains"),
+        ]
+    };
+    let mut last_err: Option<ReqError> = None;
+    for (index, url) in urls.iter().enumerate() {
+        match http_get(agent(), url, &auth) {
+            Ok(body) => {
+                if index > 0 {
+                    // 区域主机/端点探测落到后续候选：留痕方便对齐区域配置
+                    crate::logging::log(&format!(
+                        "usage: minimax 首选端点不可用，实际命中第 {} 个候选",
+                        index + 1
+                    ));
+                }
+                return Ok((parse_minimax(&body), None));
+            }
+            Err(e) => {
+                let try_next = e.endpoint_missing() && index + 1 < urls.len();
+                if !try_next {
+                    return Err(e);
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or(ReqError {
+        status: "unavailable",
+        message: "no endpoint resolved".to_string(),
+        http_code: None,
+    }))
+}
+
+/// 单端点适配器（OpenCode Go / Kimi / Ollama 云端）。
+fn collect_simple(
+    adapter: SubscriptionAdapter,
+    key: &str,
+) -> Result<(Vec<QuotaWindow>, Option<String>), ReqError> {
+    let (url, parse): (&str, fn(&serde_json::Value) -> Vec<QuotaWindow>) = match adapter {
+        SubscriptionAdapter::OpenCodeGo => {
+            ("https://opencode.ai/zen/go/v1/usage", parse_opencode_go)
+        }
+        SubscriptionAdapter::Kimi => ("https://api.kimi.com/coding/v1/usages", parse_kimi),
+        SubscriptionAdapter::Ollama => ("https://ollama.com/api/usage", parse_ollama),
+        SubscriptionAdapter::Zai | SubscriptionAdapter::MiniMax => {
+            unreachable!("zai/minimax 走专属采集流程")
+        }
+    };
+    let body = http_get(agent(), url, &format!("Bearer {key}"))?;
+    Ok((parse(&body), None))
 }
 
 fn snapshot(
@@ -824,16 +1190,182 @@ mod tests {
 
     #[test]
     fn parses_zai_token_limits() {
+        // v0.3.1 语义：usage=总量、remaining=剩余；token 窗口按时长升序
+        // 挑 session（短）/weekly（长），TIME_LIMIT 单列 billing
         let body = serde_json::json!({
             "data": { "limits": [
-                {"type": "TOKENS_LIMIT", "usage": 3000, "remaining": 7000},
+                {"type": "TOKENS_LIMIT", "usage": 10000, "remaining": 7000, "unit": 5, "number": 300},
+                {"type": "TOKENS_LIMIT", "usage": 100000, "remaining": 40000, "unit": 6, "number": 4},
                 {"type": "TIME_LIMIT", "percentage": 40}
             ]}
         });
-        let windows = parse_zai(&body);
-        assert_eq!(windows.len(), 2);
+        let (windows, plan) = parse_zai(&body, None);
+        assert_eq!(windows.len(), 3);
         assert_eq!(windows[0].kind, "session");
         assert_eq!(windows[0].used_percent, 30.0);
+        assert_eq!(windows[1].kind, "weekly");
+        assert_eq!(windows[1].used_percent, 60.0);
+        assert_eq!(windows[2].kind, "billing");
+        assert_eq!(windows[2].used_percent, 40.0);
+        assert_eq!(plan, "GLM Coding Plan");
+    }
+
+    #[test]
+    fn zai_single_short_window_is_session_and_long_is_weekly() {
+        let short = serde_json::json!({
+            "data": { "limits": [
+                {"type": "TOKENS_LIMIT", "usage": 100, "remaining": 50, "unit": 5, "number": 60}
+            ]}
+        });
+        let (windows, _) = parse_zai(&short, None);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].kind, "session");
+
+        let long = serde_json::json!({
+            "data": { "limits": [
+                {"type": "TOKENS_LIMIT", "usage": 100, "remaining": 50, "unit": 6, "number": 4}
+            ]}
+        });
+        let (windows, _) = parse_zai(&long, None);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].kind, "weekly");
+    }
+
+    #[test]
+    fn zai_subscription_renew_time_falls_back_to_billing_window() {
+        let quota = serde_json::json!({
+            "data": { "limits": [
+                {"type": "TIME_LIMIT", "percentage": 10}
+            ]}
+        });
+        // 2026-08-01T00:00:00Z = 1785542400s
+        let subscription = serde_json::json!({
+            "data": [{"product_name": "glm_max_monthly", "next_renew_time": 1785542400}]
+        });
+        let (windows, plan) = parse_zai(&quota, Some(&subscription));
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].kind, "billing");
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-08-01T00:00:00Z")
+        );
+        assert_eq!(plan, "GLM Max Monthly");
+    }
+
+    #[test]
+    fn zai_region_prefers_explicit_setting_and_cn_route() {
+        let _guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("ZAI_API_REGION").ok();
+        let config = Config::load();
+        let route = |id: &str, base: Option<&str>| ProviderRoute {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            api_key_env: None,
+            base_url: base.map(str::to_string),
+        };
+        std::env::set_var("ZAI_API_REGION", "cn");
+        assert_eq!(zai_region(&route("zai", None), &config), "bigmodel-cn");
+        std::env::set_var("ZAI_API_REGION", "global");
+        assert_eq!(zai_region(&route("zai", None), &config), "global");
+        // 未显式配置时按路由 id / baseURL 推断
+        match prev {
+            Some(v) => std::env::set_var("ZAI_API_REGION", v),
+            None => std::env::remove_var("ZAI_API_REGION"),
+        }
+        assert_eq!(
+            zai_region(&route("zai-coding-cn", None), &config),
+            "bigmodel-cn"
+        );
+        assert_eq!(
+            zai_region(&route("zai", Some("https://open.bigmodel.cn/")), &config),
+            "bigmodel-cn"
+        );
+        assert_eq!(zai_region(&route("zai", None), &config), "global");
+        assert_eq!(zai_host("bigmodel-cn"), "https://open.bigmodel.cn");
+        assert_eq!(zai_host("global"), "https://api.z.ai");
+    }
+
+    #[test]
+    fn minimax_region_from_setting_or_cn_hostname() {
+        let _guard = crate::credentials::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("MINIMAX_API_REGION").ok();
+        let config = Config::load();
+        let route = |base: Option<&str>| ProviderRoute {
+            id: "minimax".to_string(),
+            display_name: "minimax".to_string(),
+            api_key_env: None,
+            base_url: base.map(str::to_string),
+        };
+        std::env::set_var("MINIMAX_API_REGION", "CN");
+        assert_eq!(minimax_region(&route(None), &config), "cn");
+        match prev {
+            Some(v) => std::env::set_var("MINIMAX_API_REGION", v),
+            None => std::env::remove_var("MINIMAX_API_REGION"),
+        }
+        assert_eq!(
+            minimax_region(&route(Some("https://www.minimaxi.com/")), &config),
+            "cn"
+        );
+        assert_eq!(minimax_region(&route(None), &config), "global");
+    }
+
+    #[test]
+    fn minimax_chat_entry_prefers_general_then_model_pattern() {
+        // 新版载荷以模型自身命名（大小写不敏感），无 general 条目时按模式匹配
+        let body = serde_json::json!({
+            "model_remains": [{
+                "model_name": "MiniMax-M3",
+                "current_interval_remaining_percent": 80,
+                "current_weekly_remaining_percent": 40
+            }]
+        });
+        let windows = parse_minimax(&body);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].remaining_percent, 80.0);
+    }
+
+    #[test]
+    fn minimax_resets_at_from_end_time_or_duration() {
+        let with_end = serde_json::json!({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 80,
+                "current_weekly_remaining_percent": 40,
+                "current_interval_end_time": 1785542400,
+                "weekly_remains_time": 3600000
+            }]
+        });
+        let windows = parse_minimax(&with_end);
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-08-01T00:00:00Z")
+        );
+        assert!(windows[1].resets_at.is_some());
+    }
+
+    #[test]
+    fn ollama_local_gateway_is_gated() {
+        let route = ProviderRoute {
+            id: "ollama".to_string(),
+            display_name: "Ollama".to_string(),
+            api_key_env: Some("OLLAMA_API_KEY".to_string()),
+            base_url: Some("http://localhost:11434".to_string()),
+        };
+        let config = Config::load();
+        let snapshot = query_subscription(&config, &route, SubscriptionAdapter::Ollama);
+        assert_eq!(snapshot.status, "unsupported");
+        // 云端（无 baseURL 或公网 baseURL）不受门控影响：无凭据时给出
+        // not-configured 而非 unsupported
+        let cloud_route = ProviderRoute {
+            base_url: None,
+            ..route
+        };
+        let snapshot = query_subscription(&config, &cloud_route, SubscriptionAdapter::Ollama);
+        assert_eq!(snapshot.status, "not-configured");
     }
 
     #[test]

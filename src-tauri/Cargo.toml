@@ -76,6 +76,10 @@ ureq = { version = "3.4.0", default-features = false, features = ["native-tls", 
 [target.'cfg(target_os = "linux")'.dependencies]
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "json"] }
 
+# 用量日聚合的非 Windows 本地时区（localtime_r 取 UTC 偏移）
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 strip = true
 # thin LTO：链接速度显著快于 fat（增量构建收益大），体积/性能差异极小

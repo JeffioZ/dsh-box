@@ -179,14 +179,50 @@ fn refresh_all(config: &Config) -> AccountsPayload {
         .as_ref()
         .map(|p| p.subscriptions.as_slice())
         .unwrap_or(&[]);
-    let accounts = super::providers::configured_routes(config)
-        .into_iter()
-        .map(|route| super::balance::query_route(config, &route))
-        .collect();
+    let accounts: Vec<super::balance::AccountSnapshot> =
+        super::providers::configured_routes(config)
+            .into_iter()
+            .map(|route| super::balance::query_route(config, &route))
+            .collect();
     let subscriptions = super::subscriptions::subscriptions(config);
+    // 排查日志：只记异常态（not-configured 是"没配凭据"的正常态，不记），
+    // 300s 一轮、账户数有限，量可控。error 文本截断防日志膨胀。
+    for snapshot in accounts.iter() {
+        if snapshot.status != "ok" && snapshot.status != "not-configured" {
+            crate::logging::log(&format!(
+                "usage: 账户查询失败 id={} adapter={} status={} error={}",
+                snapshot.id,
+                snapshot.adapter.unwrap_or("-"),
+                snapshot.status,
+                truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
+            ));
+        }
+    }
+    for snapshot in subscriptions.iter() {
+        if snapshot.status != "ok" && snapshot.status != "not-configured" {
+            crate::logging::log(&format!(
+                "usage: 订阅查询失败 id={} adapter={} status={} error={}",
+                snapshot.id,
+                snapshot.adapter,
+                snapshot.status,
+                truncate_for_log(snapshot.error.as_deref().unwrap_or(""))
+            ));
+        }
+    }
     AccountsPayload {
         accounts: merge_accounts(old_accounts, accounts),
         subscriptions: merge_subscriptions(old_subscriptions, subscriptions),
+    }
+}
+
+/// 日志用错误文本截断（单行、去换行）。
+fn truncate_for_log(text: &str) -> String {
+    let flat: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+    if flat.chars().count() <= 160 {
+        flat
+    } else {
+        let prefix: String = flat.chars().take(157).collect();
+        format!("{prefix}...")
     }
 }
 

@@ -199,7 +199,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   margin: 0 0 8px; font-size: var(--dshd-fs-sm); font-weight: 600;
   color: var(--dshd-text-dim); line-height: 1.4;
 }
-.usage-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--dshd-sp-2); }
+/* auto-fit：汇总项从 5 项扩到 7 项（成本两项）后按内容自适应换行，
+   窄弹窗不再依赖手工断点维持可读列宽 */
+.usage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: var(--dshd-sp-2); }
 .usage-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .usage-stat-l { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); }
 .usage-stat b {
@@ -260,11 +262,14 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* 模型行：名字 + token + 命中率 + 分布条（参考项目同构，采用 dshd token）；
    最近 14 天与模型下钻复用同一行体系 */
 .usage-models { list-style: none; margin: 0; padding: 0; }
-.usage-model { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 6px 0; font-size: var(--dshd-fs-sm); line-height: 1.4; border-top: 1px solid var(--dshd-border); }
+.usage-model { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 6px 0; font-size: var(--dshd-fs-sm); line-height: 1.4; border-top: 1px solid var(--dshd-border); }
 .usage-model:first-child { border-top: none; }
 .usage-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dshd-text); }
 .usage-model b { font-variant-numeric: tabular-nums; color: var(--dshd-text); font-weight: 500; }
 .usage-model-hit { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); font-variant-numeric: tabular-nums; text-align: right; min-width: 52px; }
+.usage-model-cost { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); font-variant-numeric: tabular-nums; text-align: right; min-width: 56px; cursor: default; }
+.usage-model-cost:has(.usage-cost-unknown) { cursor: help; }
+.usage-cost-unknown { cursor: inherit; }
 .usage-model-bar { grid-column: 1 / -1; height: 5px; border-radius: 2px; background: var(--dshd-fill, var(--dshd-hover)); overflow: hidden; }
 .usage-model-bar span { display: block; height: 100%; background: var(--dshd-accent); border-radius: 2px; }
 .usage-recent-date { font-variant-numeric: tabular-nums; }
