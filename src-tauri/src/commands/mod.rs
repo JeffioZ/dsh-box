@@ -226,6 +226,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         window_menu::titlebar_close,
         window_menu::titlebar_is_maximized,
         window_menu::titlebar_ready,
+        window_menu::statusbar_ready,
         crate::heartbeat::page_heartbeat,
         window_menu::titlebar_expand,
         window_menu::snap_overlay_update,

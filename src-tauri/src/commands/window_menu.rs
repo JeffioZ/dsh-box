@@ -51,6 +51,14 @@ pub fn titlebar_ready(webview: tauri::Webview) -> Result<(), String> {
     Ok(())
 }
 
+/// 状态栏页面初始化完成回报：与 titlebar_ready 同款就绪握手语义。
+#[tauri::command]
+pub fn statusbar_ready(webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::titlebar::mark_statusbar_ready();
+    Ok(())
+}
+
 /// 标题栏浮层（余额浮层/主菜单）展开/收起：hover 时扩展标题栏 webview 以承载浮层。
 #[tauri::command]
 pub fn titlebar_expand(

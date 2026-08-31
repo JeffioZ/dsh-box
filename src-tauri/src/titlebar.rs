@@ -32,9 +32,10 @@ static OVERLAY_HEIGHT: AtomicU64 = AtomicU64::new(TITLEBAR_HEIGHT as u64);
 /// 标题栏页面初始化完成回报标记：启动自愈看门狗据此判断页面是否加载成功。
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 状态栏页面就绪标记。状态栏没有 titlebar_ready 那样的页面侧回报命令
-/// （自愈保持纯 Rust 实现，不改 ui/statusbar.js），由 init_statusbar 的
-/// on_page_load(Finished) 事件置位。
+/// 状态栏页面就绪标记。与标题栏对称：由页面初始化完成后回报的
+/// statusbar_ready 命令置位（见 commands/window_menu.rs）；重载/新页面
+/// 生命周期开始时经 on_page_load 复位，要求重新完成握手——仅凭导航完成
+/// 置位会对脚本初始化失败的半死页面失明。
 static STATUSBAR_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 页面回报初始化完成（titlebar_ready 命令）。
@@ -57,6 +58,11 @@ pub fn repaint_pulse(app: &AppHandle) {
     let Some(window) = app.get_window(MAIN_WINDOW) else {
         return;
     };
+    // 驻托盘等隐藏态跳过：窗口不可见时脉冲全是无效的合成层折腾。
+    // 查询失败 fail-open（守卫本身不得成为新的失效点）
+    if !window.is_visible().unwrap_or(true) {
+        return;
+    }
     for wv in window.webviews() {
         if wv.label() == TITLEBAR_LABEL || wv.label() == STATUSBAR_LABEL {
             let _ = wv.eval("window.__dshdRepaint && window.__dshdRepaint()");
@@ -96,8 +102,8 @@ pub fn statusbar_is_ready() -> bool {
     STATUSBAR_READY.load(Ordering::SeqCst)
 }
 
-/// 状态栏页面加载完成（on_page_load Finished 事件）。
-fn mark_statusbar_ready() {
+/// 页面回报初始化完成（statusbar_ready 命令）。
+pub fn mark_statusbar_ready() {
     STATUSBAR_READY.store(true, Ordering::SeqCst);
 }
 
@@ -178,12 +184,12 @@ pub fn init_statusbar(app: &AppHandle) -> tauri::Result<()> {
         // 首次渲染滞后（loading 界面先出、状态栏后出的跳跃感）
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .initialization_script(crate::locale::init_script())
-        // 状态栏没有页面侧就绪回报命令（区别于标题栏的 titlebar_ready，
-        // 不改 ui/statusbar.js）：以页面加载完成事件作为就绪信号，
-        // 供 bootstrap 的一次性自愈看门狗判断
+        // 就绪握手：导航完成只负责复位（见 on_page_load），页面脚本初始化
+        // 完成后经 statusbar_ready 命令回报置位——与标题栏的 titlebar_ready
+        // 同款语义，脚本初始化失败的半死页面对看门狗可见
         .on_page_load(|_, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                mark_statusbar_ready();
+                reset_statusbar_ready();
             }
         })
         .on_navigation(move |url| {

@@ -20,6 +20,42 @@ fn preferred_main_size(work_width: f64, work_height: f64) -> (f64, f64) {
     (width, height)
 }
 
+/// 子 WebView 加载自愈看门狗：每 3s 检查一次就绪握手，未就绪则重载页面，
+/// 最多重试 3 次；第 4 次仍失败则记错误日志后放弃（连续失败基本是环境性
+/// 问题，重载解决不了）。检查间隔按 1s 粒度睡眠，退出标志能及时打断。
+fn spawn_load_watchdog(
+    handle: tauri::AppHandle,
+    label: &'static str,
+    is_ready: fn() -> bool,
+    reload: fn(&tauri::AppHandle),
+) {
+    std::thread::spawn(move || {
+        let mut remaining_reloads = 3u8;
+        loop {
+            for _ in 0..3 {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if handle.state::<AppState>().is_quitting() {
+                    return;
+                }
+            }
+            if is_ready() {
+                return;
+            }
+            if remaining_reloads == 0 {
+                logging::log(&format!(
+                    "{label}: 多次重载后仍未就绪，放弃自愈（疑似环境性问题，详见日志）"
+                ));
+                return;
+            }
+            remaining_reloads -= 1;
+            logging::log(&format!(
+                "{label}: 页面未就绪，重试加载（剩余 {remaining_reloads} 次）"
+            ));
+            reload(&handle);
+        }
+    });
+}
+
 /// 启动致命错误的最后兜底：记日志 + 用户可见提示，然后以退出码 1 优雅退出。
 /// 此时 Tauri 事件循环尚未运行，tauri 对话框与自绘 UI 都不可用——Windows
 /// 只能直接调 MessageBoxW（宽字符、无父窗口），非 Windows 退回 stderr。
@@ -341,32 +377,21 @@ pub(crate) fn run() {
             if let Err(e) = titlebar::init_statusbar(app.handle()) {
                 logging::log(&format!("状态栏: 初始化失败：{e}"));
             }
-            // 标题栏加载自愈：页面初始化完成会回报 titlebar_ready；
-            // 3s 内未回报（页面加载失败/被跳过）则重新导航一次——
-            // 偶发的“启动后标题栏空白”由此兜底
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    if !titlebar::is_ready() {
-                        logging::log("titlebar: 页面未就绪，重试加载");
-                        titlebar::reload(&handle);
-                    }
-                });
-            }
-            // 状态栏加载自愈：与标题栏同款一次性看门狗——init_statusbar 后
-            // 约 3s 检查一次，未就绪（on_page_load 未置位，见 titlebar.rs）
-            // 则重载一次；重载会复位就绪标记并重新走就绪握手
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    if !titlebar::statusbar_is_ready() {
-                        logging::log("statusbar: 页面未就绪，重试加载");
-                        titlebar::reload_statusbar(&handle);
-                    }
-                });
-            }
+            // 标题栏/状态栏加载自愈：页面初始化完成回报就绪（titlebar_ready /
+            // statusbar_ready）；未回报（加载失败/脚本初始化失败/被跳过）由
+            // 看门狗重载重试——偶发的「启动后标题栏/状态栏空白」由此兜底
+            spawn_load_watchdog(
+                app.handle().clone(),
+                "titlebar",
+                titlebar::is_ready,
+                titlebar::reload,
+            );
+            spawn_load_watchdog(
+                app.handle().clone(),
+                "statusbar",
+                titlebar::statusbar_is_ready,
+                titlebar::reload_statusbar,
+            );
             // 标题栏渲染自愈：合成层失效（间歇空白、DOM 正常）无法探测，
             // 周期发送重绘脉冲兜底恢复
             {
