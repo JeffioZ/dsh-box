@@ -68,14 +68,18 @@ http = "1"
 # 图标 PNG 编码用（deflate）；miniz_oxide 纯 Rust 后端，不引入系统 zlib
 flate2 = "1"
 tauri-plugin-notification = "2"
-zstd = "0.13.3"
+# 仅解码方向读 dsh 会话日志；关默认 feature 裁掉 C 侧 legacy 旧格式（v0.1+）解码器
+# 与字典构建器。zstd→zstd-safe→zstd-sys 三层依赖均 default-features = false，顶层即总开关。
+zstd = { version = "0.13.3", default-features = false }
 
 # TLS 后端按平台选择：Windows/macOS 走系统原生实现（schannel / Security.framework），
 # 体积更小且证书使用系统信任库（企业代理/自定义 CA 场景更友好）；
 # Linux 保持 rustls 静态链接——native-tls 在 Linux 动态链接 OpenSSL，
 # 构建机与运行机的 major 版本不一致会导致启动失败，风险大于体积收益。
+# native-tls-no-default 不捆绑 webpki 根证书 crate：信任根在 default_tls_config
+# 显式 PlatformVerifier，依赖图与实际信任行为保持一致。
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-ureq = { version = "3.4.0", default-features = false, features = ["native-tls", "json"] }
+ureq = { version = "3.4.0", default-features = false, features = ["native-tls-no-default", "json"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "json"] }
