@@ -13,6 +13,8 @@ updates:
     open-pull-requests-limit: 5
 
   # Rust 依赖自动升级。major 升级（如 tauri 2→3）通常需改代码，合并前先跑 CI。
+  # minor/patch 合并为单个 PR（单人维护者每周只需审一个）；major 不入组，
+  # 独立 PR 人工评审。
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
     schedule:
@@ -22,8 +24,14 @@ updates:
     labels:
       - "dependencies"
     open-pull-requests-limit: 10
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # npm 开发依赖自动升级（图标生成与 macOS 的 Tauri 打包 CLI）。
+  # 同 cargo：minor/patch 合并单 PR，major 独立评审。
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -33,3 +41,8 @@ updates:
     labels:
       - "dependencies"
     open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
