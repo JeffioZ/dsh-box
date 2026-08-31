@@ -76,10 +76,11 @@ zstd = { version = "0.13.3", default-features = false }
 # 体积更小且证书使用系统信任库（企业代理/自定义 CA 场景更友好）；
 # Linux 保持 rustls 静态链接——native-tls 在 Linux 动态链接 OpenSSL，
 # 构建机与运行机的 major 版本不一致会导致启动失败，风险大于体积收益。
-# native-tls-no-default 不捆绑 webpki 根证书 crate：信任根在 default_tls_config
-# 显式 PlatformVerifier，依赖图与实际信任行为保持一致。
+# 注意：ureq 的 native-tls 传输实现门控在名为 "native-tls" 的 feature 上；
+# native-tls-no-default 只引入依赖不点亮 feature，运行期首次 https 请求会
+# panic（panic=abort 直接闪退，实测回归）。必须使用完整 native-tls。
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-ureq = { version = "3.4.0", default-features = false, features = ["native-tls-no-default", "json"] }
+ureq = { version = "3.4.0", default-features = false, features = ["native-tls", "json"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "json"] }
