@@ -115,7 +115,15 @@ for (const file of tracked.filter((file) => file.endsWith('.html'))) {
   for (const match of html.matchAll(/\b(?:src|href)=["']([^"']+)["']/gi)) {
     const target = match[1];
     if (!target || /^(?:#|[a-z]+:|\/\/)/i.test(target)) continue;
-    const local = path.resolve(root, path.dirname(file), decodeURIComponent(target.split(/[?#]/)[0]));
+    // 畸形百分号编码会让 decodeURIComponent 抛异常，兜成 fail 项而不是崩栈
+    let decoded;
+    try {
+      decoded = decodeURIComponent(target.split(/[?#]/)[0]);
+    } catch {
+      fail(`${file}: 本地引用含畸形百分号编码: ${target}`);
+      continue;
+    }
+    const local = path.resolve(root, path.dirname(file), decoded);
     if (!fs.existsSync(local)) fail(`${file}: 本地引用不存在: ${target}`);
   }
 }
@@ -560,8 +568,15 @@ for (const file of tracked.filter((file) => file.endsWith('.md'))) {
   for (const match of text.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
     let target = match[1].trim().replace(/^<|>$/g, '');
     if (!target || /^(?:#|[a-z]+:|\/\/)/i.test(target)) continue;
-    target = decodeURIComponent(target.split('#')[0]);
-    if (!fs.existsSync(path.resolve(root, path.dirname(file), target))) fail(`${file}: 本地链接不存在: ${target}`);
+    // 与 HTML 本地引用检查同因：畸形百分号编码兜成 fail 项而不是崩栈
+    let decoded;
+    try {
+      decoded = decodeURIComponent(target.split('#')[0]);
+    } catch {
+      fail(`${file}: 本地链接含畸形百分号编码: ${target}`);
+      continue;
+    }
+    if (!fs.existsSync(path.resolve(root, path.dirname(file), decoded))) fail(`${file}: 本地链接不存在: ${target}`);
   }
 }
 

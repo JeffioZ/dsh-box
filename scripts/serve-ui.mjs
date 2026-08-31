@@ -61,6 +61,6 @@ server.listen(port, '127.0.0.1', () => {
 server.on('error', (err) => {
   // 端口竞态被占（EADDRINUSE）等启动失败要有明确输出，而不是未捕获异常栈
   console.error(`dev UI server failed to start on port ${port}: ${err.message}`);
-  console.error('If the port is in use, stop the conflicting process or change DEV_UI_PORT.');
+  console.error('Port 4321 is fixed by convention (dev-run.ps1 / dev_ui.rs share it); stop the conflicting process and retry.');
   process.exit(1);
 });

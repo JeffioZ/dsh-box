@@ -63,6 +63,7 @@ export function decodePng(buf) {
   let width = 0, height = 0, idat = [];
   let bitDepth = 8;
   let colorType = 0;
+  let interlace = 0;
   while (pos < buf.length) {
     const { type, data } = readChunk();
     if (type === 'IHDR') {
@@ -70,6 +71,7 @@ export function decodePng(buf) {
       height = data.readUInt32BE(4);
       bitDepth = data[8];
       colorType = data[9];
+      interlace = data[12];
     } else if (type === 'IDAT') {
       idat.push(data);
     } else if (type === 'IEND') break;
@@ -78,6 +80,10 @@ export function decodePng(buf) {
   // 灰度/调色板等非 RGB/RGBA 布局与 16bit 位深会被下面的逐字节逻辑静默错解，显式拒绝
   if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
     throw new Error(`decodePng: 不支持的 bitDepth=${bitDepth}/colorType=${colorType}（仅支持 8bit RGB/RGBA）`);
+  }
+  // Adam7 隔行扫描的扫描线布局不同，逐行重构造辑同样会静默错解，显式拒绝
+  if (interlace !== 0) {
+    throw new Error(`decodePng: 不支持 interlace=${interlace}（仅支持非隔行 PNG）`);
   }
   const bpp = colorType === 6 ? 4 : 3;
   const stride = width * bpp;

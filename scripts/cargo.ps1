@@ -61,6 +61,11 @@ if (-not $conf.app.withGlobalTauri) {
 }
 
 # 4) 执行构建
+# 同一会话先跑过 dev 模式时，残留的 TAURI_CONFIG（devUrl）会让后续 check/test/build
+# 静默按"不嵌入 UI 资源"的 dev 配置执行——正式构建被无声污染，先显式清除。
+if ($Mode -ne "dev") {
+  Remove-Item Env:\TAURI_CONFIG -ErrorAction SilentlyContinue
+}
 $manifest = Join-Path $PSScriptRoot "..\src-tauri\Cargo.toml"
 if ($Mode -eq "check") {
   & $cargo check --locked --manifest-path $manifest
