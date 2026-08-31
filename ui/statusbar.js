@@ -310,6 +310,9 @@ function init() {
   dshdApplyI18n();
   renderStats();
   renderBalance();
+  // 初始化完成回报：Rust 侧加载自愈看门狗据此判断页面是否就绪
+  // （与标题栏的 titlebar_ready 同款握手）
+  invoke('statusbar_ready').catch(() => {});
   // 初始状态决定外部服务隔离；本地模式再主动拉一次余额。
   invoke('get_status').then((payload) => {
     serviceMode = payload.service_mode || 'none';

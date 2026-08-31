@@ -319,8 +319,15 @@ document.addEventListener('pointerdown', (event) => {
 });
 window.addEventListener('blur', () => dshdCloseTextContextMenu(false));
 window.addEventListener('resize', () => dshdCloseTextContextMenu(false));
-window.addEventListener('wheel', () => dshdCloseTextContextMenu(false), true);
-window.addEventListener('touchmove', () => dshdCloseTextContextMenu(false), true);
+// 页面滚动时 fixed 定位的菜单不跟随内容，须关闭；但菜单列表自身溢出
+// 出滚动条时在菜单内滚动（捕获监听下 target 仍在 surface 内）不该关。
+function closeTextContextMenuOnScroll(event) {
+  if (dshdTextContextSurface && event && event.target
+      && dshdTextContextSurface.contains(event.target)) return;
+  dshdCloseTextContextMenu(false);
+}
+window.addEventListener('wheel', closeTextContextMenuOnScroll, true);
+window.addEventListener('touchmove', closeTextContextMenuOnScroll, true);
 
 window.addEventListener('dshd-language-changed', () => {
   dshdCloseTextContextMenu(true);

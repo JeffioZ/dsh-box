@@ -92,8 +92,9 @@ function setupUsageExportMenu() {
   const close = (focusTrigger) => {
     if (!openState) return;
     openState = false;
-    surface.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
+    // 退场动效播完再隐藏，避免 90ms 淡出被 display:none 硬切
+    menuMotion.close(() => { surface.hidden = true; });
     if (focusTrigger) trigger.focus();
   };
   const menu = dshdCreateMenu(surface, {
@@ -107,12 +108,14 @@ function setupUsageExportMenu() {
     { id: 'csv', label: 'CSV' },
     { id: 'json', label: 'JSON' },
   ]);
+  const menuMotion = dshdCreateMenuMotion(surface);
   const open = (focusMenu) => {
     // 导出进行中（触发按钮禁用）不再唤出，避免经菜单项重复触发
     if (trigger.disabled) return;
     openState = true;
     surface.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    menuMotion.open('-4px');
     if (focusMenu) menu.focusFirst();
   };
   // 悬停打开不抢焦点（鼠标路径）；点击/方向键打开时进入菜单，便于键盘导航
@@ -149,8 +152,25 @@ function setupUsageExportMenu() {
   usageExportDismiss = () => close(false);
 }
 
+// 加载占位延迟出现：用量报表读本地缓存，多数情况下近乎即时返回，
+// 立即渲染 spinner 会造成加载态闪烁；超时仍未返回才显示（真正慢路径无损失）
+let usageLoadTimer = 0;
+function showUsageLoadDelayed() {
+  clearTimeout(usageLoadTimer);
+  usageLoadTimer = window.setTimeout(() => {
+    usageLoadTimer = 0;
+    const el = $('usage-load');
+    if (el) el.hidden = false;
+  }, 300);
+}
+function clearUsageLoadDelay() {
+  clearTimeout(usageLoadTimer);
+  usageLoadTimer = 0;
+}
+
 async function renderUsagePage() {
   const seq = ++usageSeq;
+  clearUsageLoadDelay();
   const body = $('body');
   body.innerHTML =
     '<div class="usage-wrap">' +
@@ -162,22 +182,25 @@ async function renderUsagePage() {
     '<span class="lb">' + dshdT('usageExport') + '</span>' +
     dshdIcon('chevronDown', 'aria-hidden="true"') +
     '</button>' +
-    '<div class="usage-export-menu dshd-menu-surface" role="menu" hidden></div>' +
+    '<div class="usage-export-menu dshd-menu-surface dshd-menu-motion" role="menu" hidden></div>' +
     '</div>' +
     '</div>' +
     '<div class="usage-summary" id="usage-summary"></div>' +
     '</section>' +
-    '<div class="usage-load" id="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
+    '<div class="usage-load" id="usage-load" role="status" aria-live="polite" hidden><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
     '</div>';
   setupUsageExportMenu();
+  showUsageLoadDelayed();
   try {
     const report = await invoke('usage_report_get');
     if (openKind !== 'usage' || seq !== usageSeq) return;
+    clearUsageLoadDelay();
     renderUsageReport(report, seq);
   } catch (e) {
     if (openKind !== 'usage' || seq !== usageSeq) return;
+    clearUsageLoadDelay();
     const load = $('usage-load');
-    if (load) { load.className = 'usage-load err'; load.textContent = dshdT('usageFailed') + ': ' + e; }
+    if (load) { load.hidden = false; load.className = 'usage-load err'; load.textContent = dshdT('usageFailed') + ': ' + e; }
   }
 }
 
@@ -416,7 +439,7 @@ function renderHeatmap(wrap, report) {
     '<button type="button" class="usage-month-btn" data-usage-next aria-label="' + dshdT('usageNextMonth') + '"' + (nextDisabled ? ' disabled' : '') + '>' + CHEV_RIGHT + '</button>' +
     '<button type="button" class="usage-month-btn usage-month-today" data-usage-today title="' + dshdT('usageBackToToday') + '">' + dshdT('usageTodayBtn') + '</button>' +
     '</div></div>' +
-    '<div class="usage-cal" role="img" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>' +
+    '<div class="usage-cal" role="group" aria-label="' + esc(dshdT('usageHeatmap')) + '"></div>' +
     '<div class="usage-day-detail" hidden></div>';
   wrap.appendChild(section);
 
@@ -600,7 +623,11 @@ function applyAccountsSnapshot(section, accounts, subs) {
   renderAccountCards(box, meaningfulAccounts(accounts, subs));
   const upd = latestUpdatedAt(accounts, subs);
   const updEl = section.querySelector('#usage-upd');
-  if (updEl) updEl.textContent = upd ? dshdT('updatedAt', { time: fmtClockTime(upd) }) : '';
+  if (updEl) {
+    // 新快照到达即覆盖「刷新超时」提示：文案由下方赋值更新，err 着色须一并清除
+    updEl.classList.remove('err');
+    updEl.textContent = upd ? dshdT('updatedAt', { time: fmtClockTime(upd) }) : '';
+  }
 }
 
 function latestUpdatedAt(accounts, subs) {
@@ -1357,19 +1384,36 @@ function setUsageRefreshBusy(busy) {
   button.disabled = busy;
   button.toggleAttribute('aria-busy', busy);
 }
-function finishUsageRefresh() {
+function finishUsageRefresh(timedOut) {
   if (!usageRefreshBusy) return;
   clearTimeout(usageRefreshTimer);
   usageRefreshTimer = null;
   const wait = Math.max(0, 900 - (Date.now() - usageRefreshStart));
-  setTimeout(() => setUsageRefreshBusy(false), wait);
+  setTimeout(() => {
+    setUsageRefreshBusy(false);
+    // 30s 超时兜底触发：事件丢失/后台异常时不得静默收场，在「更新于」
+    // 槽位短暂提示失败并保留原快照（4s 后还原上次更新时间）
+    if (!timedOut) return;
+    const upd = document.querySelector('.usage-upd');
+    if (!upd) return;
+    const prev = upd.textContent;
+    const timeoutText = dshdT('usageRefreshTimeout');
+    upd.classList.add('err');
+    upd.textContent = timeoutText;
+    setTimeout(() => {
+      if (upd.classList.contains('err') && upd.textContent === timeoutText) {
+        upd.classList.remove('err');
+        upd.textContent = prev;
+      }
+    }, 4000);
+  }, wait);
 }
 $('btn-refresh').addEventListener('click', () => {
   if (usageRefreshBusy) return;
   setUsageRefreshBusy(true);
   usageRefreshStart = Date.now();
   clearTimeout(usageRefreshTimer);
-  usageRefreshTimer = setTimeout(finishUsageRefresh, 30000);
+  usageRefreshTimer = setTimeout(() => finishUsageRefresh(true), 30000);
   invoke('usage_accounts_refresh').catch(() => finishUsageRefresh());
   renderUsagePage();
 });

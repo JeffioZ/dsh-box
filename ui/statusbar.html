@@ -16,9 +16,11 @@ body {
   font-family: var(--dshd-font);
   user-select: none;
 }
-/* 窗口失焦：与标题栏一致整体变暗（class 由 Rust 侧 Focused 广播驱动） */
+/* 窗口失焦：与标题栏一致整体变暗（class 由 Rust 侧 Focused 广播驱动）；
+   分隔线一并压暗，避免窄条上失焦时竖线显得比内容更亮 */
 body.window-inactive .stats { opacity: .55; }
 body.window-inactive .sb-chip { opacity: .55; }
+body.window-inactive .vsep { opacity: .55; }
 
 .statusbar {
   position: absolute; left: 0; right: 0; bottom: 0; height: 26px;

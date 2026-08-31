@@ -59,7 +59,10 @@ body {
 .nav-sep { height: var(--dshd-hair, 1px); margin: 4px 12px; background: var(--dshd-border); }
 .nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: 11px; color: var(--dshd-text-dim); opacity: .6; }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* 每次打开弹窗都会程序化聚焦标题：压掉 :focus 环避免闪环，但键盘用户
+   Tab 落点（:focus-visible）仍须有可见指示 */
 #dialog-title:focus { outline: none; }
+#dialog-title:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { .nav-item { transition: none; } }
 
 /* 展示/关闭微动效：窗口透明，内容淡入淡出在卡片上播放，
@@ -141,6 +144,10 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   --dshd-input-height: 32px;
   padding-right: 10px; padding-left: 32px; font-size: 14px;
 }
+/* type=search 的 UA 取消按钮不带主题样式（深色下观感突兀），隐藏；
+   清空走选中文本删除（与密码框处理 ::-ms-reveal 同一思路） */
+.pinput::-webkit-search-cancel-button,
+.pinput::-webkit-search-decoration { -webkit-appearance: none; }
 .pcats { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .pcat-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -290,6 +297,8 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-acc-head-row { display: flex; align-items: center; gap: var(--dshd-sp-2); margin-bottom: 8px; }
 .usage-acc-head-row .usage-h { margin: 0; }
 .usage-upd { margin-left: auto; font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* 刷新超时提示：临时占用「更新于」槽位，4s 后还原（见 control-center.js finishUsageRefresh） */
+.usage-upd.err { color: var(--dshd-error-text); }
 .usage-account {
   --usage-accent: var(--dshd-accent);
   border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-sm);
@@ -321,7 +330,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   font-size: 10px; font-weight: 700; letter-spacing: .2px;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--usage-accent) 25%, transparent);
 }
-.usage-acc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dshd-fs-base); font-weight: 600; color: var(--dshd-text); }
+.usage-acc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dshd-fs-md); font-weight: 600; color: var(--dshd-text); }
 .usage-acc-status { flex: none; font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); white-space: nowrap; }
 .usage-acc-status.ok { color: var(--dshd-success-text); }
 .usage-acc-status.err { color: var(--dshd-error-text); }

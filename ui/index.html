@@ -24,6 +24,7 @@
           <p class="ob-sub" data-i18n="onboardingSub">设置凭据和偏好，之后可随时修改。</p>
         </div>
         <div class="ob-section">
+          <div class="ob-sec-label" data-i18n="credentialsLabel">凭据</div>
           <div class="ob-field">
             <label class="ob-label" for="ob-apikey" data-i18n="deepSeekApiKey">DeepSeek API Key</label>
             <span class="dshd-password-field ob-api-key-row">
@@ -62,11 +63,14 @@
               </ul>
             </div>
           </div>
-          <label class="ob-row ob-switch-row">
-            <span class="ob-label" data-i18n="autostart">开机时启动 DSHBox</span>
+          <label class="ob-row ob-switch-row ob-option-row">
+            <span class="ob-option-copy">
+              <span class="ob-label" data-i18n="autostart">开机时启动 DSHBox</span>
+              <span class="ob-hint" data-i18n="autostartDesc">登录后静默启动并驻留托盘。</span>
+            </span>
             <input id="ob-autostart" type="checkbox" class="sswitch" role="switch" />
           </label>
-          <label class="ob-row ob-switch-row ob-consent-row">
+          <label class="ob-row ob-switch-row ob-option-row">
             <span class="ob-option-copy">
               <span class="ob-label" data-i18n="builtinPluginsOptIn">安装内置插件</span>
               <span class="ob-hint" data-i18n="builtinPluginsOptInDesc">安装 DSH Market 和 File Upload；DSHBox 会每天检查更新。</span>

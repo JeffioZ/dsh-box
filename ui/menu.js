@@ -91,9 +91,14 @@ function dshdCreateMenu(container, options) {
       row.append(key);
     }
 
-    // 仅主键参与按压/激活：右键/中键按下不得触发菜单项
+    // 仅主键参与按压/激活：右键/中键按下不得触发菜单项；激活要求本行
+    // 已按压——菜单外按下（如拖选文本）划入本行释放不得触发
     row.addEventListener('mousedown', (event) => { if (event.button === 0 && !row.disabled) row.classList.add('pressed'); });
-    row.addEventListener('mouseup', (event) => { if (event.button === 0 && !row.disabled) activate(item); });
+    row.addEventListener('mouseup', (event) => {
+      if (event.button !== 0 || row.disabled || !row.classList.contains('pressed')) return;
+      row.classList.remove('pressed');
+      activate(item);
+    });
     row.addEventListener('click', (event) => {
       if (event.detail === 0 && !row.disabled) activate(item);
     });
