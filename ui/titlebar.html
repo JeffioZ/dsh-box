@@ -67,7 +67,7 @@ body.window-inactive .tb-btn { color: #5b5c66; }
   color: var(--dshd-text-dim); cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   outline: none;
-  transition: background-color var(--dshd-m-base) ease, color var(--dshd-m-base) ease;
+  transition: background-color var(--dshd-m-base) var(--dshd-ease-out), color var(--dshd-m-base) var(--dshd-ease-out);
 }
 .tb-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
 /* 贴边浮层覆盖层吃掉真实 hover/active：由 Rust 事件镜像的等价态（仅 btn-max 用） */

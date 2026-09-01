@@ -69,11 +69,11 @@ body.window-inactive .vsep { opacity: .55; }
   background: transparent; border: none; border-radius: 7px;
   padding: 0 8px; font-size: 12px; line-height: 1; cursor: pointer; outline: none;
   font-variant-numeric: tabular-nums; font-weight: 500;
-  transition: color var(--dshd-m-fast) ease;
+  transition: color var(--dshd-m-fast) var(--dshd-ease-out);
 }
 .sb-chip::before {
   content: ""; position: absolute; z-index: -1; inset: 2px; border-radius: 5px; pointer-events: none;
-  background: transparent; transition: background-color var(--dshd-m-fast) ease;
+  background: transparent; transition: background-color var(--dshd-m-fast) var(--dshd-ease-out);
 }
 .sb-chip:hover::before { background: var(--dshd-hover); }
 .sb-chip:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }

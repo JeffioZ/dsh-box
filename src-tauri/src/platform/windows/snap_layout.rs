@@ -38,9 +38,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetPropW, IsZoomed, LoadCursorW, RemovePropW, SendMessageW,
-    SetCursor, SetPropW, SetWindowPos, HTMAXBUTTON, HWND_TOP, IDC_HAND, SC_MAXIMIZE, SC_RESTORE,
-    SWP_NOACTIVATE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-    WM_SETCURSOR, WM_SYSCOMMAND, WS_CHILD, WS_VISIBLE,
+    SetCursor, SetLayeredWindowAttributes, SetPropW, SetWindowPos, HTMAXBUTTON, HWND_TOP, IDC_HAND,
+    LWA_ALPHA, SC_MAXIMIZE, SC_RESTORE, SWP_NOACTIVATE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_SETCURSOR, WM_SYSCOMMAND, WS_CHILD,
+    WS_EX_LAYERED, WS_VISIBLE,
 };
 
 /// 覆盖层 HWND 挂在主窗口上的属性名（避免自注册窗口类，复用 STATIC）。
@@ -122,7 +123,10 @@ pub fn update(webview: &Webview, window: &tauri::Window, x: i32, y: i32, width: 
             0,
         ];
         let child = CreateWindowExW(
-            0,
+            // 分层全透明：覆盖层自身完全不绘制（STATIC 默认画刷会在窗口
+            // 从最小化恢复时先于 WebView 擦出一帧白底，即最大化按钮闪白），
+            // 鼠标输入不受影响，视觉完全由下层 WebView 承担
+            WS_EX_LAYERED,
             class_name.as_ptr(),
             std::ptr::null(),
             WS_CHILD | WS_VISIBLE,
@@ -138,6 +142,8 @@ pub fn update(webview: &Webview, window: &tauri::Window, x: i32, y: i32, width: 
         if child.is_null() {
             return;
         }
+        // alpha=0：窗口保持不可见；HTMAXBUTTON 悬停/点击照常工作
+        SetLayeredWindowAttributes(child, 0, 0, LWA_ALPHA);
         SetPropW(parent_hwnd, CHILD_PROP.as_ptr(), child as HANDLE);
 
         // 悬停/按压镜像走签名事件广播（emit_signed + dshdListen 的 nonce

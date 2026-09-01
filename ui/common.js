@@ -437,3 +437,86 @@ function dshdBalanceValue(v) {
   // 无小数部分补 .00，与空值兜底格式一致（如 0 → 0.00、110 → 110.00）
   return grouped + '.' + (dec !== undefined ? dec : '00');
 }
+
+// —— 通用 toast：瞬态操作反馈（替代各页散落的页内状态行）——
+// 用法：dshdToast(text) / dshdToast(text, { kind: 'ok'|'err', duration: ms })
+// kind 默认 'info'；duration 默认 info 3s / ok 2.5s / err 5s，0 = 不自动消失。
+// 错误类永不叠加自动消失的不确定性：带关闭按钮；长文本可滚动查看。
+const DSHD_TOAST_MAX = 3;
+function dshdToast(text, opts) {
+  const kind = (opts && opts.kind) || 'info';
+  const msg = String(text == null ? '' : text);
+  const duration = opts && Number.isFinite(opts.duration)
+    ? opts.duration
+    : (kind === 'err' ? 5000 : kind === 'ok' ? 2500 : 3000);
+  const doc = document;
+  let host = doc.getElementById('dshd-toasts');
+  if (!host) {
+    host = doc.createElement('div');
+    host.id = 'dshd-toasts';
+    host.className = 'dshd-toasts';
+    doc.body.append(host);
+  }
+  // 堆叠上限：超出时最旧的先退场（排除退场动画中的节点——它们仍占
+  // children 名额但对 dismiss 免疫，纳入判定会死循环）
+  while (host.children.length >= DSHD_TOAST_MAX) {
+    const victim = host.querySelector('.dshd-toast:not(.leave)');
+    if (!victim) break;
+    dshdToastDismiss(victim);
+  }
+  // 去重：同文案同类型的活跃 toast 不重复堆叠，只刷新其计时
+  // （同一操作连续失败时避免同一条错误弹出多条）
+  for (const el of Array.from(host.children)) {
+    if (el.classList.contains('leave')) continue;
+    if (el.dataset.kind === kind && el.dataset.msg === msg) {
+      if (duration > 0) {
+        clearTimeout(el._dshdToastTimer);
+        el._dshdToastTimer = setTimeout(() => dshdToastDismiss(el), duration);
+      }
+      return el;
+    }
+  }
+  const toast = doc.createElement('div');
+  toast.className = 'dshd-toast enter ' + kind;
+  toast.dataset.kind = kind;
+  toast.dataset.msg = msg;
+  // 错误用 assertive 立即播报，其余礼貌排队（屏幕阅读器）
+  toast.setAttribute('role', kind === 'err' ? 'alert' : 'status');
+  const body = doc.createElement('div');
+  body.className = 'dshd-toast-body';
+  body.textContent = String(text == null ? '' : text);
+  toast.append(body);
+  if (kind === 'err') {
+    const close = doc.createElement('button');
+    close.type = 'button';
+    close.className = 'dshd-toast-close';
+    close.setAttribute('aria-label', dshdT('toastClose'));
+    close.addEventListener('click', () => dshdToastDismiss(toast));
+    toast.append(close);
+  }
+  host.append(toast);
+  // 进入动画依赖初始 .enter 类：先强制回流让起始态生效，再移除触发过渡。
+  // （rAF 回调早于首帧样式提交执行，直接移除会让过渡被合并跳过——
+  // 表现为第一条 toast 无动效）
+  void toast.offsetWidth;
+  toast.classList.remove('enter');
+  if (duration > 0) {
+    toast._dshdToastTimer = setTimeout(() => dshdToastDismiss(toast), duration);
+  }
+  toast.addEventListener('transitionend', () => {
+    if (toast.classList.contains('leave')) toast.remove();
+  });
+  return toast;
+}
+/** 清空全部活跃 toast（切换导航视图时调用，避免旧页面的提示残留在新页面上）。 */
+function dshdToastClearAll() {
+  const host = document.getElementById('dshd-toasts');
+  if (!host) return;
+  Array.from(host.children).forEach(dshdToastDismiss);
+}
+function dshdToastDismiss(el) {
+  if (!el || el.classList.contains('leave')) return;
+  el.classList.add('leave');
+  // 兜底移除（transitionend 被打断/禁用时 300ms 内强制清理）
+  setTimeout(() => el.remove(), 300);
+}

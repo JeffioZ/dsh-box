@@ -418,14 +418,14 @@
   width: 38px; height: 22px; border-radius: 999px; margin: 0;
   background: var(--dshd-switch-bg); border: 1px solid var(--dshd-border-strong);
   position: relative; cursor: pointer; outline: none;
-  transition: background-color var(--dshd-m-fast) ease, border-color var(--dshd-m-fast) ease;
+  transition: background-color var(--dshd-m-fast) var(--dshd-ease-out), border-color var(--dshd-m-fast) var(--dshd-ease-out);
 }
 .sswitch::before {
   content: ""; position: absolute; left: 2px; top: 50%;
   width: 16px; height: 16px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
   transform: translateY(-50%);
-  transition: transform var(--dshd-m-fast) ease, background-color var(--dshd-m-fast) ease;
+  transition: transform var(--dshd-m-fast) var(--dshd-ease-out), background-color var(--dshd-m-fast) var(--dshd-ease-out);
 }
 .sswitch:checked { background: var(--dshd-switch-on); border-color: var(--dshd-switch-on); }
 .sswitch:checked::before { transform: translate(18px, -50%); background: #fff; }
@@ -476,4 +476,71 @@
 .dshd-x svg {
   width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* —— 通用 toast（common.js dshdToast）——
+   弹窗正中悬浮（用户预期提示出现在视野中心，底部易被忽略）；
+   宽度上限随视口收缩（小窗口/高 DPI 缩放下不溢出）。 */
+.dshd-toasts {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+  max-width: min(440px, calc(100vw - 32px));
+}
+.dshd-toast {
+  /* 宽度自适应文案：短提示不撑出空洞，长提示换行到容器上限后转垂直滚动 */
+  width: fit-content;
+  max-width: 100%;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dshd-border-strong);
+  background: var(--dshd-overlay);
+  box-shadow: var(--dshd-shadow-lv3);
+  font-size: 12.5px;
+  line-height: 19px;
+  color: var(--dshd-text);
+  /* 错误详情常含路径/版本号等长 token：不强制断词，但允许任意处换行 */
+  overflow-wrap: anywhere;
+  transition: opacity var(--dshd-m-base) var(--dshd-ease-out),
+    transform var(--dshd-m-base) var(--dshd-ease-out);
+}
+.dshd-toast.enter { opacity: 0; transform: translateY(8px); }
+.dshd-toast.leave { opacity: 0; transform: translateY(8px); }
+/* 类型不做视觉区分（统一默认文字色）：错误仅以更长的停留时间与
+   关闭按钮体现，避免多色文字观感杂乱 */
+.dshd-toast-body {
+  flex: 1;
+  min-width: 0;
+  /* 长错误（网络失败原文等）限高滚动，不撑爆弹窗 */
+  max-height: 40vh;
+  overflow-y: auto;
+  user-select: text;
+  white-space: pre-wrap;
+}
+.dshd-toast-close {
+  flex: none;
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  color: var(--dshd-text-dim);
+  font-size: 14px;
+  line-height: 19px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.dshd-toast-close:hover { color: var(--dshd-text); }
+.dshd-toast-close:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .dshd-toast { transition: none; }
 }

@@ -5,7 +5,6 @@ let pluginsBusy = false;
 let pluginSearchSeq = 0;
 let pluginApplyStamp = '';
 let pluginApplyWasPending = false;
-let pluginStatusTimer = null;
 let pluginRecommendedSeq = 0;
 let pluginReinstallSeq = 0;
 // 当前选中的分类（'' 为「全部」）。分类与搜索框关键词叠加为查询条件，
@@ -27,8 +26,6 @@ function buildQuery(kw, cat) {
   return base || q;
 }
 function renderPlugins() {
-  clearTimeout(pluginStatusTimer);
-  pluginStatusTimer = null;
   // 重新进入页面时让上一次尚未返回的搜索失效，避免旧结果覆盖新页面。
   pluginSearchSeq += 1;
   // DOM 重建后按钮回到「全部」高亮，分类状态必须同步重置，否则
@@ -54,7 +51,6 @@ function renderPlugins() {
     '<button type="button" class="pcat-btn" data-cat="memory" aria-pressed="false">' + esc(dshdT('pluginCatMemory')) + '</button>' +
     '<button type="button" class="pcat-btn" data-cat="network" aria-pressed="false">' + esc(dshdT('pluginCatNetwork')) + '</button>' +
     '</div>' +
-    '<div class="pstatus" id="p-status" role="status" aria-live="polite"></div>' +
     '<div class="papply hidden" id="p-apply" role="status" aria-live="polite">' +
     '<div class="papply-copy"><strong id="p-apply-title"></strong><span id="p-apply-detail"></span></div>' +
     '<button type="button" class="dshd-btn primary" id="p-apply-btn">' + esc(dshdT('pluginApply')) + '</button>' +
@@ -101,7 +97,6 @@ function renderPlugins() {
         $('p-results-sec').classList.add('hidden');
         $('p-results').innerHTML = '';
         $('p-directory').classList.remove('hidden');
-        pluginStatus('');
       }
     });
   });
@@ -109,7 +104,7 @@ function renderPlugins() {
   refreshReinstallableBuiltins();
   refreshRecommended();
   refreshPluginApplyStatus();
-  // 进入页面自动检查：静默（行内状态已表达结果，不刷“检查完成”提示）
+  // 进入页面自动检查：静默（不弹“检查完成”toast，结果直接反映在列表行）
   refreshBuiltinStatus(true);
 }
 
@@ -120,7 +115,6 @@ function renderPluginApplyStatus(status) {
   const visible = status && (status.pending || status.applying || status.error);
   box.classList.toggle('hidden', !visible);
   if (!visible) {
-    if (pluginApplyWasPending) pluginStatus('');
     pluginApplyWasPending = false;
     return;
   }
@@ -237,18 +231,13 @@ async function doPluginUpdate(pkg) {
     if (checkBtn) checkBtn.disabled = false;
   }
 }
+// 插件操作反馈统一走 toast（原 #p-status 行内状态夹在列表中间，不易察觉）；
+// 原第三参 clearAfter 映射为 toast duration，'' 清空调用不再需要（自动消失）
 function pluginStatus(text, kind, clearAfter) {
-  const el = $('p-status');
-  if (!el) return;
-  clearTimeout(pluginStatusTimer);
-  pluginStatusTimer = null;
-  el.textContent = text || '';
-  el.className = 'pstatus' + (kind ? ' ' + kind : '');
-  if (text && clearAfter) {
-    pluginStatusTimer = setTimeout(() => {
-      if (el.textContent === text) pluginStatus('');
-    }, clearAfter);
-  }
+  if (!text) return;
+  const opts = { kind: kind === 'err' ? 'err' : kind === 'ok' ? 'ok' : 'info' };
+  if (clearAfter) opts.duration = clearAfter;
+  dshdToast(text, opts);
 }
 async function refreshPlugins() {
   try {

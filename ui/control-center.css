@@ -165,11 +165,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .pcat-btn:disabled { opacity: .55; cursor: default; }
 .pcat-btn:disabled:hover { color: var(--dshd-text-dim); border-color: var(--dshd-border); background: transparent; }
 .pcat-btn.active:disabled:hover { background: var(--dshd-selected); border-color: var(--dshd-selected); color: var(--dshd-selected-text); }
-/* 有状态时保留稳定行高；空状态收起，避免目录前出现无意义留白。 */
-.pstatus { min-height: 18px; line-height: 18px; font-size: 12px; color: var(--dshd-text-dim); margin-bottom: 6px; }
-.pstatus:empty { min-height: 0; margin-bottom: 0; }
-.pstatus.err { color: var(--dshd-error-text); }
-.pstatus.ok { color: var(--dshd-success-text); }
 .papply {
   display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 9px 10px;
   border: 1px solid var(--dshd-accent);
@@ -187,7 +182,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .psection-head h3 { margin: 0; }
 .settings-section + .settings-section { margin-top: 16px; }
 .settings-scope-note {
-  margin: 2px 0 10px; padding: 9px 11px; border-radius: 9px;
+  margin: 2px 0 10px; padding: 9px 11px; border-radius: 10px;
   border: 1px solid var(--dshd-border); background: var(--dshd-hover);
   color: var(--dshd-text-dim); font-size: 12px; line-height: 18px;
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px;
@@ -242,7 +237,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-month-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .usage-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--dshd-sp-1); width: 100%; }
 .usage-week-label { font-size: 10px; line-height: 16px; text-align: center; color: var(--dshd-text-dim); }
-.usage-day { display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; height: 30px; border: none; border-radius: 6px; background: var(--dshd-grid-cell, var(--dshd-hover)); color: var(--dshd-text); font-size: var(--dshd-fs-xs); line-height: 1; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; transition: background-color var(--dshd-m-fast) ease, outline-color var(--dshd-m-fast) ease, filter var(--dshd-m-fast) ease; }
+.usage-day { display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; height: 30px; border: none; border-radius: 6px; background: var(--dshd-grid-cell, var(--dshd-hover)); color: var(--dshd-text); font-size: var(--dshd-fs-xs); line-height: 1; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; transition: background-color var(--dshd-m-fast) var(--dshd-ease-out), outline-color var(--dshd-m-fast) var(--dshd-ease-out), filter var(--dshd-m-fast) var(--dshd-ease-out); }
 /* 无热度格 hover：比静置底色深一档（此前与底色同 token，hover 无反馈） */
 .usage-day[data-lv="0"]:hover { background: var(--dshd-pressed); }
 /* 有热度（蓝）的格子 hover 时加深而非变灰 */
@@ -403,7 +398,8 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 .srow + .srow { margin-top: 6px; }
 .srow:hover { border-color: var(--dshd-border-strong); }
-.srow:active { border-color: var(--dshd-border-strong); background: var(--dshd-pressed); }
+/* 按压不给整行背景（开关/分段/按钮都有自己的控件级按压态，整行闪变突兀），只提亮边框 */
+.srow:active { border-color: var(--dshd-border-strong); }
 .srow-txt { flex: 1; min-width: 0; }
 .srow-name { display: block; font-size: 13px; font-weight: 500; }
 .srow-desc { display: block; margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dshd-text-dim); }
@@ -418,15 +414,35 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .dshd-seg-opt span {
   display: block; padding: 4px 12px; border-radius: 6px; font-size: 12.5px;
   color: var(--dshd-text-dim); cursor: pointer;
-  transition: var(--dshd-anim-state);
+  transition: var(--dshd-anim-state),
+    box-shadow var(--dshd-m-fast) var(--dshd-ease-out);
 }
-.dshd-seg-opt:hover span { color: var(--dshd-text); }
-.dshd-seg-opt:active span { background: var(--dshd-pressed); }
-.dshd-seg-opt input:checked + span { background: var(--dshd-selected); color: var(--dshd-selected-text); font-weight: 500; }
+/* 多态层次：轨道底 --hover，未选 hover 升一档到 --pressed，
+   选中用中性灰实底 + 内描边（浅色下与轨道底拉开对比；遵循项目色彩
+   规范——选中态中性灰，品牌蓝只用于焦点环/primary，不做选中底色） */
+.dshd-seg-opt:has(input:not(:checked):not(:disabled)):hover span {
+  color: var(--dshd-text);
+  background: var(--dshd-pressed);
+}
+.dshd-seg-opt:has(input:not(:checked):not(:disabled)):active span {
+  color: var(--dshd-text);
+  background: var(--dshd-pressed);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.dshd-seg-opt input:checked + span {
+  background: var(--dshd-selected);
+  color: var(--dshd-selected-text);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--dshd-border-strong);
+}
+.dshd-seg-opt:has(input:checked):hover span { background: var(--dshd-selected-hover); }
+.dshd-seg-opt:has(input:checked):active span {
+  background: var(--dshd-selected-hover);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+}
 .dshd-seg-opt input:focus-visible + span { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 .dshd-seg-opt:has(input:disabled) { cursor: default; }
-.dshd-seg-opt input:disabled + span { opacity: .55; cursor: default; }
-.dshd-seg-opt:has(input:disabled):hover span { color: var(--dshd-text-dim); }
+.dshd-seg-opt input:disabled + span { opacity: .5; cursor: default; }
 /* 减弱动态效果：分段控件无过渡 */
 @media (prefers-reduced-motion: reduce) {
   .dshd-seg-opt span { transition: none; }
@@ -434,15 +450,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* 开关本体在 common.css（.sswitch）；此处只保留与设置行容器的联动 */
 .srow:hover .sswitch:not(:disabled) { border-color: var(--dshd-text-dim); }
 .srow:has(.sswitch:disabled) { opacity: .8; pointer-events: none; }
-.serr {
-  margin-top: 10px; padding: 8px 10px; border-radius: 8px;
-  border: 1px solid var(--dshd-border);
-  background: rgba(248, 81, 73, .12); color: var(--dshd-error-text);
-  font-size: 12px; line-height: 18px; overflow-wrap: anywhere;
-}
-@media (prefers-color-scheme: light) {
-  .serr { background: rgba(180, 35, 24, .08); }
-}
 /* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
 .mi-box { margin-top: 8px; }
 .mi-card {
@@ -555,8 +562,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 @media (prefers-reduced-motion: reduce) {
   .dshd-btn, .pcat-btn, .srow, .usage-day, .dshd-refresh { transition: none; }
   .usage-acc-bar span { transition: none; }
-}
-@media (prefers-reduced-motion: reduce) {
   .spin { animation: none; }
   .dshd-pop-in { animation: none; }
   body.fade-out { transition: none; }

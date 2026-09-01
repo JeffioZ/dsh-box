@@ -323,8 +323,7 @@ body.fade-out { opacity: 0; }
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ob-track, .ob-track::before, .ob-switch-row,
-  .dshd-select-trigger, .dshd-select-list li { transition: none; }
+  .ob-switch-row, .dshd-select-trigger, .dshd-select-list li { transition: none; }
   .ob-box.reveal { animation: none; }
 }
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
