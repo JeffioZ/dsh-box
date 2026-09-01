@@ -149,7 +149,9 @@ pub(crate) fn emit_signed_to<S: serde::Serialize>(
 /// 对外产品名（窗口标题/托盘/exe 属性等统一显示名）。
 pub const APP_TITLE: &str = "DSHBox";
 
-/// 本地启动页（生产环境 Tauri 资源源）。
+/// 本地启动页来源（macOS/Linux 的 Tauri 资源源形式）。Windows 上 WebView2
+/// 不支持非标准协议，运行时导航必须用 http://tauri.localhost 形式
+/// （见 webview/navigation.rs 的启动页入口，勿直接以本常量发起导航）。
 pub const SPLASH_ORIGIN: &str = "tauri://localhost";
 
 /// 深色主题的统一底色（与 dsh 深色主题 body 背景 #151517 一致，衔接无缝）。

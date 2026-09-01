@@ -25,10 +25,24 @@ pub(crate) fn app_dev_origin(app: &AppHandle) -> Option<url::Url> {
     app.config().build.dev_url.clone()
 }
 
+/// 生产构建的启动页入口。Windows/Android 上 Tauri 以 http://tauri.localhost
+/// 作为应用来源（tauri 的 tauri_protocol_url），tauri://localhost 形式在该平台
+/// 没有协议处理器，运行时直接 Navigate 会被 WebView2 静默拒绝——重启过渡页
+/// 与错误页曾因此永远回不到启动页。与 titlebar.rs 子 webview 重载 fallback
+/// 同款平台分支；根路径形式与窗口创建时的初始 URL 一致（Tauri 会把
+/// App("index.html") 简化为来源根）。
+fn splash_entry_url() -> String {
+    if cfg!(windows) {
+        "http://tauri.localhost/".to_string()
+    } else {
+        SPLASH_ORIGIN.to_string()
+    }
+}
+
 fn local_app_entry_url(dev_origin: Option<&url::Url>) -> String {
     dev_origin
         .map(url::Url::to_string)
-        .unwrap_or_else(|| SPLASH_ORIGIN.to_string())
+        .unwrap_or_else(splash_entry_url)
 }
 
 /// 当前配置对应的 dsh 页面来源；端口必须与应用实际持有的服务一致。
@@ -292,7 +306,9 @@ pub fn navigate(app: &AppHandle, url: &str) {
             // 避免 last_heartbeat=None 导致永久不检查。
             app.state::<AppState>().set_heartbeat();
         }
-        let _ = wv.navigate(u);
+        if let Err(error) = wv.navigate(u) {
+            logging::log(&format!("navigate: 导航 {url} 失败：{error}"));
+        }
         // 状态栏统计立即刷新：dsh 就绪后不必等下一个 5s 轮询周期
         crate::usage::refresh_once(app.clone());
         // dsh 页面挂载时会用自带 document.title 覆盖窗口标题。
@@ -336,7 +352,7 @@ pub fn navigate_to_splash(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{injected_language, local_app_entry_url};
+    use super::{injected_language, is_local_app_url, local_app_entry_url};
 
     #[test]
     fn local_app_entry_uses_dev_origin_when_configured() {
@@ -348,8 +364,17 @@ mod tests {
     }
 
     #[test]
-    fn local_app_entry_uses_tauri_origin_in_production() {
-        assert_eq!(local_app_entry_url(None), crate::SPLASH_ORIGIN);
+    fn local_app_entry_uses_navigable_form_in_production() {
+        let entry = local_app_entry_url(None);
+        // 生产入口必须是白名单内的本地页面，且在当前平台可被运行时导航
+        // （Windows 的 tauri:// 形式会被 WebView2 静默拒绝，见 splash_entry_url）。
+        let url = url::Url::parse(&entry).unwrap();
+        assert!(is_local_app_url(&url, None));
+        if cfg!(windows) {
+            assert_eq!(entry, "http://tauri.localhost/");
+        } else {
+            assert_eq!(entry, crate::SPLASH_ORIGIN);
+        }
     }
 
     #[test]
