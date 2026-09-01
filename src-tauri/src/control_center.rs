@@ -581,6 +581,10 @@ pub struct UpdatePrompt {
     /// 新版本 release 页面（有则显示「查看更新内容」链接）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_url: Option<String>,
+    /// dev 构建注入的模拟数据：标题栏追加「模拟数据」标识，避免与真实
+    /// 更新提示混淆。正式版恒为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulated: Option<bool>,
 }
 
 /// 打开更新提示弹窗（替代原生 msgbox：可点链接、深浅色/reduced-motion 齐全）。
@@ -599,14 +603,22 @@ pub fn open_update_prompt(app: &AppHandle, prompt: UpdatePrompt) {
 
 /// 实际展示单个更新提示。
 fn present_update_prompt(app: &AppHandle, prompt: UpdatePrompt, token: u64) {
-    let title = if prompt.kind == "app" {
-        crate::locale::text("应用更新已就绪", "App update ready")
+    let mut title: std::borrow::Cow<'static, str> = if prompt.kind == "app" {
+        crate::locale::text("应用更新已就绪", "App update ready").into()
     } else {
-        crate::locale::text("发现新版本", "Update available")
+        crate::locale::text("发现新版本", "Update available").into()
     };
+    if prompt.simulated == Some(true) {
+        // dev 模拟数据：标题栏追加标识，避免与真实更新提示混淆
+        title = format!(
+            "{title}（{}）",
+            crate::locale::text("模拟数据", "Simulated")
+        )
+        .into();
+    }
     let initial =
         serde_json::to_value(prompt.clone()).unwrap_or(serde_json::json!({ "kind": prompt.kind }));
-    show_with_update_token(app, title, "update-prompt", initial, Some(token));
+    show_with_update_token(app, &title, "update-prompt", initial, Some(token));
 }
 
 /// 打开检查更新弹窗：立即出窗显示进度，检查在后台执行、结果写入状态，

@@ -600,9 +600,9 @@ impl AppState {
         )
     }
 
-    /// 设置 dsh 内核更新通道（latest/next），持久化到 config.json。
+    /// 设置 dsh 内核更新通道（latest/next/alpha），持久化到 config.json。
     pub fn set_dsh_update_channel(&self, channel: &str) -> Result<(), String> {
-        if !matches!(channel, "latest" | "next") {
+        if !matches!(channel, "latest" | "next" | "alpha") {
             return Err(
                 crate::locale::text("未知更新通道。", "Unknown update channel.").to_string(),
             );
@@ -1197,6 +1197,7 @@ mod tests {
             version: "1.0.0".into(),
             current: None,
             release_url: None,
+            simulated: None,
         }
     }
 

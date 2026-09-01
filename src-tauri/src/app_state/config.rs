@@ -127,7 +127,7 @@ impl Config {
                     cfg.task_notifications = v;
                 }
                 if let Some(ch) = json.get("dsh_update_channel").and_then(|v| v.as_str()) {
-                    if matches!(ch, "latest" | "next") {
+                    if matches!(ch, "latest" | "next" | "alpha") {
                         cfg.dsh_update_channel = ch.to_string();
                     }
                 }

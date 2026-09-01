@@ -119,7 +119,7 @@ Default data root:
 }
 ```
 
-`dsh_update_channel` is `latest` or the riskier preview channel `next`. `close_behavior` is `tray` / `quit`, `launch_behavior` is `window` / `tray`, and `download_source` is `auto` / `official` / `mirror`. `config.json` and `state.json` have strictly separated ownership and never fall back to each other's fields.
+`dsh_update_channel` is `latest`, the preview channel `next`, or the riskier alpha channel; after switching channels, the update check offers upgrading to (or switching down to) the channel's latest version. `close_behavior` is `tray` / `quit`, `launch_behavior` is `window` / `tray`, and `download_source` is `auto` / `official` / `mirror`. `config.json` and `state.json` have strictly separated ownership and never fall back to each other's fields.
 
 ### Port policy
 

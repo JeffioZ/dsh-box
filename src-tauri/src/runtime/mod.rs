@@ -236,19 +236,21 @@ fn parse_latest_lts(json: &serde_json::Value) -> Result<String, String> {
 }
 
 /// 查询 npm 官方 `@deepseek-ai/dsh` 的最新版本。
-/// dsh 更新通道：latest（稳定推荐）/ next（预览尝鲜）。
+/// dsh 更新通道：latest（稳定推荐）/ next（预览）/ alpha（尝鲜，
+/// 上游 2026-09 起将最新预发布置于 alpha tag，next 与 latest 常同版）。
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum DshChannel {
     Latest,
     Next,
+    Alpha,
 }
 
 impl DshChannel {
     pub(crate) fn from_config(config: &crate::app_state::Config) -> Self {
-        if config.dsh_update_channel == "next" {
-            Self::Next
-        } else {
-            Self::Latest
+        match config.dsh_update_channel.as_str() {
+            "next" => Self::Next,
+            "alpha" => Self::Alpha,
+            _ => Self::Latest,
         }
     }
 
@@ -256,6 +258,7 @@ impl DshChannel {
         match self {
             Self::Latest => "latest",
             Self::Next => "next",
+            Self::Alpha => "alpha",
         }
     }
 }
@@ -381,6 +384,22 @@ mod checksum_tests {
     use super::read_log_tail;
     use super::version_supports_no_open;
     use super::{parse_dsh_version_chain, parse_latest_lts, DshChannel};
+    use crate::app_state::Config;
+
+    #[test]
+    fn dsh_channel_from_config_and_tag() {
+        // Config::load 起始 dsh_update_channel 恒为 latest，不受本机 config.json 影响
+        let mut config = Config::load();
+        config.dsh_update_channel = "latest".into();
+        assert_eq!(DshChannel::from_config(&config).dist_tag(), "latest");
+        config.dsh_update_channel = "next".into();
+        assert_eq!(DshChannel::from_config(&config).dist_tag(), "next");
+        config.dsh_update_channel = "alpha".into();
+        assert_eq!(DshChannel::from_config(&config).dist_tag(), "alpha");
+        // 未知值回退稳定通道，不会因手改 config.json 失效
+        config.dsh_update_channel = "beta".into();
+        assert_eq!(DshChannel::from_config(&config).dist_tag(), "latest");
+    }
 
     #[test]
     fn node_lts_parser_skips_current_releases() {

@@ -24,6 +24,10 @@ pub struct VersionInfo {
     /// 版本查询失败原因（前端 hover tips 展示，与其他更新行统一）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_error: Option<String>,
+    /// 仅 dsh 行使用：目标通道版本低于当前版本（切换通道后的降级/切换入口）。
+    /// `update_available` 语义保持"有新版"，静默/周期弹窗不受降级影响。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub downgrade_available: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -42,6 +46,21 @@ pub struct PwshInfo {
     pub latest_error: Option<String>,
     /// true 表示需要操作（未安装或存在新版）。
     pub update_available: bool,
+}
+
+/// dsh 版本行的方向判定：`update_available` 保持"有新版"语义（静默/周期
+/// 弹窗据此提示）；目标低于当前时置 `downgrade_available`，仅供检查页
+/// 手动展示"切换到 vX.Y.Z"入口。目标等于当前（含两通道指向同一版本的
+/// 情形）两个标记都为 false，无事可做。
+fn dsh_version_info(installed: String, latest: String) -> VersionInfo {
+    let ordering = versions::compare_versions(&latest, &installed);
+    VersionInfo {
+        update_available: ordering == std::cmp::Ordering::Greater,
+        downgrade_available: ordering == std::cmp::Ordering::Less,
+        installed,
+        latest,
+        latest_error: None,
+    }
 }
 
 // ---------- 检查 ----------
@@ -73,21 +92,27 @@ pub fn silent_check(app: &AppHandle) {
         // 则注入模拟，便于开发者验证两个提示弹窗及排队逻辑。正式版
         // dev_build() 恒为 false，不受影响。dev 下模拟 tag（9.9.9-dev）在
         // GitHub 不存在，点「查看更新内容/重启并更新」预期 404/失败，仅验证 UI。
+        let mut dsh_simulated = false;
+        let mut app_simulated = false;
         if crate::app_state::dev_build() {
             if !result.dsh.as_ref().is_some_and(|d| d.update_available) {
+                dsh_simulated = true;
                 result.dsh = Some(VersionInfo {
                     installed: "0.9.8".into(),
                     latest: "0.9.9-dev".into(),
                     update_available: true,
                     latest_error: None,
+                    downgrade_available: false,
                 });
             }
             if !result.app.as_ref().is_some_and(|a| a.update_available) {
+                app_simulated = true;
                 result.app = Some(VersionInfo {
                     installed: env!("CARGO_PKG_VERSION").into(),
                     latest: "9.9.9-dev".into(),
                     update_available: true,
                     latest_error: None,
+                    downgrade_available: false,
                 });
             }
         }
@@ -106,7 +131,7 @@ pub fn silent_check(app: &AppHandle) {
                 // 启动页若仍可见则展示结果
                 crate::emit_signed(&handle, "update-result", &result);
                 if d.update_available {
-                    show_update_dialog(&handle, d);
+                    show_update_dialog(&handle, d, dsh_simulated);
                 }
             }
             None => {
@@ -128,6 +153,7 @@ pub fn silent_check(app: &AppHandle) {
                             "https://github.com/{APP_REPO}/releases/tag/v{}",
                             app_info.latest
                         )),
+                        simulated: app_simulated.then_some(true),
                     },
                 );
             }
@@ -152,7 +178,7 @@ pub fn start_periodic_check(app: AppHandle) {
                     "updater: 周期检查发现 dsh 新版 {}（当前 {}），提示用户",
                     d.latest, d.installed
                 ));
-                show_update_dialog(&app, d);
+                show_update_dialog(&app, d, false);
             }
             Some(d) => crate::logging::log(&format!(
                 "updater: 周期检查 dsh 已是最新（{}）",
@@ -175,7 +201,7 @@ pub fn start_periodic_check(app: AppHandle) {
 
 /// 有新版时的启动提示（自绘弹窗：立即更新 / 稍后 / 查看更新内容；与应用提示体验一致）。
 /// 「立即更新」由弹窗前端走 app_dialog_update("dsh") → apply_dsh_update。
-fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
+fn show_update_dialog(app: &AppHandle, d: &VersionInfo, simulated: bool) {
     // dsh 的 GitHub tag 形如 `dsh-v0.1.1-rc.2`（monorepo，前缀 dsh-v），
     // 与 DSHBox 应用自身的 `v` 前缀不同；`d.latest` 来自 npm 裸 semver（无 v）。
     let release_url = format!(
@@ -189,6 +215,7 @@ fn show_update_dialog(app: &AppHandle, d: &VersionInfo) {
             version: d.latest.clone(),
             current: Some(d.installed.clone()),
             release_url: Some(release_url),
+            simulated: simulated.then_some(true),
         },
     );
 }
@@ -276,16 +303,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
         Some(installed) => {
             let channel = runtime::DshChannel::from_config(&dsh_cfg);
             match runtime::npm_latest_dsh_version(channel) {
-                Ok(latest) => (
-                    Some(VersionInfo {
-                        installed: installed.clone(),
-                        latest: latest.clone(),
-                        update_available: versions::compare_versions(&latest, &installed)
-                            == std::cmp::Ordering::Greater,
-                        latest_error: None,
-                    }),
-                    None,
-                ),
+                Ok(latest) => (Some(dsh_version_info(installed.clone(), latest)), None),
                 Err(e) => {
                     // 查询失败仍保留行：前端显示"暂无法获取版本信息"，
                     // hover 经 data-tip-extra 展示原因（与 node/pwsh 行统一）
@@ -302,6 +320,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                             latest: String::new(),
                             update_available: false,
                             latest_error: Some(error),
+                            downgrade_available: false,
                         }),
                         None,
                     )
@@ -371,6 +390,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                         latest: latest.clone(),
                         update_available,
                         latest_error: None,
+                        downgrade_available: false,
                     }),
                     None,
                 )
@@ -384,6 +404,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                             installed: installed.unwrap_or_default(),
                             latest: String::new(),
                             update_available: false,
+                            downgrade_available: false,
                             latest_error: Some(format!(
                                 "{}: {e}",
                                 crate::locale::text(
@@ -484,6 +505,7 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
             installed: env!("CARGO_PKG_VERSION").to_string(),
             latest: String::new(),
             update_available: false,
+            downgrade_available: false,
             latest_error: Some(crate::locale::owned(
                 format!("查询应用最新版本失败：{e}"),
                 format!("Failed to query the latest app version: {e}"),
@@ -522,5 +544,24 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
         latest,
         update_available,
         latest_error: None,
+        downgrade_available: false,
     })
+}
+
+#[cfg(test)]
+mod dsh_direction_tests {
+    use super::dsh_version_info;
+
+    #[test]
+    fn dsh_direction_upgrade_downgrade_and_equal() {
+        assert!(dsh_version_info("0.1.1-rc.2".into(), "0.1.2-alpha.3".into()).update_available);
+        // 切回稳定通道：目标更低 → 仅降级入口，不触发"有新版"弹窗
+        let downgrade = dsh_version_info("0.1.2-alpha.3".into(), "0.1.1-rc.2".into());
+        assert!(!downgrade.update_available && downgrade.downgrade_available);
+        // 两通道指向同一版本：无事可做
+        let equal = dsh_version_info("0.1.1-rc.2".into(), "0.1.1-rc.2".into());
+        assert!(!equal.update_available && !equal.downgrade_available);
+        // 预发布后缀按 semver 优先级：0.1.2 > 0.1.2-alpha.3
+        assert!(dsh_version_info("0.1.2-alpha.3".into(), "0.1.2".into()).update_available);
+    }
 }

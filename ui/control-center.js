@@ -58,13 +58,12 @@ async function exportUsage(kind, trigger) {
   label.textContent = dshdT('usageExporting');
   try {
     await invoke('usage_export', { format: kind });
-    label.textContent = dshdT('usageExportDone');
+    dshdToast(dshdT('usageExportDone'), { kind: 'ok' });
   } catch (e) {
-    label.textContent = dshdT('usageExportFailed');
-    window.setTimeout(restore, 2500);
-    return;
+    dshdToast(dshdT('usageExportFailed'), { kind: 'err' });
+  } finally {
+    restore();
   }
-  window.setTimeout(restore, 1800);
 }
 
 // 外点收起的 document 监听只注册一次：renderUsagePage 每次渲染都会重建
@@ -836,12 +835,15 @@ function renderCheckResult(r) {
   const body = $('body');
   let html = '';
   if (r.dsh) {
-    const hint = r.dsh.latest_error ? ' data-tip-extra="' + esc(r.dsh.latest_error) + '"' : '';
+    // 降级行同时带"查询错误"与"降级警示"时合并展示（前者优先，便于排障）
+    let dshTip = r.dsh.latest_error || '';
+    if (r.dsh.downgrade_available && !dshTip) dshTip = dshdT('downgradeTip');
+    const hint = dshTip ? ' data-tip-extra="' + esc(dshTip) + '"' : '';
     // 空 latest：查询失败时如实标注"暂无法获取版本信息"，不显示"已是最新"；
     // 版本号只输出一次（verHtml 内含 esc(cur)，此处仅拼接状态标签）
     const verLabel = !r.dsh.latest
       ? '<span class="v-ok">' + dshdT('versionServiceUnavailable') + '</span>'
-      : (r.dsh.update_available
+      : (r.dsh.update_available || r.dsh.downgrade_available
         ? '<span class="v-arrow">→</span><b class="v-latest">' + esc(r.dsh.latest) + '</b>'
         : '<span class="v-ok">' + dshdT('upToDate') + '</span>');
     html += '<div class="uprow"><div class="info"><div class="name">dsh</div>' +
@@ -914,11 +916,12 @@ function renderCheckResult(r) {
   if (!r.dsh && !r.node && !r.pwsh && !r.app && !r.error) html += '<div class="msg error" role="alert">' + dshdT('checkFailedRetry') + '</div>';
   body.innerHTML = html;
   if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
+  else if (r.dsh && r.dsh.downgrade_available) updBtn('u-dsh', dshdT('switchVersion', { version: r.dsh.latest }), 'dsh', true);
   if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
   if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
   if (r.npm && r.npm.update_available) updBtn('u-npm', dshdT('update'), 'npm', false);
   if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
-  const any = (r.dsh && r.dsh.update_available) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
+  const any = (r.dsh && (r.dsh.update_available || r.dsh.downgrade_available)) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
   if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
     const message = document.createElement('div');
     message.className = 'msg';
@@ -1148,6 +1151,8 @@ function renderNav(activeKind) {
 }
 function renderCurrent(opts) {
   const k = openKind;
+  // 切换视图即清空旧页面的瞬态提示（toast 挂在 document.body，不随内容区销毁）
+  dshdToastClearAll();
   // 刷新按钮仅用量页显示（旧余额页已合并进用量页）
   const refresh = $('btn-refresh');
   if (refresh) refresh.classList.toggle('hidden', k !== 'usage');

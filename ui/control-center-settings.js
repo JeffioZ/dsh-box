@@ -35,6 +35,7 @@ function dshChannelRow() {
     '<span class="dshd-seg" id="dsh-channel" role="radiogroup" aria-label="' + esc(dshdT('settingsDshChannel')) + '">' +
     '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="latest" /><span>' + esc(dshdT('settingsChannelLatest')) + '</span></label>' +
     '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="next" /><span>' + esc(dshdT('settingsChannelNext')) + '</span></label>' +
+    '<label class="dshd-seg-opt"><input type="radio" name="dsh-channel" value="alpha" /><span>' + esc(dshdT('settingsChannelAlpha')) + '</span></label>' +
     '</span>' +
     '</div>'
   );
@@ -121,8 +122,7 @@ async function renderSettings() {
     (modelFirst ? modelsSec : desktopSec) +
     (modelFirst ? desktopSec : interfaceSec) +
     (modelFirst ? interfaceSec : runtimeSec) +
-    (modelFirst ? runtimeSec : modelsSec) +
-    '<div class="serr" id="serr" role="alert" aria-live="polite" hidden></div>';
+    (modelFirst ? runtimeSec : modelsSec);
   body.querySelectorAll('.sswitch').forEach((el) => {
     el.addEventListener('change', onSettingToggle);
   });
@@ -130,7 +130,6 @@ async function renderSettings() {
     el.addEventListener('change', async () => {
       if (!el.checked || settingsBusy) return;
       settingsBusy = true;
-      hideSettingError();
       try {
         const state = await invoke('set_dsh_channel', { channel: el.value });
         applySettingState(state);
@@ -148,7 +147,6 @@ async function renderSettings() {
     el.addEventListener('change', async () => {
       if (!el.checked || settingsBusy) return;
       settingsBusy = true;
-      hideSettingError();
       try {
         const state = await invoke('set_window_behavior', { key: el.name, value: el.value });
         applySettingState(state);
@@ -162,12 +160,11 @@ async function renderSettings() {
   });
   // 用已从 settings_get 拿到的状态回填（不再二次请求，避免重复拉取）。
   if (settings) applySettingState(settings);
-  else showSettingError(dshdT('settingsFailed', { message: 'settings_get' }));
+  else showSettingError(dshdT('settingsLoadFailed'));
   $('settings-use-local').addEventListener('click', async () => {
     const button = $('settings-use-local');
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
-    hideSettingError();
     try {
       await invoke('use_local_service');
       await invoke('app_dialog_close');
@@ -405,11 +402,11 @@ function initModelImport() {
       try {
         const yaml = await invoke('export_model_config');
         if (!yaml) {
-          miFeedback(dshdT('modelExportNone'), false);
+          dshdToast(dshdT('modelExportNone'));
           return;
         }
         await navigator.clipboard.writeText(yaml);
-        miFeedback(dshdT('modelExportCopied'), true);
+        dshdToast(dshdT('modelExportCopied'), { kind: 'ok' });
       } catch (e) {
         miFeedback(String(e), false);
       }
@@ -566,15 +563,9 @@ function applySettingState(state) {
   if (external) apiKeyFeedback(dshdT('settingsExternalServiceShort'), true);
   else if (state.api_key_external) apiKeyFeedback(dshdT('settingsApiKeyExternal'), true);
 }
+// 设置操作失败统一走 toast（原页底 #serr 位置太偏，不易察觉）
 function showSettingError(message) {
-  const err = $('serr');
-  if (!err) return;
-  err.textContent = message;
-  err.hidden = false;
-}
-function hideSettingError() {
-  const err = $('serr');
-  if (err) err.hidden = true;
+  dshdToast(message, { kind: 'err' });
 }
 async function onSettingToggle(ev) {
   const input = ev.target;
@@ -585,7 +576,6 @@ async function onSettingToggle(ev) {
   }
   settingsBusy = true;
   input.disabled = true;
-  hideSettingError();
   try {
     const state = await invoke('settings_set', {
       key: input.dataset.key,

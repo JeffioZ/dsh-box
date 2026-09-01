@@ -602,6 +602,7 @@ fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
             version: version.to_string(),
             current: None,
             release_url: Some(release_url),
+            simulated: None,
         },
     );
 }

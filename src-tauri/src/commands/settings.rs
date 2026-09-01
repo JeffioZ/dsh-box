@@ -167,7 +167,7 @@ pub fn settings_set(
     Ok(st)
 }
 
-/// 切换 dsh 内核更新通道（latest/next），持久化到 config.json。
+/// 切换 dsh 内核更新通道（latest/next/alpha），持久化到 config.json。
 #[tauri::command]
 pub fn set_dsh_channel(
     app: AppHandle,
@@ -176,7 +176,7 @@ pub fn set_dsh_channel(
 ) -> Result<SettingsState, String> {
     ensure_local_origin(&webview)?;
     ensure_local_service_scope(&app)?;
-    if !matches!(channel.as_str(), "latest" | "next") {
+    if !matches!(channel.as_str(), "latest" | "next" | "alpha") {
         return Err(crate::locale::text("未知更新通道。", "Unknown update channel.").into());
     }
     let state = app.state::<AppState>();
