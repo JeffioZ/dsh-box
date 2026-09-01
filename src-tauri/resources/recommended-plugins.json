@@ -14,5 +14,13 @@
     "description_zh": "从 Git 历史和过往会话中整理项目记忆，在后续会话中继续使用",
     "description_en": "Builds project memory from Git history and past sessions, then reuses it in future sessions",
     "homepage": "https://github.com/vectorize-io/hindsight"
+  },
+  {
+    "id": "dsh-better-sidebar",
+    "spec": "dsh-better-sidebar",
+    "name": "DSH Better Sidebar",
+    "description_zh": "VSCode 风格的右侧工作台：文件浏览与编辑、终端、Git 与子代理管理",
+    "description_en": "A VSCode-like right sidebar with file explorer, editor, terminal, Git, and subagent tools",
+    "homepage": "https://github.com/omdsh-dev/DSH-better-sidebar"
   }
 ]
