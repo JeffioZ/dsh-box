@@ -367,8 +367,13 @@ pub(crate) fn report() -> super::UsageReport {
                          cache_read: u64,
                          cache_write: u64,
                          output: u64| {
-        // 采样时刻：当天内随 days_ago 错开，使峰/谷价在不同日自然混合
-        let ts = now - days_ago * DAY_MS - (days_ago % 3) * 3_600_000 - 1_800_000;
+        // 采样时刻：当天内随 days_ago 错开，使峰/谷价在不同日自然混合。
+        // 当天（days_ago=0）不回拨：午夜后半小时内回拨 30min 会落到昨天，
+        // 破坏"今天必须有数据"的测试与开发期首屏数据
+        let ts = now
+            - days_ago * DAY_MS
+            - (days_ago % 3) * 3_600_000
+            - if days_ago == 0 { 0 } else { 1_800_000 };
         let buckets = Buckets {
             input,
             output,
