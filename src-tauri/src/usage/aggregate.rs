@@ -352,7 +352,7 @@ pub fn day_key(time_ms: i64) -> String {
 }
 
 /// 本机相对 UTC 的偏移秒数（正数 = 东半球），进程内缓存一次。
-fn local_offset_seconds() -> i64 {
+pub(crate) fn local_offset_seconds() -> i64 {
     use std::sync::OnceLock;
     static OFFSET: OnceLock<i64> = OnceLock::new();
     *OFFSET.get_or_init(compute_local_offset_seconds)

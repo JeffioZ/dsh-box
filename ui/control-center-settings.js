@@ -25,8 +25,24 @@ function behaviorRow(key, nameKey, descKey, firstValue, firstLabel, secondValue,
     '</span></div>'
   );
 }
-function dshChannelRow() {
+// 每日用量提醒阈值：可见 label + type=number + 行内错误（ux 规则：
+// label 不靠 placeholder、错误挂在字段旁、保存给反馈）
+function usageLimitRow() {
   return (
+    '<div class="srow">' +
+    '<span class="srow-txt">' +
+    '<label class="srow-name" for="settings-usage-limit">' + dshdT('settingsUsageLimit') + '</label>' +
+    '<span class="srow-desc">' + dshdT('settingsUsageLimitDesc') + '</span>' +
+    '</span>' +
+    '<span class="usage-limit-field">' +
+    '<input id="settings-usage-limit" class="dshd-input" type="number" inputmode="numeric" min="1" max="1000000" step="1" placeholder="—" aria-describedby="settings-usage-limit-unit settings-usage-limit-error" />' +
+    '<span id="settings-usage-limit-unit" class="usage-limit-unit">' + dshdT('settingsUsageLimitUnit') + '</span>' +
+    '</span>' +
+    '</div>' +
+    '<div id="settings-usage-limit-error" class="usage-limit-error" role="alert" hidden></div>'
+  );
+}
+function dshChannelRow() {  return (
     '<div class="srow">' +
     '<span class="srow-txt">' +
     '<span class="srow-name">' + dshdT('settingsDshChannel') + '</span>' +
@@ -61,6 +77,7 @@ async function renderSettings() {
     '<h3 id="settings-desktop-heading">' + dshdT('settingsDesktopTitle') + '</h3>' +
     settingsRow('autostart', 'autostart', 'settingsAutostartDesc') +
     settingsRow('task_notifications', 'settingsTaskNotifications', 'settingsTaskNotificationsDesc') +
+    usageLimitRow() +
     behaviorRow('launch_behavior', 'settingsLaunchBehavior', 'settingsLaunchBehaviorDesc', 'window', 'settingsLaunchWindow', 'tray', 'settingsLaunchTray') +
     behaviorRow('close_behavior', 'settingsCloseBehavior', 'settingsCloseBehaviorDesc', 'tray', 'settingsCloseTray', 'quit', 'settingsCloseQuit') +
     '</section>';
@@ -161,6 +178,7 @@ async function renderSettings() {
   // 用已从 settings_get 拿到的状态回填（不再二次请求，避免重复拉取）。
   if (settings) applySettingState(settings);
   else showSettingError(dshdT('settingsLoadFailed'));
+  initUsageLimit();
   $('settings-use-local').addEventListener('click', async () => {
     const button = $('settings-use-local');
     button.disabled = true;
@@ -176,6 +194,61 @@ async function renderSettings() {
   });
   initApiKeySettings();
   initModelImport();
+}
+// —— 每日用量提醒阈值：change（失焦/回车）即保存；空值 = 关闭 ——
+function usageLimitFeedback(message, isError) {
+  const err = $('settings-usage-limit-error');
+  const input = $('settings-usage-limit');
+  if (!err || !input) return;
+  if (!message) {
+    err.hidden = true;
+    err.textContent = '';
+    input.removeAttribute('aria-invalid');
+    return;
+  }
+  if (isError) {
+    err.hidden = false;
+    err.textContent = message;
+    input.setAttribute('aria-invalid', 'true');
+  } else {
+    err.hidden = true;
+    dshdToast(message, { kind: 'ok' });
+  }
+}
+function initUsageLimit() {
+  const input = $('settings-usage-limit');
+  if (!input) return;
+  input.addEventListener('input', () => usageLimitFeedback('', false));
+  input.addEventListener('change', async () => {
+    const raw = input.value.trim();
+    if (!raw) {
+      // 清空 = 关闭提醒
+      usageLimitFeedback('', false);
+      try {
+        const state = await invoke('set_usage_token_limit', { limitM: null });
+        applySettingState(state);
+      } catch (e) {
+        showSettingError(dshdT('settingsFailed', { message: String(e) }));
+        invoke('settings_get').then(applySettingState).catch(() => {});
+      }
+      return;
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 1000000) {
+      usageLimitFeedback(dshdT('settingsUsageLimitInvalid'), true);
+      input.focus();
+      return;
+    }
+    usageLimitFeedback('', false);
+    try {
+      const state = await invoke('set_usage_token_limit', { limitM: value });
+      applySettingState(state);
+      usageLimitFeedback(dshdT('settingsUsageLimitSaved'), false);
+    } catch (e) {
+      showSettingError(dshdT('settingsFailed', { message: String(e) }));
+      invoke('settings_get').then(applySettingState).catch(() => {});
+    }
+  });
 }
 function apiKeyFeedback(message, ok) {
   const el = $('settings-api-key-feedback');
@@ -540,6 +613,10 @@ function applySettingState(state) {
   body.querySelectorAll('input[name="close_behavior"], input[name="launch_behavior"]').forEach((el) => {
     el.checked = el.value === state[el.name];
   });
+  const limitInput = $('settings-usage-limit');
+  if (limitInput && document.activeElement !== limitInput) {
+    limitInput.value = state.usage_token_limit_m != null ? String(state.usage_token_limit_m) : '';
+  }
   const apiInput = $('settings-api-key');
   const apiSave = $('settings-api-key-save');
   const apiClear = $('settings-api-key-clear');

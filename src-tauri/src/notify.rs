@@ -7,9 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use tauri::AppHandle;
-use tauri::Manager;
-use tauri_plugin_notification::NotificationExt;
+use tauri::{AppHandle, Manager};
 
 use crate::app_state::AppState;
 
@@ -29,8 +27,11 @@ pub fn start_task_watch(app: AppHandle) {
     // macOS 首次发系统通知前必须向系统申请一次权限（Windows/Linux 无此流程）；
     // 失败仅记日志，后续 show 仍按系统实际授权结果成败
     #[cfg(target_os = "macos")]
-    if let Err(e) = app.notification().request_permission() {
-        crate::logging::log(&format!("notify: 申请通知权限失败：{e}"));
+    {
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(e) = app.notification().request_permission() {
+            crate::logging::log(&format!("notify: 申请通知权限失败：{e}"));
+        }
     }
     std::thread::spawn(move || {
         let mut watched: Option<WatchedSession> = None;
@@ -130,16 +131,52 @@ fn parse_turn_end_seq(line: &str) -> Option<u64> {
 }
 
 fn show_notification(app: &AppHandle) -> Result<(), String> {
+    notify(
+        app,
+        crate::locale::text("任务完成", "Task complete"),
+        crate::locale::text(
+            "任务已完成，可回到 DSHBox 查看结果。",
+            "Task complete. Return to DSHBox to view the result.",
+        ),
+    )
+}
+
+/// 发送系统通知（notify.rs 之外的模块——用量预警等——复用同一入口）。
+/// Windows：带「查看」按钮与正文点击回调（in-process on_activated），
+/// 点击即唤起主窗口；其余平台走插件通知（无点击回调，点击行为交给系统默认）。
+pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let action_app = app.clone();
+        tauri_winrt_notification::Toast::new(&app.config().identifier)
+            .title(title)
+            .text1(body)
+            .add_button(
+                crate::locale::text("查看", "View"),
+                crate::locale::text("查看", "View"),
+            )
+            .on_activated(move |_action| {
+                // COM 激活回调不在应用主线程：窗口操作统一调度回主线程执行。
+                let app = action_app.clone();
+                let _ = action_app.run_on_main_thread(move || crate::show_main(&app));
+                Ok(())
+            })
+            .show()
+            .map_err(|e| format!("发送系统通知失败：{e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        app_notification(app, title, body)
+    }
+}
+
+#[cfg(not(windows))]
+fn app_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
     app.notification()
         .builder()
-        .title(crate::locale::text("任务完成", "Task complete").to_string())
-        .body(
-            crate::locale::text(
-                "任务已完成，可回到 DSHBox 查看结果。",
-                "Task complete. Return to DSHBox to view the result.",
-            )
-            .to_string(),
-        )
+        .title(title.to_string())
+        .body(body.to_string())
         .show()
         .map_err(|e| format!("发送系统通知失败：{e}"))
 }

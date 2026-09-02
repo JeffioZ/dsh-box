@@ -221,6 +221,24 @@ pub async fn usage_export(
     })?
 }
 
+/// 今日用量消耗速度预测（缓存优先；预警后台任务每 10 分钟刷新一次）。
+#[tauri::command]
+pub fn usage_prediction_get(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::usage::PredictionPayload, String> {
+    ensure_local_origin(&webview)?;
+    if !crate::tray_menu::managed_service_ready(&app) {
+        return Err(crate::locale::text(
+            "dsh 服务就绪后才能读取用量预测。",
+            "Usage prediction is available when the dsh service is ready.",
+        )
+        .into());
+    }
+    let config = app.state::<AppState>().config();
+    Ok(crate::usage::cached_payload(&config))
+}
+
 /// 当前会话路由上下文（只读入口；无活动会话时三字段全 null）。
 #[tauri::command]
 pub async fn usage_session_context_get(

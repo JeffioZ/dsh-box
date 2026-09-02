@@ -112,6 +112,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
   "hide_balance": false,
   "auto_update_plugins": true,
   "task_notifications": true,
+  "usage_token_limit_m": null,
   "dsh_update_channel": "latest",
   "close_behavior": "tray",
   "launch_behavior": "window",
@@ -119,7 +120,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 }
 ```
 
-`dsh_update_channel` 可取 `latest`、预览通道 `next` 或风险更高的尝鲜通道 `alpha`；切换通道后可在「检查更新」中升级或降级（切换）到该通道的最新版本。`close_behavior` 可取 `tray` / `quit`，`launch_behavior` 可取 `window` / `tray`，`download_source` 可取 `auto` / `official` / `mirror`。`config.json` 与 `state.json` 职责严格分离，不读取旧文件中的跨界字段。
+`usage_token_limit_m` 为每日用量提醒阈值（单位：百万 token；`null` 或缺省 = 关闭），预计今日 token 用量越过该值时发送一次系统通知（每天至多一次）。`dsh_update_channel` 可取 `latest`、预览通道 `next` 或风险更高的尝鲜通道 `alpha`；切换通道后可在「检查更新」中升级或降级（切换）到该通道的最新版本。`close_behavior` 可取 `tray` / `quit`，`launch_behavior` 可取 `window` / `tray`，`download_source` 可取 `auto` / `official` / `mirror`。`config.json` 与 `state.json` 职责严格分离，不读取旧文件中的跨界字段。
 
 ### 端口策略
 

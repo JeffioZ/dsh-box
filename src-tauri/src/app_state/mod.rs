@@ -600,6 +600,17 @@ impl AppState {
         )
     }
 
+    /// 设置每日用量提醒阈值（百万 token；None/0 = 关闭并从 config.json 清除）。
+    pub fn set_usage_token_limit(&self, limit_m: Option<u64>) -> Result<(), String> {
+        let normalized = limit_m.filter(|m| *m > 0);
+        let value = normalized
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        self.persist_config_change("usage_token_limit_m", value, |config| {
+            config.usage_token_limit_m = normalized;
+        })
+    }
+
     /// 设置 dsh 内核更新通道（latest/next/alpha），持久化到 config.json。
     pub fn set_dsh_update_channel(&self, channel: &str) -> Result<(), String> {
         if !matches!(channel, "latest" | "next" | "alpha") {

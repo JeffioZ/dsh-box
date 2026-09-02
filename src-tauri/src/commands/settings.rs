@@ -20,6 +20,8 @@ pub struct SettingsState {
     pub auto_update_plugins: bool,
     /// 主窗口不可见时，任务完成后是否发系统通知。
     pub task_notifications: bool,
+    /// 每日用量提醒阈值（百万 token；None = 关闭）。
+    pub usage_token_limit_m: Option<u64>,
     /// dsh 更新通道："latest" 或 "next"
     pub dsh_update_channel: String,
     pub close_behavior: String,
@@ -44,6 +46,7 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         hide_balance: config.hide_balance,
         auto_update_plugins: config.auto_update_plugins,
         task_notifications: config.task_notifications,
+        usage_token_limit_m: config.usage_token_limit_m,
         dsh_update_channel: config.dsh_update_channel.clone(),
         close_behavior: config.close_behavior.clone(),
         launch_behavior: config.launch_behavior.clone(),
@@ -165,6 +168,29 @@ pub fn settings_set(
     let st = settings_state(&app);
     crate::emit_signed(&app, "settings-changed", &st);
     Ok(st)
+}
+
+/// 设置每日用量提醒阈值（百万 token；None/0/空 = 关闭）。
+#[tauri::command]
+pub fn set_usage_token_limit(
+    app: AppHandle,
+    webview: tauri::Webview,
+    limit_m: Option<u64>,
+) -> Result<SettingsState, String> {
+    ensure_local_origin(&webview)?;
+    if limit_m.is_some_and(|m| m == 0 || m > 1_000_000) {
+        return Err(crate::locale::text(
+            "阈值需在 1–1,000,000（百万 token）之间。",
+            "The threshold must be between 1 and 1,000,000 (million tokens).",
+        )
+        .into());
+    }
+    let state = app.state::<AppState>();
+    state.set_usage_token_limit(limit_m)?;
+    crate::logging::log(&format!("settings: usage_token_limit_m={limit_m:?}"));
+    let settings = settings_state(&app);
+    crate::emit_signed(&app, "settings-changed", &settings);
+    Ok(settings)
 }
 
 /// 切换 dsh 内核更新通道（latest/next/alpha），持久化到 config.json。

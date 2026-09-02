@@ -89,6 +89,12 @@ ureq = { version = "3.4.0", default-features = false, features = ["rustls", "jso
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# 通知点击深链：tauri-plugin-notification 的 Rust API 不暴露点击回调，
+# Windows 侧直接用其底层 toast 库挂 in-process on_activated（非 Windows
+# 平台维持插件通知，点击行为交给系统默认）。版本与插件传递依赖锁定一致。
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.7.3"
+
 [profile.release]
 strip = true
 # thin LTO：链接速度显著快于 fat（增量构建收益大），体积/性能差异极小

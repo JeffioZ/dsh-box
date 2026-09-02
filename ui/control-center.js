@@ -191,10 +191,14 @@ async function renderUsagePage() {
   setupUsageExportMenu();
   showUsageLoadDelayed();
   try {
-    const report = await invoke('usage_report_get');
+    // 预测读后台缓存（预警任务每 10 分钟刷新），失败静默为 null 不影响主报表
+    const [report, prediction] = await Promise.all([
+      invoke('usage_report_get'),
+      invoke('usage_prediction_get').catch(() => null),
+    ]);
     if (openKind !== 'usage' || seq !== usageSeq) return;
     clearUsageLoadDelay();
-    renderUsageReport(report, seq);
+    renderUsageReport(report, seq, prediction);
   } catch (e) {
     if (openKind !== 'usage' || seq !== usageSeq) return;
     clearUsageLoadDelay();
@@ -240,7 +244,7 @@ function aggregateModelCostText(days, modelKey) {
   return costText(any ? { cost_complete: true, cost_usd: usd } : null);
 }
 
-function renderUsageReport(report, seq) {
+function renderUsageReport(report, seq, prediction) {
   const wrap = document.querySelector('.usage-wrap');
   const summary = $('usage-summary');
   if (!wrap || !summary) return;
@@ -257,8 +261,16 @@ function renderUsageReport(report, seq) {
     if (!d.cost_complete) { monthCost = null; break; }
     monthCost.cost_usd += Number(d.cost_usd) || 0;
   }
+  // 预计今日：后台无预测（今日尚无用量）时不渲染该格，保持栅格语义诚实。
+  // 该格带 id：usage-prediction-updated 事件（预警任务每 10 分钟一发）到达时
+  // 就地更新，不整页重载，避免与并排「今日」数字出现可见的时差。
+  const p = prediction && prediction.prediction;
+  const projectedStat = p
+    ? '<div class="usage-stat" id="usage-projected"><span class="usage-stat-l">' + dshdT('usageProjectedToday') + '</span><b data-trunc-tip data-tip-extra="' + esc(dshdT('usageProjectedTip')) + '">' + fmtTokens(p.projected_today_tokens || 0) + '</b></div>'
+    : '';
   summary.innerHTML =
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageToday') + '</span><b data-trunc-tip>' + fmtTokens(todayTokens(report)) + '</b></div>' +
+    projectedStat +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageThisMonth') + '</span><b data-trunc-tip>' + fmtTokens(monthTokens(report)) + '</b></div>' +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTotal') + '</span><b data-trunc-tip>' + fmtTokens(total.tokens || 0) + '</b></div>' +
     '<div class="usage-stat"><span class="usage-stat-l">' + dshdT('usageTodayHit') + '</span><b>' + formatPercent(todayHit) + '</b></div>' +
@@ -274,6 +286,43 @@ function renderUsageReport(report, seq) {
   renderHeatmap(wrap, report);
   renderRecentDays(wrap, report);
   renderModelBreakdown(wrap, report);
+  ensureUsagePredictionListener();
+}
+
+// 预测推送事件：用量页打开期间常驻，切走/关闭时随账户监听一并卸载。
+// 只更新「预计今日」一格；无预测（今日尚无用量）时移除该格。
+let usagePredictionUnlisten = null;
+async function ensureUsagePredictionListener() {
+  if (usagePredictionUnlisten) return;
+  try {
+    usagePredictionUnlisten = await dshdListen('usage-prediction-updated', (e) => {
+      if (openKind !== 'usage' || !e.payload) return;
+      const cell = $('usage-projected');
+      const p = e.payload.prediction;
+      if (!p) {
+        if (cell) cell.remove();
+        return;
+      }
+      if (!cell) {
+        // 首次出现预测（打开页面时今日尚无用量）：插到「今日」之后
+        const summary = $('usage-summary');
+        if (!summary || !summary.firstElementChild) return;
+        const div = document.createElement('div');
+        div.className = 'usage-stat';
+        div.id = 'usage-projected';
+        div.innerHTML = '<span class="usage-stat-l">' + dshdT('usageProjectedToday') + '</span><b data-trunc-tip data-tip-extra="' + esc(dshdT('usageProjectedTip')) + '"></b>';
+        summary.firstElementChild.after(div);
+      }
+      const slot = $('usage-projected');
+      if (slot) {
+        const b = slot.querySelector('b');
+        if (b) b.textContent = fmtTokens(p.projected_today_tokens || 0);
+        applyTruncationTips(slot);
+      }
+    });
+  } catch (err) {
+    usagePredictionUnlisten = null;
+  }
 }
 
 function todayEntry(report) {
@@ -674,6 +723,7 @@ async function ensureUsageAccountsListener() {
 }
 function dropUsageAccountsListener() {
   if (usageAccountsUnlisten) { usageAccountsUnlisten(); usageAccountsUnlisten = null; }
+  if (usagePredictionUnlisten) { usagePredictionUnlisten(); usagePredictionUnlisten = null; }
   // 切走/关闭时复位标题栏刷新态与会话上下文（防残留到下次打开）
   clearTimeout(usageRefreshTimer);
   usageRefreshTimer = null;
