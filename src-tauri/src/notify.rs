@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use tauri::{AppHandle, Manager};
-#[cfg(not(windows))]
-use tauri_plugin_notification::NotificationExt;
 
 use crate::app_state::AppState;
 
@@ -29,8 +27,11 @@ pub fn start_task_watch(app: AppHandle) {
     // macOS 首次发系统通知前必须向系统申请一次权限（Windows/Linux 无此流程）；
     // 失败仅记日志，后续 show 仍按系统实际授权结果成败
     #[cfg(target_os = "macos")]
-    if let Err(e) = app.notification().request_permission() {
-        crate::logging::log(&format!("notify: 申请通知权限失败：{e}"));
+    {
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(e) = app.notification().request_permission() {
+            crate::logging::log(&format!("notify: 申请通知权限失败：{e}"));
+        }
     }
     std::thread::spawn(move || {
         let mut watched: Option<WatchedSession> = None;
