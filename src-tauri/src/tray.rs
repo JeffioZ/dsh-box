@@ -82,6 +82,13 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         item("balance")?.enabled,
         None::<&str>,
     )?;
+    let usage_item = MenuItem::with_id(
+        app,
+        "usage",
+        &item("usage")?.label,
+        item("usage")?.enabled,
+        None::<&str>,
+    )?;
     let browser_item = MenuItem::with_id(
         app,
         "open_browser",
@@ -133,6 +140,7 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
             &restart_item,
             &check_item,
             &sep2,
+            &usage_item,
             &balance_item,
             &plugins_item,
             &settings_item,
@@ -188,6 +196,7 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
     }
     match id {
         "open" => show_main(app),
+        "usage" => crate::control_center::open_usage(app),
         "balance" => crate::control_center::open_balance(app),
         "open_browser" => open_browser(app),
         "restart" => restart_from_tray(app),

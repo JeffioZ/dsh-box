@@ -450,6 +450,19 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* 开关本体在 common.css（.sswitch）；此处只保留与设置行容器的联动 */
 .srow:hover .sswitch:not(:disabled) { border-color: var(--dshd-text-dim); }
 .srow:has(.sswitch:disabled) { opacity: .8; pointer-events: none; }
+/* —— 每日用量提醒阈值（数值输入行；label 常显、错误挂字段旁）—— */
+/* 数值行不整行可点（点击会聚焦输入框以外的区域），去掉 label 行的 cursor/pointer-events 联动 */
+.srow:has(.usage-limit-field) { cursor: default; }
+.usage-limit-field {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+#settings-usage-limit { width: 110px; text-align: right; }
+.usage-limit-unit { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; }
+.usage-limit-error {
+  margin: 4px 2px 0; font-size: 12px; line-height: 18px;
+  color: var(--dshd-error-text);
+}
+#settings-usage-limit[aria-invalid='true'] { border-color: var(--dshd-error-text); }
 /* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
 .mi-box { margin-top: 8px; }
 .mi-card {

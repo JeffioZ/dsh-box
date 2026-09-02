@@ -40,6 +40,9 @@ pub struct Config {
     pub auto_update_plugins: bool,
     /// 主窗口不可见时，任务完成后是否发系统通知。
     pub task_notifications: bool,
+    /// 每日用量提醒阈值（单位：百万 token；None/0 = 关闭）。
+    /// 预计今日用量越过该值时发一次系统通知（每天至多一次）。
+    pub usage_token_limit_m: Option<u64>,
     /// dsh 内核更新通道："latest"（稳定推荐，默认）或 "next"（预览尝鲜）。
     pub dsh_update_channel: String,
     /// 主窗口关闭按钮行为：tray（隐藏到托盘）或 quit（退出应用）。
@@ -82,6 +85,7 @@ impl Config {
             hide_balance: false,
             auto_update_plugins: true,
             task_notifications: true,
+            usage_token_limit_m: None,
             dsh_update_channel: "latest".to_string(),
             close_behavior: "tray".to_string(),
             launch_behavior: "window".to_string(),
@@ -125,6 +129,13 @@ impl Config {
                 }
                 if let Some(v) = json.get("task_notifications").and_then(|v| v.as_bool()) {
                     cfg.task_notifications = v;
+                }
+                // 阈值单位：百万 token。负数/0 无意义，读取时一并归一为关闭。
+                if let Some(limit) = json
+                    .get("usage_token_limit_m")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f.max(0.0) as u64)))
+                {
+                    cfg.usage_token_limit_m = (limit > 0).then_some(limit);
                 }
                 if let Some(ch) = json.get("dsh_update_channel").and_then(|v| v.as_str()) {
                     if matches!(ch, "latest" | "next" | "alpha") {

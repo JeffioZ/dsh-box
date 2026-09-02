@@ -249,6 +249,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::session_stats_get,
         control_center::usage_report_get,
         control_center::usage_export,
+        control_center::usage_prediction_get,
         control_center::usage_session_context_get,
         control_center::usage_accounts_get,
         control_center::usage_subscriptions_get,
@@ -258,6 +259,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         settings::set_deepseek_api_key,
         settings::set_dsh_channel,
         settings::set_window_behavior,
+        settings::set_usage_token_limit,
     ]
 }
 mod control_center;

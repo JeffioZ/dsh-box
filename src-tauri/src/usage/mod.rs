@@ -5,6 +5,7 @@
 //! `.credentials.yaml`）。不注入 dsh、不改 dsh 内核。
 
 mod aggregate;
+mod alerts;
 mod balance;
 mod cache;
 mod dev_fake;
@@ -12,11 +13,14 @@ pub(crate) mod export;
 mod live;
 mod log;
 mod monitor;
+mod predict;
 mod pricing;
 mod providers;
 mod subscriptions;
 
 pub use aggregate::{render, FoldState, UsageReport};
+pub use alerts::Payload as PredictionPayload;
+pub(crate) use alerts::{cached_payload, start_usage_alerts};
 pub use balance::AccountSnapshot;
 #[cfg(test)]
 pub(crate) use balance::Balance;
@@ -221,10 +225,16 @@ fn context_of(
 ///
 /// 增量折叠状态落到 `$DSH_HOME/storages/usage-stats-cache.json`；消失的
 /// 会话从缓存剔除；损坏/版本不符静默退回全量重折。
+/// report 的进程内串行锁：预警周期线程与用量页 get/导出的并发调用在此
+/// 串行，避免两轮「读缓存-折叠-写缓存」交错覆盖（折叠游标本身可自愈，
+/// 串行进一步避免并发触发的重复全量重折）。
+static REPORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn report(config: &crate::app_state::Config) -> Result<UsageReport, String> {
     if dev_fake::enabled() {
         return Ok(dev_fake::report());
     }
+    let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut sessions = cache::load(config);
     let mut seen = std::collections::HashSet::new();
     for (id, path) in list_session_logs(config) {

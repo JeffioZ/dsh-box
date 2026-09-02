@@ -99,6 +99,7 @@ fn enabled_for(context: MenuContext, id: &str) -> bool {
         "open_browser" => context.service_ready(),
         "restart" => context.managed_ready() && !context.updating,
         "plugins" => context.managed_ready() && !context.updating,
+        "usage" => context.managed_ready(),
         // 余额直接查询 DeepSeek API，不依赖 dsh 进程是否已启动；但外部服务的
         // 凭据不归 DSHBox 管理，不能误用本地凭据展示另一套账户。
         "balance" => !context.ownership.is_external(),
@@ -110,7 +111,8 @@ fn disabled_reason(context: MenuContext, id: &str) -> Option<String> {
     if enabled_for(context, id) {
         return None;
     }
-    if context.ownership.is_external() && matches!(id, "restart" | "plugins" | "balance") {
+    if context.ownership.is_external() && matches!(id, "restart" | "plugins" | "balance" | "usage")
+    {
         return Some(
             crate::locale::text(
                 "请在外部服务的原环境中管理",
@@ -149,6 +151,7 @@ pub fn capability_signature(app: &AppHandle) -> u8 {
         | (u8::from(enabled_for(context, "restart")) << 1)
         | (u8::from(enabled_for(context, "balance")) << 2)
         | (u8::from(enabled_for(context, "plugins")) << 3)
+        | (u8::from(enabled_for(context, "usage")) << 4)
 }
 
 pub fn contextual_items(app: &AppHandle, tray_surface: bool) -> Vec<TrayMenuItem> {
@@ -200,6 +203,11 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows.push(TrayMenuItem::sep());
     // 管理与查询
     if tray_surface {
+        rows.push(TrayMenuItem::row_icon(
+            "usage",
+            "chart",
+            crate::locale::text("用量与余额…", "Usage & balance…"),
+        ));
         rows.push(TrayMenuItem::row_icon(
             "balance",
             "wallet",
@@ -684,6 +692,7 @@ mod tests {
                 "restart",
                 "check_update",
                 "",
+                "usage",
                 "balance",
                 "plugins",
                 "settings",
@@ -726,6 +735,7 @@ mod tests {
         assert!(!enabled_for(starting, "open_browser"));
         assert!(!enabled_for(starting, "restart"));
         assert!(!enabled_for(starting, "plugins"));
+        assert!(!enabled_for(starting, "usage"));
         assert!(enabled_for(starting, "balance"));
 
         let managed = MenuContext {
@@ -736,6 +746,7 @@ mod tests {
         assert!(enabled_for(managed, "open_browser"));
         assert!(enabled_for(managed, "restart"));
         assert!(enabled_for(managed, "plugins"));
+        assert!(enabled_for(managed, "usage"));
 
         let updating = MenuContext {
             updating: true,
@@ -743,6 +754,7 @@ mod tests {
         };
         assert!(!enabled_for(updating, "restart"));
         assert!(!enabled_for(updating, "plugins"));
+        assert!(enabled_for(updating, "usage"));
 
         let external = MenuContext {
             phase: crate::app_state::BootPhase::Ready,
@@ -752,6 +764,7 @@ mod tests {
         assert!(enabled_for(external, "open_browser"));
         assert!(!enabled_for(external, "restart"));
         assert!(!enabled_for(external, "plugins"));
+        assert!(!enabled_for(external, "usage"));
         assert!(!enabled_for(external, "balance"));
     }
 
