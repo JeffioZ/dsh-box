@@ -31,7 +31,7 @@ pub(crate) use live::{
 pub(crate) use log::session_log_path;
 pub(crate) use monitor::{
     cached_accounts, cached_deepseek, cached_subscriptions, request_account_refresh,
-    start_account_monitor,
+    start_account_monitor, start_credentials_follow,
 };
 #[cfg(test)]
 pub(crate) use monitor::{set_cache_for_test, CACHE_TEST_LOCK};

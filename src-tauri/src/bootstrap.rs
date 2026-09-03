@@ -426,6 +426,9 @@ pub(crate) fn run() {
             // 账户后台监测：dsh 就绪后立即全量刷新余额/订阅缓存，此后每 5 分钟
             // 一轮并广播 usage-accounts-updated（控制中心用量页只读缓存）
             crate::usage::start_account_monitor(app.handle().clone());
+            // 凭据文件跟随：每 3s 检查 .credentials.yaml 的 mtime，变化即触发
+            // 一轮账户刷新——dsh 设置页填完 key 后状态栏无需等 5 分钟周期
+            crate::usage::start_credentials_follow(app.handle().clone());
             // 用量预警：每 10 分钟聚合增量日志并线性外推今日全天用量，
             // 预计越过用户阈值时发一次系统通知（每天至多一次）
             crate::usage::start_usage_alerts(app.handle().clone());

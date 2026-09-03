@@ -21,6 +21,10 @@ const ACCOUNT_REFRESH_MS: Duration = Duration::from_secs(300);
 /// 门控未满足时的短睡眠（与 notify/live 的 5s 门控同模式）。
 const GATE_POLL: Duration = Duration::from_secs(5);
 
+/// 凭据文件跟随轮询间隔（与 tray 的 settings.yaml 跟随同节奏：无变化时
+/// 每轮仅一次 stat，零解析开销；3s 窗口对连续写入天然防抖）。
+const CREDENTIALS_POLL: Duration = Duration::from_secs(3);
+
 /// 账户快照缓存：None = 从未完成过全量刷新（get 命令回退同步查询）。
 static CACHE: Mutex<Option<CachedSnapshots>> = Mutex::new(None);
 
@@ -49,6 +53,56 @@ pub(crate) fn start_account_monitor(app: AppHandle) {
         // 立即一轮（single-flight：与手动触发合并，不并发两轮）。
         |app| request_account_refresh(app.clone()),
     );
+}
+
+/// 凭据文件 mtime（文件不存在或不可读为 None）。
+fn credentials_mtime(config: &Config) -> Option<std::time::SystemTime> {
+    std::fs::metadata(config.dsh_home().join(".credentials.yaml"))
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+}
+
+/// 凭据文件变化判定（纯函数）：文件出现或 mtime 变化即触发。文件消失
+/// 不触发——dsh 与本壳的写入都是同目录原子替换，运行中消失只可能是用户
+/// 主动清空，无凭据的刷新结果（not-configured）交给周期轮自然收敛。
+fn credentials_changed(
+    baseline: Option<std::time::SystemTime>,
+    current: Option<std::time::SystemTime>,
+) -> bool {
+    current.is_some() && baseline != current
+}
+
+/// 跟随 `$DSH_HOME/.credentials.yaml` 的 mtime：用户在 dsh 设置页保存
+/// key 后立即触发一轮账户刷新，不必等 5 分钟周期（状态栏"未配置 API
+/// Key"的最长滞留由整周期缩短为本轮询间隔）。非标准节奏的手写循环，
+/// 谓词复用 `service_gate`；外部模式不跟随（凭据归外部环境管）。
+pub(crate) fn start_credentials_follow(app: AppHandle) {
+    std::thread::spawn(move || {
+        // 启动基线取当前文件状态：避免每次启动把既有文件误判为"变化"
+        //（监测自身门控放行后本会立即刷一轮，启动期多触发是纯浪费）。
+        let mut baseline = credentials_mtime(&app.state::<AppState>().config());
+        loop {
+            std::thread::sleep(CREDENTIALS_POLL);
+            match crate::background::service_gate(&app) {
+                crate::background::Gate::Quitting => return,
+                // 未就绪/外部模式：只跟随基线不触发；期间的变化由门控重开
+                // 时监测自身的立即轮兜底，避免重开瞬间的重复刷新。
+                crate::background::Gate::NotReady => {
+                    baseline = credentials_mtime(&app.state::<AppState>().config());
+                    continue;
+                }
+                crate::background::Gate::Ready => {}
+            }
+            let config = app.state::<AppState>().config();
+            let current = credentials_mtime(&config);
+            if !credentials_changed(baseline, current) {
+                continue;
+            }
+            baseline = current;
+            crate::logging::log("credentials: mtime 变化，触发账户刷新");
+            request_account_refresh(app.clone());
+        }
+    });
 }
 
 /// 缓存的账户/订阅快照（None = 从未刷新过，调用方回退同步查询）。
@@ -166,6 +220,12 @@ fn run_round(app: &AppHandle) {
         });
     }
     crate::emit_signed(app, "usage-accounts-updated", &payload);
+    // 状态栏 chip 只监听 balance-updated（非 usage-accounts-updated），其
+    // 周期任务 5 分钟才读一次缓存——任何触发源（周期轮/手动/凭据跟随）
+    // 完成后顺带推一次余额，让"dsh 设置页刚填完 key"立即生效
+    //（refresh_once 自带本地模式与可见性门控；query_balance 命中刚写入
+    // 的新鲜缓存，零网络请求）。
+    crate::balance::refresh_once(app.clone());
 }
 
 /// 全量刷新：逐路由查余额 + 全部订阅适配器，并与旧缓存做瞬错保旧合并。
@@ -430,6 +490,22 @@ mod tests {
         assert!(!merged.stale);
         assert_eq!(merged.status, "unauthorized");
         assert!(merged.windows.is_empty(), "401 不得保留旧窗口");
+    }
+
+    #[test]
+    fn credentials_changed_triggers_on_create_and_modify_only() {
+        let t0 = std::time::SystemTime::now();
+        let t1 = t0 + std::time::Duration::from_secs(1);
+        // 文件出现（首次配置 key 的主路径）
+        assert!(credentials_changed(None, Some(t0)));
+        // mtime 变化（dsh 原子替换写入）
+        assert!(credentials_changed(Some(t0), Some(t1)));
+        // 未变化：不触发（无变化零刷新，轮询开销仅一次 stat）
+        assert!(!credentials_changed(Some(t0), Some(t0)));
+        // 持续不存在：不触发
+        assert!(!credentials_changed(None, None));
+        // 文件消失：不触发（主动清空由周期轮收敛，见函数注释）
+        assert!(!credentials_changed(Some(t0), None));
     }
 
     #[test]
