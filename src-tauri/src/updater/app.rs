@@ -201,7 +201,7 @@ pub(super) fn update_app_exe(
         };
         if verify_downloaded_exe(&target, &expected.sha256).is_err() {
             let _ = std::fs::remove_file(&target);
-            download_app_exe(app, &target, &expected)?;
+            download_app_exe(app, &target, &expected, true)?;
         }
         app.state::<AppState>()
             .set_app_update_ready(Some((expected.version.clone(), expected.sha256.clone())));
@@ -249,18 +249,22 @@ fn verify_downloaded_exe(target: &std::path::Path, expected_sha256: &str) -> Res
 }
 
 /// 下载并完整校验应用更新包；失败时清理半截文件。
+/// `report`：交互式更新为 true（进度上报检查更新弹窗）；后台静默预下载
+/// 为 false——不写 check_progress，避免用户未点更新时弹窗出现/残留
+/// 下载进度文案。
 #[cfg(windows)]
 fn download_app_exe(
     app: &AppHandle,
     target: &std::path::Path,
     release: &AppReleaseAsset,
+    report: bool,
 ) -> Result<(), String> {
     static DOWNLOAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = DOWNLOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if verify_downloaded_exe(target, &release.sha256).is_ok() {
         return Ok(());
     }
-    let result = download_app_exe_inner(app, target, release);
+    let result = download_app_exe_inner(app, target, release, report);
     if result.is_err() {
         let _ = std::fs::remove_file(target);
         let _ = std::fs::remove_file(target.with_extension("exe.part"));
@@ -274,11 +278,38 @@ fn download_app_exe_inner(
     app: &AppHandle,
     target: &std::path::Path,
     release: &AppReleaseAsset,
+    report: bool,
 ) -> Result<(), String> {
-    emit_progress(
-        app,
-        crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
-    );
+    if report {
+        emit_progress(
+            app,
+            crate::locale::text("正在下载应用更新…", "Downloading the app update…"),
+        );
+    }
+    // 下载百分比与 MB 进度：检查更新弹窗的进度行实时承接（节流由
+    // stream_to_file 统一实施，百分比变化 + 200ms）
+    let version = release.version.as_str();
+    let on_progress = |done: u64, total: u64| {
+        if !report {
+            return;
+        }
+        let pct = ((done as f64 / total as f64 * 100.0) as i64).min(100);
+        emit_progress(
+            app,
+            &crate::locale::owned(
+                format!(
+                    "正在下载应用更新 {version}… {pct}%（{:.1}/{:.1} MB）",
+                    done as f64 / 1048576.0,
+                    total as f64 / 1048576.0
+                ),
+                format!(
+                    "Downloading the app update {version}… {pct}% ({:.1}/{:.1} MB)",
+                    done as f64 / 1048576.0,
+                    total as f64 / 1048576.0
+                ),
+            ),
+        );
+    };
     // 单文件 exe 上限 512MB：防止异常响应/恶意源写满磁盘。
     // 下载本体（分块/上限/失败清理）复用 runtime::download::stream_to_file。
     const MAX_APP_EXE_BYTES: u64 = 512 * 1024 * 1024;
@@ -289,7 +320,7 @@ fn download_app_exe_inner(
         path: &part,
         max_bytes: MAX_APP_EXE_BYTES,
         user_agent: Some("DSHBox"),
-        progress: None,
+        progress: Some(&on_progress),
         cancelled: None,
     })
     .map_err(|error| match error {
@@ -576,7 +607,7 @@ pub fn prefetch_app_update(app: &AppHandle) {
                 "updater: 后台预下载应用更新 {}（当前 {}）",
                 info.latest, info.installed
             ));
-            if let Err(e) = download_app_exe(&handle, &target, &release) {
+            if let Err(e) = download_app_exe(&handle, &target, &release, false) {
                 crate::logging::log(&format!("updater: 应用更新预下载失败：{e}"));
                 return;
             }

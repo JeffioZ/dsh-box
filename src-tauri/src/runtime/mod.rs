@@ -17,7 +17,7 @@ pub(crate) use dsh_package::{ensure_dsh, install_dsh_version, prepare_dsh_instal
 use node::parse_node_sha256;
 pub(crate) use node::{
     current_node_version, ensure_node, find_system_node, install_node_from_archive,
-    npm_cli_for_node, npm_version, prepare_node_archive, upgrade_portable_npm,
+    npm_cli_for_node, npm_version, prepare_node_archive_with, upgrade_portable_npm,
 };
 #[cfg(test)]
 use package_manager::parse_pnpm_progress;

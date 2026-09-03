@@ -149,9 +149,11 @@ fn download_node_archive(
     archive_path: &Path,
     expected_sha256: &str,
     source: &str,
+    download_progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<(), NodeDownloadError> {
     // 下载本体（分块/上限/取消/进度节流）复用 download::stream_to_file；
-    // 这里只保留 Node 特有的进度文案与 Source/Fatal 错误映射。
+    // 这里只保留 Node 特有的进度文案与 Source/Fatal 错误映射。更新流程经
+    // download_progress 把同一进度转发到检查更新弹窗（启动安装不需要）。
     let on_progress = |done: u64, total: u64| {
         let pct = (((done as f64 / total as f64) * 100.0) as i64).min(100);
         let message = if crate::locale::is_chinese() {
@@ -171,6 +173,9 @@ fn download_node_archive(
             ),
             Some(pct as f64),
         );
+        if let Some(extra) = download_progress {
+            extra(done, total);
+        }
     };
     let cancelled = || install_cancelled(app);
     let error_text = |error: &str| {
@@ -351,6 +356,16 @@ pub(crate) fn prepare_node_archive(
     app: &AppHandle,
     config: &Config,
 ) -> Result<PreparedNodeArchive, String> {
+    prepare_node_archive_with(app, config, None)
+}
+
+/// `prepare_node_archive` 的更新流程变体：`download_progress` 额外收到
+/// 下载字节进度（done/total），供检查更新弹窗展示百分比。
+pub(crate) fn prepare_node_archive_with(
+    app: &AppHandle,
+    config: &Config,
+    download_progress: Option<&dyn Fn(u64, u64)>,
+) -> Result<PreparedNodeArchive, String> {
     if install_cancelled(app) {
         return Err(install_cancelled_error());
     }
@@ -417,6 +432,7 @@ pub(crate) fn prepare_node_archive(
             &archive_path,
             &expected_sha256,
             download_source,
+            download_progress,
         ) {
             Ok(()) => {
                 source = download_source;
