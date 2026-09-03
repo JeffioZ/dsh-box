@@ -65,8 +65,15 @@ body.fade-out { opacity: 0; }
 .bar-fill.determinate { animation: none; }
 .bar-fill.done { width: 100%; animation: none; }
 .bar-fill.err { width: 100%; background: var(--red); animation: none; }
-/* 位移用 transform 而非 margin-left：不触发布局，动画只走合成层 */
-@keyframes slide { 0% { transform: translateX(-167%); } 100% { transform: translateX(917%); } }
+/* 位移用 transform 而非 margin-left：不触发布局，动画只走合成层。
+   头尾渐隐（opacity 同为合成属性）：单段式不定进度条循环回卷时肉眼
+   可见"瞬移"，两端淡出后重置不可察觉；位移保持 linear 恒速。 */
+@keyframes slide {
+  0% { transform: translateX(-167%); opacity: 0; }
+  14% { opacity: 1; }
+  86% { opacity: 1; }
+  100% { transform: translateX(917%); opacity: 0; }
+}
 
 .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: spin var(--dshd-anim-spin); }
 /* 用 visibility 而非 display 隐藏：占位保留，就绪/失败切换时文字不跳动 */
@@ -338,7 +345,6 @@ body.fade-out { opacity: 0; }
   .error-box { background: rgba(180, 35, 24, .06); border-color: rgba(180, 35, 24, .3); }
   .error-details { border-top-color: rgba(180, 35, 24, .18); }
   .error-msg { background: rgba(38, 49, 72, .05); }
-  .spinner { border-color: var(--line); border-top-color: var(--blue); }
 }
 
 /* 系统“减弱动态效果”：关闭全部动画 */
