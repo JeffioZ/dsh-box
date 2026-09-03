@@ -557,6 +557,38 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   white-space: nowrap; vertical-align: middle; font-weight: 500;
 }
 .pempty { font-size: 12px; color: var(--dshd-text-dim); padding: 4px 2px; }
+/* 更新结果消息的“查看详情”折叠：标题行保持可读，原始日志默认收起 */
+.msg .done-toggle {
+  display: inline-block; margin-left: 8px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  font-size: 12px; color: var(--dshd-accent, var(--dshd-text));
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.msg .done-toggle:hover { opacity: .8; }
+.msg .done-toggle:focus-visible { outline: 2px solid var(--dshd-accent, currentColor); outline-offset: 2px; border-radius: 2px; }
+.msg .done-detail {
+  margin-top: 6px; padding: 8px 10px; border-radius: 6px;
+  background: var(--dshd-pressed); font-size: 11px; line-height: 1.5;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere;
+  user-select: text; max-height: 180px; overflow: auto;
+}
+/* 不兼容插件标签：警示色（区别于中性的内置标签），同样单行不折行 */
+.pitem .pbadge.warn {
+  background: color-mix(in srgb, var(--dshd-warning) 16%, transparent);
+  color: var(--dshd-warning);
+}
+/* 检查更新页插件冲突提示条：警示描边 + 文案与操作按钮同行可换行；
+   不复用 .msg，避免被 renderUpdateDone 的首行状态选择器误改写 */
+.conflict-banner {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--dshd-warning) 45%, transparent);
+  border-radius: 8px; font-size: 12px; color: var(--dshd-warning);
+  overflow-wrap: anywhere;
+}
+.conflict-banner .conflict-text { min-width: 0; flex: 1 1 240px; }
+.conflict-banner .dshd-btn { flex: none; }
 /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离 */
 .dshd-btn.danger {
   background: rgba(248, 81, 73, .14); color: var(--dshd-error-text);

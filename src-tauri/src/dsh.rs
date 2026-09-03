@@ -752,27 +752,29 @@ fn start_and_wait_managed_inner(
             // 仅对 DSHBox 记录的中断安装做一次定向恢复。相同上游错误也可能
             // 来自用户自行维护的 profile，未命中事务标记时绝不修改 manifest。
             if allow_install_recovery {
-                if let Some(stale) = unresolved_bundle_package(&log) {
+                // 两种可恢复形态：bundle 残留引用（半写）与刚变更插件加载崩溃
+                // （装得上但起不来，如与新 dsh API 不兼容的 SyntaxError）。
+                let recoverable =
+                    unresolved_bundle_package(&log).or_else(|| plugin_load_error_package(&log));
+                if let Some(stale) = recoverable {
                     crate::logging::log(&format!(
-                        "dsh: 检测到无法解析的插件引用 {stale}，核对中断安装事务"
+                        "dsh: 启动失败指向插件 {stale}，核对 DSHBox 插件事务"
                     ));
                     match crate::plugins::recover_interrupted_plugin_mutation(config, &stale) {
                         Ok(true) => {
                             crate::logging::log(&format!(
-                                "dsh: 已恢复 DSHBox 中断的 {stale} 安装，重试启动一次"
+                                "dsh: 已回退 DSHBox 记录的 {stale} 插件变更，重试启动一次"
                             ));
                             shutdown(app);
                             return start_and_wait_managed_inner(app, config, node_exe, false);
                         }
                         Ok(false) => {
                             crate::logging::log(&format!(
-                                "dsh: {stale} 不属于可恢复的 DSHBox 中断事务，保留用户配置"
+                                "dsh: {stale} 不属于可恢复的 DSHBox 插件事务，保留用户配置"
                             ));
                         }
                         Err(e) => {
-                            crate::logging::log(&format!(
-                                "dsh: 恢复中断插件安装 {stale} 失败：{e}"
-                            ));
+                            crate::logging::log(&format!("dsh: 回退插件变更 {stale} 失败：{e}"));
                         }
                     }
                 }
@@ -825,6 +827,54 @@ fn unresolved_bundle_package(log: &str) -> Option<String> {
         rest = &after[end..];
     }
     None
+}
+
+/// 从 dsh 启动日志解析“插件加载崩溃”的肇事插件包名。
+/// 形态：ESM 加载错误（SyntaxError 等）之前的最后一段代码位置指向
+/// `node_modules/<pkg>/...`。栈里 `.pnpm` 嵌套路径是插件运行时的内部
+/// 依赖，不构成可操作的目标，只有顶层的用户插件包名才有诊断价值。
+/// 返回 None 表示看不出插件因素（按通用启动失败处理）。
+pub(crate) fn plugin_load_error_package(log: &str) -> Option<String> {
+    if !log.contains("SyntaxError") {
+        return None;
+    }
+    // 逐行倒查：从每个 SyntaxError 行向上找最近的顶层 node_modules 路径。
+    let lines: Vec<&str> = log.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if !line.contains("SyntaxError") {
+            continue;
+        }
+        for prior in lines[..index].iter().rev() {
+            if let Some(package) = top_level_node_modules_package(prior) {
+                return Some(package);
+            }
+        }
+    }
+    None
+}
+
+/// 解析一行里的顶层 `node_modules/<pkg>` 包名；`.pnpm` 内部嵌套与
+/// 非路径行返回 None。支持 `@scope/name` 与正反斜杠两种分隔符。
+fn top_level_node_modules_package(line: &str) -> Option<String> {
+    let pos = line.find("node_modules")? + "node_modules".len();
+    let after = line[pos..].trim_start_matches(['/', '\\']);
+    if after.is_empty() {
+        return None;
+    }
+    let mut segments = after.split(['/', '\\']);
+    let first = segments.next().unwrap_or_default();
+    if first == ".pnpm" {
+        // pnpm 虚拟存储内部路径（如 .pnpm/@scope+name@ver/node_modules/...），
+        // 其后的 node_modules 段指向插件运行时的传递依赖而非用户插件
+        return None;
+    }
+    if let Some(scoped) = first.strip_prefix('@') {
+        return segments
+            .next()
+            .filter(|second| !second.is_empty())
+            .map(|second| format!("@{scoped}/{second}"));
+    }
+    (!first.is_empty()).then(|| first.to_string())
 }
 
 fn read_log_since(path: &std::path::Path, offset: u64) -> String {
@@ -1471,5 +1521,43 @@ mod tests {
         assert!(same_external_identity(&original, &updated));
         updated.cwd = "C:/another-workspace".into();
         assert!(!same_external_identity(&original, &updated));
+    }
+
+    #[test]
+    fn plugin_load_error_extracts_culprit_package_from_esm_syntax_error() {
+        // 真实故障形态：代码帧路径指向顶层用户插件，其后才是 pnpm 栈
+        let log = "\
+dsh web: starting
+file:///C:/dsh/node_modules/dsh-better-sidebar/lib/index.js:11\n\
+      import { settingsNamespace } from \"@deepseek-ai/dsh-settings\";\n\
+      SyntaxError: The requested module '@deepseek-ai/dsh-settings' does not provide an export named 'settingsNamespace'\n\
+    at #asyncInstantiate (node:internal/modules/esm/module_job:327:21)\n\
+    at async file:///C:/dsh/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader_x/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:274:41\n\
+";
+        assert_eq!(
+            super::plugin_load_error_package(log).as_deref(),
+            Some("dsh-better-sidebar")
+        );
+    }
+
+    #[test]
+    fn plugin_load_error_resolves_scoped_packages_and_backslashes() {
+        let log = "C:\\dsh\\node_modules\\@deepseek-ai\\dsh-pocket\\lib\\index.js:1\nSyntaxError: Unexpected token 'export'\n";
+        assert_eq!(
+            super::plugin_load_error_package(log).as_deref(),
+            Some("@deepseek-ai/dsh-pocket")
+        );
+    }
+
+    #[test]
+    fn plugin_load_error_ignores_pnpm_internal_only_logs_and_plain_failures() {
+        // 栈里只有 .pnpm 内部路径：看不出用户插件，不猜测
+        let internal_only = "SyntaxError: The requested module does not provide an export\n    at async file:///C:/dsh/node_modules/.pnpm/x@1/node_modules/x/lib/index.js:1:1\n";
+        assert_eq!(super::plugin_load_error_package(internal_only), None);
+        // 没有任何 SyntaxError 的普通启动失败
+        assert_eq!(
+            super::plugin_load_error_package("Error: listen EADDRINUSE"),
+            None
+        );
     }
 }

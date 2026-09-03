@@ -162,3 +162,30 @@ pub fn plugin_apply_changes(
     ensure_managed_service(&app)?;
     Ok(crate::plugins::apply_plugin_changes(&app))
 }
+
+/// 检查更新页“卸载冲突插件并重试”：卸载导致 dsh 更新回滚的插件，
+/// 然后自动重新发起 dsh 更新。全程结果经检查更新弹窗的轮询通道上报。
+#[tauri::command]
+pub fn plugin_resolve_update_conflict(
+    app: AppHandle,
+    webview: tauri::Webview,
+    package: String,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    ensure_managed_service(&app)?;
+    // 只允许处理记录在案的冲突插件，避免本入口成为绕过确认的通用卸载通道
+    let config = app.state::<AppState>().config();
+    if crate::plugins::plugin_update_conflict(&config).as_deref() != Some(package.as_str()) {
+        return Err(crate::locale::text(
+            "该插件已无更新冲突记录，请刷新页面后重试。",
+            "This plugin no longer has an update conflict record. Refresh the page and retry.",
+        )
+        .into());
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || match crate::plugins::remove(&handle, &package) {
+        Ok(()) => crate::updater::apply_dsh_update(&handle),
+        Err(e) => handle.state::<AppState>().set_update_done(false, Some(e)),
+    });
+    Ok(())
+}
