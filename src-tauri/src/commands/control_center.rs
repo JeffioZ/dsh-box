@@ -319,6 +319,7 @@ pub fn app_dialog_check_get(
         "done": done.map(|(ok, message)| serde_json::json!({ "ok": ok, "message": message })),
         "pwsh_pending": state.pwsh_pending(),
         "updating": state.is_updating(),
+        "plugin_conflict": crate::plugins::plugin_update_conflict(&state.config()),
     }))
 }
 

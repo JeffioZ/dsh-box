@@ -8,6 +8,8 @@ use super::*;
 /// 事务骨架复用 `with_directory_transaction`；差异仅在“停服前准备”钩子
 /// （锁定精确 target + 准备 pnpm）与 install 闭包。
 pub(super) fn update_dsh(app: &AppHandle, config: &crate::app_state::Config) -> Result<(), String> {
+    // 旧冲突诊断只对上一轮失败有意义：新一轮更新开始即作废
+    crate::plugins::reset_plugin_update_conflict(config);
     let current = config.dsh_dir();
     let backup = config.root.join(update_txn::DSH_BACKUP_DIR);
     let marker = config.root.join(update_txn::DSH_UPDATE_MARKER);

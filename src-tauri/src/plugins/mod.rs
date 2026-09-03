@@ -48,6 +48,9 @@ pub struct PluginInfo {
     /// 已安装版本（未安装为 None）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<String>,
+    /// 与新版 dsh 不兼容（曾导致更新回滚）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incompatible: bool,
     /// 是否为当前 DSHBox 内置清单中的包。
     pub builtin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +97,7 @@ fn npm_search_package_homepage(package: &serde_json::Value) -> Option<String> {
 pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
     let config = app.state::<AppState>().config();
     let builtin_consent = builtin_plugins_enabled(&config);
+    let update_conflict = plugin_update_conflict(&config);
     let pkg = config.dsh_home().join("profiles/web/package.json");
     let Ok(text) = std::fs::read_to_string(&pkg) else {
         return vec![];
@@ -153,6 +157,8 @@ pub fn list(app: &AppHandle) -> Vec<PluginInfo> {
                     is_market_pkg(name),
                     effective_market_user_removed(&config, name),
                 ),
+                // 该插件曾导致 dsh 更新回滚（与新 dsh 版本不兼容）
+                incompatible: update_conflict.as_deref() == Some(name.as_str()),
                 homepage,
             });
         }
@@ -224,6 +230,7 @@ pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
                     .map(|s| s.to_string()),
                 installed: None,
                 builtin: false,
+                incompatible: false,
                 homepage,
             });
         }
@@ -283,6 +290,14 @@ pub fn install(app: &AppHandle, name: &str) -> Result<(), String> {
 pub fn remove(app: &AppHandle, name: &str) -> Result<(), String> {
     let name = checked_plugin_name(name)?;
     run_dsh_plugin_auto_user_remove(app, &["remove", name])?;
+    // 卸载的正是此前导致 dsh 更新回滚的冲突插件时，同步清掉诊断记录。
+    if let Some(package) = spec_package_name(name) {
+        if clear_plugin_update_conflict_if(&app.state::<AppState>().config(), package) {
+            crate::logging::log(&format!(
+                "plugins: 已清除 {package} 的 dsh 更新冲突记录（插件已卸载）"
+            ));
+        }
+    }
     // 用户管理状态由卸载事务在提交前写入；强制下线清理走普通 runner，
     // 不会写用户主动卸载标记。判定按解析后的包名（原始输入可能带 @version）。
     if spec_package_name(name).is_some_and(is_market_pkg) {
@@ -338,6 +353,51 @@ fn manifest_package_names(
         })
         .unwrap_or_default();
     Some((dependencies, bundles))
+}
+
+// —— dsh 更新冲突记录 ——
+
+/// state.json 键：dsh 更新因该插件加载崩溃而回滚时记录的包名。
+/// 检查更新页据此给出“卸载并重试”的引导入口，插件页据此展示不兼容标记。
+const PLUGIN_UPDATE_CONFLICT_KEY: &str = "plugin_update_conflict";
+
+pub(crate) fn set_plugin_update_conflict(
+    config: &crate::app_state::Config,
+    package: &str,
+) -> Result<(), String> {
+    crate::app_state::save_state_value(
+        &config.root,
+        PLUGIN_UPDATE_CONFLICT_KEY,
+        serde_json::json!(package),
+    )
+}
+
+pub(crate) fn plugin_update_conflict(config: &crate::app_state::Config) -> Option<String> {
+    crate::app_state::load_state_value(&config.root, PLUGIN_UPDATE_CONFLICT_KEY)
+        .and_then(|value| value.as_str().map(String::from))
+}
+
+/// 记录的冲突插件被卸载后清除对应记录；包名不一致时保留（可能另有其人）。
+/// 返回是否真的清除，便于调用方只在命中时对外反馈。
+pub(crate) fn clear_plugin_update_conflict_if(
+    config: &crate::app_state::Config,
+    package: &str,
+) -> bool {
+    if plugin_update_conflict(config).as_deref() != Some(package) {
+        return false;
+    }
+    match crate::app_state::remove_state_value(&config.root, PLUGIN_UPDATE_CONFLICT_KEY) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::logging::log(&format!("plugins: 清除插件更新冲突记录失败：{e}"));
+            false
+        }
+    }
+}
+
+/// 新一轮 dsh 更新开始时清空旧记录：无论成败，旧诊断都不再指导当前操作。
+pub(crate) fn reset_plugin_update_conflict(config: &crate::app_state::Config) {
+    let _ = crate::app_state::remove_state_value(&config.root, PLUGIN_UPDATE_CONFLICT_KEY);
 }
 
 /// 已安装插件名列表（web profile 的 package.json dependencies 全部 key）。

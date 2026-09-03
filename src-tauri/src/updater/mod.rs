@@ -229,13 +229,40 @@ fn with_directory_transaction<T>(
             }
         };
         let restore_result = restart_service_locked(app);
+        // dsh 专属诊断：新版起不来但崩溃点在用户插件（如与新 dsh 的 API
+        // 不兼容）时，记录包名并改用可操作的指引文案；Node 更新回滚解决
+        // 不了插件问题，不参与诊断。
+        let plugin_conflict = if name == "dsh" {
+            let config = app.state::<AppState>().config();
+            dsh::plugin_load_error_package(&e).inspect(|package| {
+                if let Err(error) = crate::plugins::set_plugin_update_conflict(&config, package) {
+                    crate::logging::log(&format!(
+                        "updater: 记录插件更新冲突（{package}）失败：{error}"
+                    ));
+                }
+            })
+        } else {
+            None
+        };
         let result = match restore_result {
-            Ok(()) => crate::locale::owned(
-                format!("新 {name} 启动失败，已恢复旧版本：{e}"),
-                format!(
-                    "The new {name} version did not start; the previous version was restored: {e}"
+            Ok(()) => match plugin_conflict.as_deref() {
+                Some(package) => crate::locale::owned(
+                    // {e}（含启动日志尾部）经空行分隔：前端把它折叠进“查看详情”，
+                    // 默认只展示这句可操作的指引
+                    format!(
+                        "新 {name} 启动失败，已恢复旧版本：第三方插件 {package} 与新版 {name} 不兼容，请先在检查更新页卸载该插件后重试。\n\n{e}"
+                    ),
+                    format!(
+                        "The new {name} version did not start; the previous version was restored. The third-party plugin {package} is incompatible with the new {name} version. Remove it from the update check page and retry.\n\n{e}"
+                    ),
                 ),
-            ),
+                None => crate::locale::owned(
+                    format!("新 {name} 启动失败，已恢复旧版本：{e}"),
+                    format!(
+                        "The new {name} version did not start; the previous version was restored: {e}"
+                    ),
+                ),
+            },
             Err(re) => crate::locale::owned(
                 format!("新 {name} 启动失败：{e}；旧版本恢复后也未能启动：{re}"),
                 format!(

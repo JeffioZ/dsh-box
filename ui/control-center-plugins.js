@@ -411,6 +411,13 @@ function setPluginsBusy(busy) {
     refreshPluginApplyStatus();
   }
 }
+// “与新版 dsh 不兼容”警示徽标（p.incompatible 来自插件更新冲突记录）
+function incompatibleBadge() {
+  const badge = document.createElement('span');
+  badge.className = 'pbadge warn';
+  badge.textContent = dshdT('pluginIncompatible');
+  return badge;
+}
 function pluginItemRow(p, actions, verText, descText) {
   const li = document.createElement('li');
   li.className = 'pitem';
@@ -436,6 +443,8 @@ function pluginItemRow(p, actions, verText, descText) {
   } else {
     name.textContent = p.name;
   }
+  // 曾导致 dsh 更新回滚的不兼容插件：警示徽标（与卸载入口同页提示）
+  if (p.incompatible) name.append(incompatibleBadge());
   name.dataset.truncTip = '';
   const desc = document.createElement('div');
   desc.className = 'desc';

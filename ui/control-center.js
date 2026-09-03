@@ -983,7 +983,69 @@ function renderCheckResult(r) {
   }
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
+  renderPluginConflictBanner();
   applyTruncationTips(body);
+}
+// —— 插件更新冲突（dsh 更新因插件加载崩溃回滚）——
+// 轮询通道 app_dialog_check_get 的 plugin_conflict 字段驱动；卸载完成
+// 后字段清空，下次轮询重建结果区时提示条随之消失。
+let lastPluginConflict = null;
+function renderPluginConflictBanner() {
+  const existing = document.getElementById('plugin-conflict');
+  const name = lastPluginConflict;
+  // 冲突已解决（记录清空）：移除提示条
+  if (!name) {
+    if (existing) existing.remove();
+    return;
+  }
+  // 同名冲突的提示条已存在则不重建：结果区重渲染不应触发读屏重复播报
+  if (existing && existing.dataset.name === name) return;
+  if (existing) existing.remove();
+  if (updateRunning) return;
+  const body = $('body');
+  const box = document.createElement('div');
+  box.className = 'conflict-banner';
+  box.id = 'plugin-conflict';
+  box.dataset.name = name;
+  box.setAttribute('role', 'alert');
+  const text = document.createElement('span');
+  text.className = 'conflict-text';
+  text.textContent = dshdT('pluginConflictBanner', { name });
+  // 卸载是破坏性操作：两步确认（再点一次），5 秒无操作自动复位
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dshd-btn small danger';
+  btn.dataset.label = dshdT('pluginConflictRemove');
+  btn.textContent = btn.dataset.label;
+  let armed = false;
+  let resetTimer = 0;
+  btn.addEventListener('click', () => {
+    if (updateRunning || btn.disabled) return;
+    if (!armed) {
+      armed = true;
+      btn.textContent = dshdT('pluginConflictRemoveConfirm', { name });
+      resetTimer = setTimeout(() => {
+        armed = false;
+        btn.textContent = btn.dataset.label;
+      }, 5000);
+      return;
+    }
+    clearTimeout(resetTimer);
+    updateRunning = true;
+    renderNav(openKind);
+    document.querySelectorAll('.uprow .dshd-btn').forEach((button) => {
+      button.disabled = true;
+    });
+    btn.disabled = true;
+    btn.textContent = dshdT('processing');
+    invoke('plugin_resolve_update_conflict', { package: name }).catch((e) => {
+      updateRunning = false;
+      renderNav(openKind);
+      renderUpdateDone({ ok: false, message: dshdT('operationNotStarted', { message: e }) });
+    });
+  });
+  box.append(text, btn);
+  body.append(box);
 }
 let lastProgress = '';
 function renderProgress(message) {
@@ -1010,7 +1072,8 @@ function renderUpdateDone(p) {
   const body = $('body');
   const line = body.querySelector('.msg');
   const text = p.ok ? p.message : dshdT('notCompleted', { message: p.message });
-  document.querySelectorAll('.uprow .dshd-btn').forEach((button) => {
+  // 冲突提示条的按钮与结果行按钮一起复位（失败可重试，成功置完成）
+  document.querySelectorAll('.uprow .dshd-btn, #plugin-conflict .dshd-btn').forEach((button) => {
     if (p.ok) {
       button.disabled = true;
       if (button.textContent === dshdT('processing')) button.textContent = dshdT('completed');
@@ -1019,17 +1082,36 @@ function renderUpdateDone(p) {
       button.textContent = button.dataset.label || dshdT('retry');
     }
   });
-  if (line) {
-    line.className = 'msg ' + (p.ok ? 'success' : 'error');
-    line.setAttribute('role', p.ok ? 'status' : 'alert');
-    line.textContent = text;
-  }
-  else {
+  const box = line || (() => {
     const div = document.createElement('div');
-    div.className = 'msg ' + (p.ok ? 'success' : 'error');
-    div.setAttribute('role', p.ok ? 'status' : 'alert');
-    div.textContent = text;
     body.append(div);
+    return div;
+  })();
+  box.className = 'msg ' + (p.ok ? 'success' : 'error');
+  box.setAttribute('role', p.ok ? 'status' : 'alert');
+  // 长文案（含启动日志尾部等）经空行分为“标题 + 详情”：详情默认折叠，
+  // 读屏只播报可操作的标题行；无空行分隔的普通消息保持原样整体展示
+  const sep = text.indexOf('\n\n');
+  // 赋值 textContent 会清掉上一次渲染的折叠控件，无需手动移除
+  box.textContent = sep >= 0 ? text.slice(0, sep).trimEnd() : text;
+  if (sep >= 0) {
+    const detailText = text.slice(sep + 2).trim();
+    if (detailText) {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'done-toggle';
+      toggle.textContent = dshdT('viewDetail');
+      toggle.setAttribute('aria-expanded', 'false');
+      const detail = document.createElement('div');
+      detail.className = 'done-detail hidden';
+      detail.textContent = detailText;
+      toggle.addEventListener('click', () => {
+        const collapsed = detail.classList.toggle('hidden');
+        toggle.textContent = collapsed ? dshdT('viewDetail') : dshdT('hideDetail');
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+      });
+      box.append(toggle, detail);
+    }
   }
 }
 
@@ -1381,6 +1463,13 @@ setInterval(async () => {
         if (s && s.updating && !updateRunning) {
           updateRunning = true;
           renderNav(openKind);
+        }
+        // 冲突状态独立于检查结果：即使结果未变（如在插件页卸载了冲突插件），
+        // 提示条也要即时出现/消失
+        const conflict = (s && s.plugin_conflict) || null;
+        if (conflict !== lastPluginConflict) {
+          lastPluginConflict = conflict;
+          renderPluginConflictBanner();
         }
         // UAC 确认等待期间不重建结果行（保持按钮禁用态）；
         // 结果未变化时不重复重建——进度每次更新只刷新文案行，
