@@ -404,7 +404,7 @@ fn pick_tray_image(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
 
 fn open_browser(app: &AppHandle) {
     let config = app.state::<AppState>().config();
-    if !crate::dsh::health_check(config.port) {
+    if !crate::dsh::health_check(config.port, config.auth_token.as_deref()) {
         use tauri_plugin_dialog::MessageDialogKind;
         crate::native_dialog::show_message(
             app,
@@ -418,7 +418,8 @@ fn open_browser(app: &AppHandle) {
         );
         return;
     }
-    let url = config.web_url();
+    // 带 token 打开：浏览器首个请求完成交换后由会话 cookie（30 天）接管
+    let url = config.web_page_url();
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("cmd");

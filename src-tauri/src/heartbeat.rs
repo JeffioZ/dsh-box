@@ -82,7 +82,7 @@ fn poll_once(app: &AppHandle) -> Result<(), String> {
         return Ok(()); // 本地启动页/其他页面不监控
     }
     // 服务不健康时交给 dsh 看门狗（重启窗口内页面必然无响应，不能误判为页面挂起）
-    if !crate::dsh::health_check(config.port) {
+    if !crate::dsh::health_check(config.port, config.auth_token.as_deref()) {
         return Ok(());
     }
     let (last, failures) = app.state::<AppState>().heartbeat_state();

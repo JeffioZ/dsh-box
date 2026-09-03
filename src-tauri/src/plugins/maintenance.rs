@@ -584,7 +584,7 @@ pub fn start_market_bootstrap(app: AppHandle) {
             }
             let config = state.config();
             if state.service_ownership() == crate::app_state::ServiceOwnership::Managed
-                && crate::dsh::health_check(config.port)
+                && crate::dsh::health_check(config.port, config.auth_token.as_deref())
             {
                 break config;
             }

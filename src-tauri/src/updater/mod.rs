@@ -526,9 +526,18 @@ pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
             state.set_phase(BootPhase::Ready, ready, "");
             // 唤醒可能阻塞在错误页等待的 boot_loop，让其重入引导（复用本服务）进入看门狗
             state.signal_retry();
-            let target = resume_url
-                .and_then(|url| remap_service_url(&url, config.port))
-                .unwrap_or_else(|| config.web_url());
+            // 新版 dsh 的 token 交换只接受根路径：端口未变时优先恢复原页面
+            // （同源会话 cookie 仍有效）；端口变了 cookie 随之失效，改为带
+            // token 从根路径重新进入。无 token（旧版）维持原恢复逻辑。
+            let fresh = state.config();
+            let port_unchanged = resume_url
+                .as_deref()
+                .and_then(|url| url::Url::parse(url).ok())
+                .is_none_or(|parsed| parsed.port() == Some(fresh.port));
+            let target = match resume_url.and_then(|url| remap_service_url(&url, fresh.port)) {
+                Some(url) if port_unchanged || fresh.auth_token.is_none() => url,
+                _ => fresh.web_page_url(),
+            };
             dsh::reenter_web_app(app, &target);
         }
         Err(msg) => {

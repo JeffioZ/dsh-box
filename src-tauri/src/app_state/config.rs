@@ -18,6 +18,10 @@ pub const APP_DIR_NAME: &str = "com.deepseek.dsh-box";
 pub struct Config {
     /// dsh web 监听端口。
     pub port: u16,
+    /// 当前托管服务进程的 web 鉴权 token（新版 dsh ≥0.1.2 起 web 有进程级
+    /// 随机 token，裸 GET / 返回 401；从启动日志的 URL 行解析，每次启动
+    /// 变化。旧版无鉴权时为 None。仅运行时持有，不持久化到 config.json。
+    pub auth_token: Option<String>,
     /// 应用数据根目录（node/、dsh/、logs/、config.json、state.json 所在处）。
     pub root: PathBuf,
     /// 给 dsh 子进程的 DSH_HOME（默认官方 ~/.dsh，与官方 dsh CLI 互通；
@@ -75,6 +79,7 @@ impl Config {
         // 可选的 config.json 覆盖（环境变量优先）。
         let mut cfg = Config {
             port: DEFAULT_PORT,
+            auth_token: None,
             root,
             dsh_home,
             api_base,
@@ -237,6 +242,17 @@ impl Config {
     }
     pub fn web_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+    /// 导航/浏览器打开用的页面入口：新版 dsh 的 token 交换只接受精确
+    /// `GET /`（上游 authorizeIndex 硬约束），因此一律从根路径带 token
+    /// 进入，由服务端 303 种下会话 cookie（30 天，绑定 host:port）；
+    /// 旧版无 token 时与 web_url 完全一致。origin 比较场景（CORS 白名单、
+    /// is_dsh_url）仍应用 web_url——Origin 头不含路径与查询。
+    pub fn web_page_url(&self) -> String {
+        match &self.auth_token {
+            Some(token) => format!("http://127.0.0.1:{}/?token={}", self.port, token),
+            None => self.web_url(),
+        }
     }
 
     /// dsh 主目录（DSH_HOME）：默认官方 ~/.dsh，与官方 dsh CLI 互通；

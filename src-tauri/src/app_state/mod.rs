@@ -755,6 +755,12 @@ impl AppState {
         self.lock_inner().config.port = port;
     }
 
+    /// 当前托管服务进程的 web 鉴权 token（新版 dsh 进程级随机，随每次
+    /// 启动从日志解析更新；服务停止后由新一次启动覆盖，无需单独清理）。
+    pub fn set_auth_token(&self, token: Option<String>) {
+        self.lock_inner().config.auth_token = token;
+    }
+
     pub fn managed_port_preference(&self) -> u16 {
         self.lock_inner().managed_port_preference
     }

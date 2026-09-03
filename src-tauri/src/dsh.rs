@@ -356,10 +356,12 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         crate::logging::log("boot: 更新流程进行中，跳过本轮引导（看门狗会持续监控）");
         return Ok(());
     }
-    if state.has_running_process()
-        && state.managed_process_exit()?.is_none()
-        && health_check(config.port)
-    {
+    if state.has_running_process() && state.managed_process_exit()?.is_none() && {
+        // 端口与 token 都取新鲜快照：并发路径（更新重启等）可能经
+        // `--port 0` 换过端口，函数开头的 config 快照会指向旧端口
+        let fresh = state.config();
+        health_check(fresh.port, fresh.auth_token.as_deref())
+    } {
         crate::logging::log("boot: 服务已由并发路径就绪，直接复用");
         let ready = crate::locale::text("已就绪", "Ready");
         state.set_phase(BootPhase::Ready, ready, "");
@@ -374,7 +376,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
             return Ok(());
         }
         finish_managed_onboarding(app, &state, &config, was_onboarding)?;
-        enter_web_app(app, &config.web_url());
+        enter_web_app(app, &state.config().web_page_url());
         crate::plugins::start_market_bootstrap(app.clone());
         crate::updater::silent_check(app);
         return Ok(());
@@ -408,7 +410,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
-        enter_web_app(app, &config.web_url());
+        enter_web_app(app, &state.config().web_page_url());
         return Ok(());
     }
     state.clear_service_ownership();
@@ -469,7 +471,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     finish_managed_onboarding(app, &state, &config, was_onboarding)?;
-    enter_web_app(app, &config.web_url());
+    enter_web_app(app, &state.config().web_page_url());
     // 初始托管启动时后台维护线程已在等待；从外部服务切回本地时，原线程
     // 已按归属边界退出，这里负责重新启动且内部有单实例门控。
     crate::plugins::start_market_bootstrap(app.clone());
@@ -631,7 +633,9 @@ fn choose_external_service(
 /// instanceId，cwd/home 只能用于“是否还是同一候选”的稳定指纹，不能据此
 /// 宣称两套进程共享数据目录。
 pub(crate) fn describe_dsh(port: u16) -> Option<ExternalServiceCandidate> {
-    if !health_check(port) {
+    // 外部服务持有自己的 token（打印在它的控制台），DSHBox 无从获取，
+    // 只能做无凭据探测；新版 dsh 外部服务会因此探测失败（已知限制）。
+    if !health_check(port, None) {
         return None;
     }
     let url = format!("http://127.0.0.1:{port}/api/host.describe");
@@ -734,18 +738,32 @@ fn start_and_wait_managed_inner(
     let log_offset = started.log_offset;
     state.set_running(started.child, started.guard);
     let mut actual_port = (config.port != 0).then_some(config.port);
+    let mut auth_token: Option<String> = None;
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        if actual_port.is_none() {
-            actual_port = parse_server_port(&read_log_since(&config.dsh_log(), log_offset));
-            if let Some(port) = actual_port {
-                state.set_port(port);
-                crate::logging::log(&format!("dsh: 操作系统分配端口 {port}"));
+        // token 行可能晚于端口行打印：拿到 token 前每轮都读日志段；
+        // token 是进程级常量，取到后不再读（读的是本次启动的输出段，
+        // 不会混入上一进程的旧值）
+        if actual_port.is_none() || auth_token.is_none() {
+            let log = read_log_since(&config.dsh_log(), log_offset);
+            if actual_port.is_none() {
+                actual_port = parse_server_port(&log);
+                if let Some(port) = actual_port {
+                    state.set_port(port);
+                    crate::logging::log(&format!("dsh: 操作系统分配端口 {port}"));
+                }
+            }
+            if auth_token.is_none() {
+                auth_token = parse_server_token(&log);
             }
         }
-        if actual_port.is_some_and(health_check) {
-            crate::plugins::clear_resolved_install_marker(config);
-            return Ok(actual_port.expect("checked above"));
+        if let Some(port) = actual_port {
+            if health_check(port, auth_token.as_deref()) {
+                // 供后续看门狗/心跳/重启与导航使用（与 set_port 同步的伴生状态）
+                state.set_auth_token(auth_token.clone());
+                crate::plugins::clear_resolved_install_marker(config);
+                return Ok(port);
+            }
         }
         if let Some(status) = state.managed_process_exit()? {
             let log = read_log_since(&config.dsh_log(), log_offset);
@@ -888,21 +906,48 @@ fn read_log_since(path: &std::path::Path, offset: u64) -> String {
     text
 }
 
-fn parse_server_port(log: &str) -> Option<u16> {
-    const PREFIXES: [&str; 2] = ["dsh web: http://127.0.0.1:", "dsh web: http://localhost:"];
-    // 日志由 dsh 进程并发追加，读到的末尾可能是尚未写完的半行；只解析以
-    // 换行结尾的完整行，避免把撕裂行里的残缺端口写入 actual_port。
+/// dsh 启动日志中服务 URL 行的固定前缀（端口与 token 解析共用）。
+const SERVER_URL_PREFIXES: [&str; 2] = ["dsh web: http://127.0.0.1:", "dsh web: http://localhost:"];
+
+/// 只保留以换行结尾的完整行：日志由进程并发追加，末尾可能是尚未写完的
+/// 半行，撕裂行里的残缺端口/token 不能采信。
+fn complete_log_lines(log: &str) -> std::str::Lines<'_> {
     let complete = match log.rfind('\n') {
         Some(pos) => &log[..=pos],
         None => "",
     };
-    complete.lines().find_map(|line| {
-        PREFIXES.iter().find_map(|prefix| {
+    complete.lines()
+}
+
+fn parse_server_port(log: &str) -> Option<u16> {
+    complete_log_lines(log).find_map(|line| {
+        SERVER_URL_PREFIXES.iter().find_map(|prefix| {
             let rest = line.trim().strip_prefix(prefix)?;
             let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
             digits.parse::<u16>().ok().filter(|port| *port != 0)
         })
     })
+}
+
+/// 从 dsh 启动日志解析当前进程的 web 鉴权 token。新版 dsh（≥0.1.2）的
+/// URL 行携带 `?token=<base64url>`，token 为进程级随机值、每次启动变化；
+/// 旧版无鉴权时不出现 token（偶发的浏览器打开 token 行也兼容）。取最后
+/// 一条完整行，避免采到撕裂半行；解析范围由调用方的 log_offset 限定在
+/// 当前进程输出内，不会混入上一次启动的旧 token。
+pub(crate) fn parse_server_token(log: &str) -> Option<String> {
+    complete_log_lines(log)
+        .filter_map(|line| {
+            SERVER_URL_PREFIXES.iter().find_map(|prefix| {
+                let rest = line.trim().strip_prefix(prefix)?;
+                let token = rest.split_once("?token=")?.1;
+                let token = token
+                    .split(['&', ' ', '\r', '\t'])
+                    .next()
+                    .unwrap_or_default();
+                (!token.is_empty()).then(|| token.to_string())
+            })
+        })
+        .next_back()
 }
 
 fn log_tail(log: &str) -> String {
@@ -1067,18 +1112,23 @@ fn watchdog(app: &AppHandle) {
                     break;
                 }
                 WatchdogAction::CheckService => {
-                    let port = state.config().port;
+                    let config = state.config();
+                    let port = config.port;
                     // 外部服务没有子进程可查，只看健康检查；托管服务进程
-                    // 退出即视为失败
+                    // 退出即视为失败。token 只对托管服务有意义（外部服务
+                    // 拿不到，config 中亦为 None，退化为无凭据探测）。
+                    let token = (state.service_ownership() == ServiceOwnership::Managed)
+                        .then_some(config.auth_token.as_deref())
+                        .flatten();
                     service_failed =
                         Some(if state.service_ownership() == ServiceOwnership::Managed {
                             state
                                 .managed_process_exit()
                                 .map(|status| status.is_some())
                                 .unwrap_or(true)
-                                || !health_check(port)
+                                || !health_check(port, token)
                         } else {
-                            !health_check(port)
+                            !health_check(port, token)
                         });
                 }
                 WatchdogAction::ContinueCounting => {
@@ -1166,7 +1216,10 @@ pub(crate) fn port_availability(port: u16) -> PortAvailability {
 }
 
 /// 验证端口上的服务确实是 dsh Web UI，而不只是任意 TCP 监听者。
-pub(crate) fn health_check(port: u16) -> bool {
+/// `token`：新版 dsh（≥0.1.2）的进程级 web 鉴权 token；有值时请求
+/// `/?token=`，token 交换成功（303 + 种下 dsh-auth cookie）即视为健康。
+/// None（旧版无鉴权 / 外部服务无凭据）维持裸 `GET /` 的标题判定。
+pub(crate) fn health_check(port: u16, token: Option<&str>) -> bool {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
 
@@ -1179,8 +1232,12 @@ pub(crate) fn health_check(port: u16) -> bool {
     let timeout = Some(Duration::from_millis(2000));
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
+    let target = match token {
+        Some(token) => format!("/?token={token}"),
+        None => "/".to_string(),
+    };
     let request = format!(
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/html\r\nConnection: close\r\n\r\n"
+        "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/html\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
@@ -1203,7 +1260,7 @@ pub(crate) fn health_check(port: u16) -> bool {
             Err(_) => return false,
         }
     }
-    is_dsh_response(&response)
+    is_dsh_response(&response) || (token.is_some() && is_token_exchange_response(&response))
 }
 
 fn is_dsh_response(response: &[u8]) -> bool {
@@ -1213,6 +1270,17 @@ fn is_dsh_response(response: &[u8]) -> bool {
         && response
             .windows(MARKER.len())
             .any(|window| window == MARKER)
+}
+
+/// token 交换成功的最小判定：303 重定向到 `/` 并种下 `dsh-auth-*` 会话
+/// cookie（上游 browser-auth authorizeIndex 的既定行为）。401（token
+/// 错误/过期）与其他状态一律不视为健康。
+fn is_token_exchange_response(response: &[u8]) -> bool {
+    if !(response.starts_with(b"HTTP/1.1 303 ") || response.starts_with(b"HTTP/1.0 303 ")) {
+        return false;
+    }
+    let head = String::from_utf8_lossy(&response[..response.len().min(4096)]).to_ascii_lowercase();
+    head.contains("set-cookie: dsh-auth-")
 }
 
 #[cfg(test)]
@@ -1235,6 +1303,43 @@ mod tests {
             onboarding_wait_decision(true, true, true, false),
             OnboardingWaitAction::Proceed
         );
+    }
+
+    #[test]
+    fn parse_server_token_reads_last_complete_token_line() {
+        // 新版 URL 行带 token；旧版裸 URL 行不含 token（跳过）
+        assert_eq!(
+            super::parse_server_token("dsh web: http://127.0.0.1:18080\nnoise\ndsh web: http://127.0.0.1:18080/?token=abc_DEF-123\n"),
+            Some("abc_DEF-123".into())
+        );
+        // localhost 前缀与多 token 行取最后一条
+        assert_eq!(
+            super::parse_server_token(
+                "dsh web: http://localhost:3080/?token=first\ndsh web: http://localhost:3080/?token=second\n"
+            ),
+            Some("second".into())
+        );
+        // 撕裂半行（无结尾换行）不采信；纯旧版日志返回 None
+        assert_eq!(
+            super::parse_server_token("dsh web: http://127.0.0.1:18080/?token=torn"),
+            None
+        );
+        assert_eq!(
+            super::parse_server_token("dsh web: http://127.0.0.1:18080\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn token_exchange_response_requires_303_and_auth_cookie() {
+        let ok = b"HTTP/1.1 303 See Other\r\nset-cookie: dsh-auth-xyz=v1.sig; Path=/\r\nlocation: /\r\n\r\n";
+        assert!(super::is_token_exchange_response(ok));
+        // 401（token 错误/过期）不能视为健康
+        let unauthorized = b"HTTP/1.1 401 Unauthorized\r\ncontent-type: text/plain\r\n\r\ndsh web authentication required";
+        assert!(!super::is_token_exchange_response(unauthorized));
+        // 303 但没有 dsh-auth cookie（非 dsh 服务）不视为健康
+        let bare_redirect = b"HTTP/1.1 303 See Other\r\nlocation: /\r\n\r\n";
+        assert!(!super::is_token_exchange_response(bare_redirect));
     }
 
     #[test]
