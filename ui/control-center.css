@@ -120,7 +120,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .v-arrow { color: var(--dshd-text-dim); margin: 0 4px; font-size: 11px; }
 .v-latest { color: var(--dshd-success-text); font-weight: 600; margin-left: 2px; }
 .v-ok { color: var(--dshd-text-dim); font-size: 11px; margin-left: 6px; }
-.msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.msg { margin-top: 10px; font-size: 12px; color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-variant-numeric: tabular-nums; }
 .msg.success { color: var(--dshd-success-text); }
 .msg.error { color: var(--dshd-error-text); }
 .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
@@ -456,12 +456,25 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-limit-field {
   display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
-#settings-usage-limit { width: 88px; text-align: right; }
-.usage-limit-unit { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; }
+/* 错误 div 插在两个 .srow 之间会打断 .srow + .srow 的行距链
+   （display:none 的节点仍占 DOM 兄弟位，其 margin 也不生效），
+   行距改挂在错误 div 后面的 .srow 上，与 6px 全局行距一致 */
+.usage-limit-error + .srow { margin-top: 6px; }
 .usage-limit-error {
   margin: 4px 2px 0; font-size: 12px; line-height: 18px;
   color: var(--dshd-error-text);
 }
+/* 宽度按满值 7 位数字（1,000,000）+ 左右内边距算：约 52px 文字 + 20px padding，
+   去 spin 箭头后不再预留按钮空间 */
+#settings-usage-limit {
+  width: 72px; text-align: right;
+  -moz-appearance: textfield; appearance: textfield;
+}
+/* 隐藏原生数字 spin 箭头（不适配深色，且窄输入框内挤占空间），
+   保留 type=number 的输入法/校验语义，纯键盘输入 */
+#settings-usage-limit::-webkit-outer-spin-button,
+#settings-usage-limit::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.usage-limit-unit { font-size: 12px; color: var(--dshd-text-dim); white-space: nowrap; }
 #settings-usage-limit[aria-invalid='true'] { border-color: var(--dshd-error-text); }
 /* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
 .mi-box { margin-top: 8px; }

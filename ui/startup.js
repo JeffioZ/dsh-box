@@ -89,9 +89,18 @@ function phaseDisplay(phase, message, onboarding) {
   return (message && message.length) ? message : phaseText(phase);
 }
 
+// 步骤计数只属于安装流程（第 1/2 步只在 installing-* 阶段出现）：
+// 普通启动没有安装步骤，直接显示"第 3/3 步"语义错误；只有本次
+// 启动确实经历过安装阶段后，starting-server 才续上第 3 步。
+let installStepsSeen = false;
 function statusDetail(payload) {
   const STEP_OF = { 'installing-node': 1, 'installing-dsh': 2, 'starting-server': 3 };
-  const step = STEP_OF[payload.phase];
+  if (payload.phase === 'installing-node' || payload.phase === 'installing-dsh') {
+    installStepsSeen = true;
+  }
+  const showStep = STEP_OF[payload.phase]
+    && (payload.phase !== 'starting-server' || installStepsSeen);
+  const step = showStep ? STEP_OF[payload.phase] : 0;
   const stepLine = step ? dshdT('stepOf', { n: step, total: 3 }) : '';
   return stepLine
     ? (stepLine + (payload.detail ? ' · ' + payload.detail : ''))

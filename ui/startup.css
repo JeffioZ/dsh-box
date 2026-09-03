@@ -55,7 +55,10 @@ body.fade-out { opacity: 0; }
 .status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 14px; min-height: 20px; }
 #status-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-detail {
-  text-align: center; font-size: 12px; color: var(--muted); min-height: 16px;
+  text-align: center; font-size: 12px; color: var(--muted);
+  /* 占位高等于文字行盒（12px×1.5=18px）：16px 会在空→有文字时
+     撑高 2px，垂直居中的卡片整体被推移 */
+  min-height: 18px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
@@ -120,7 +123,9 @@ body.fade-out { opacity: 0; }
 .service-choice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .service-choice-feedback { color: var(--red); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .update-box { width: 100%; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.update-line { font-size: 12px; color: var(--muted); }
+/* 下载进度文案带百分比/MB 数值：tabular 等宽数字 + 居中布局下数值
+   位宽变化会引起整体横向跳动，等宽至少消除逐帧抖动 */
+.update-line { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .update-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 
 .btn {
@@ -359,6 +364,9 @@ body.fade-out { opacity: 0; }
 /* ready 态状态文案：字体字号对齐标题层级，颜色仅用成功色提醒，不改布局 */
 .state-ready {
   font-size: 16px !important;
+  /* 行盒高度对齐基础态（14px/1.5=21px）：不加会从 21 撑到 24px，
+     ready 切换瞬间进度区整体向下跳一下 */
+  line-height: 21px;
   font-weight: 600;
   color: var(--green) !important;
 }
