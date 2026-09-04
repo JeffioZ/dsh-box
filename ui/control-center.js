@@ -167,29 +167,35 @@ function clearUsageLoadDelay() {
   usageLoadTimer = 0;
 }
 
-async function renderUsagePage() {
+async function renderUsagePage(keep) {
   const seq = ++usageSeq;
   clearUsageLoadDelay();
   const body = $('body');
-  body.innerHTML =
-    '<div class="usage-wrap">' +
-    '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
-    '<div class="usage-h-row">' +
-    '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTokenSection') + '</h3>' +
-    '<div class="usage-export-dd">' +
-    '<button type="button" class="usage-export-btn" aria-haspopup="menu" aria-expanded="false">' +
-    '<span class="lb">' + dshdT('usageExport') + '</span>' +
-    dshdIcon('chevronDown', 'aria-hidden="true"') +
-    '</button>' +
-    '<div class="usage-export-menu dshd-menu-surface dshd-menu-motion" role="menu" hidden></div>' +
-    '</div>' +
-    '</div>' +
-    '<div class="usage-summary" id="usage-summary"></div>' +
-    '</section>' +
-    '<div class="usage-load" id="usage-load" role="status" aria-live="polite" hidden><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
-    '</div>';
-  setupUsageExportMenu();
-  showUsageLoadDelayed();
+  // keep（手动刷新）：已有内容原地保留作加载占位，不重置骨架、不重绑导出
+  // 菜单；仅当前一次渲染从未产出数据（骨架/报错态）时才保留慢路径 spinner
+  const wrap = body.querySelector('.usage-wrap');
+  const summaryFilled = !!(wrap && $('usage-summary') && $('usage-summary').childElementCount);
+  if (!wrap) {
+    body.innerHTML =
+      '<div class="usage-wrap">' +
+      '<section class="usage-card" aria-labelledby="usage-summary-heading">' +
+      '<div class="usage-h-row">' +
+      '<h3 id="usage-summary-heading" class="usage-h">' + dshdT('usageTokenSection') + '</h3>' +
+      '<div class="usage-export-dd">' +
+      '<button type="button" class="usage-export-btn" aria-haspopup="menu" aria-expanded="false">' +
+      '<span class="lb">' + dshdT('usageExport') + '</span>' +
+      dshdIcon('chevronDown', 'aria-hidden="true"') +
+      '</button>' +
+      '<div class="usage-export-menu dshd-menu-surface dshd-menu-motion" role="menu" hidden></div>' +
+      '</div>' +
+      '</div>' +
+      '<div class="usage-summary" id="usage-summary"></div>' +
+      '</section>' +
+      '<div class="usage-load" id="usage-load" role="status" aria-live="polite" hidden><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
+      '</div>';
+    setupUsageExportMenu();
+  }
+  if (!summaryFilled) showUsageLoadDelayed();
   try {
     // 预测读后台缓存（预警任务每 10 分钟刷新），失败静默为 null 不影响主报表
     const [report, prediction] = await Promise.all([
@@ -204,6 +210,8 @@ async function renderUsagePage() {
     clearUsageLoadDelay();
     const load = $('usage-load');
     if (load) { load.hidden = false; load.className = 'usage-load err'; load.textContent = dshdT('usageFailed') + ': ' + e; }
+    // keep 路径成功渲染过就没有 load 槽位：报错走 toast，不清掉正在展示的数据
+    else dshdToast(dshdT('usageFailed') + ': ' + e, { kind: 'err' });
   }
 }
 
@@ -281,8 +289,15 @@ function renderUsageReport(report, seq, prediction) {
   applyTruncationTips(summary);
   const load = $('usage-load');
   if (load) load.remove();
+  // 区块换装：账户壳（余额卡与「更新于」槽）原位保留——它是唯一异步填充的
+  // 区块，拆掉重建会在取数间隙闪空；其余区块同步重建且与拆除同任务完成，
+  // 单次绘制无中间空白帧。首次渲染时 wrap 只有骨架，循环为空操作。
+  const accShell = wrap.querySelector('[aria-labelledby="usage-accounts-heading"]');
+  while (wrap.children.length > 1 && wrap.lastElementChild !== accShell) {
+    wrap.lastElementChild.remove();
+  }
   // 区块顺序：账户（余额/订阅）最常看 → 每日用量热图 → 最近 14 天 → 模型下钻。
-  renderAccountsSection(wrap, seq);
+  renderAccountsSection(wrap, seq, accShell);
   renderHeatmap(wrap, report);
   renderRecentDays(wrap, report);
   renderModelBreakdown(wrap, report);
@@ -636,19 +651,27 @@ function renderModelBreakdown(wrap, report) {
   applyTruncationTips(wrap);
 }
 
-async function renderAccountsSection(wrap, seq) {
-  const section = document.createElement('section');
-  section.className = 'usage-card';
-  section.setAttribute('aria-labelledby', 'usage-accounts-heading');
-  section.innerHTML =
-    '<div class="usage-acc-head-row">' +
-    '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3>' +
-    '<span class="usage-upd" id="usage-upd"></span>' +
-    '</div><div class="usage-accounts" role="status" aria-live="polite"></div>';
-  wrap.appendChild(section);
+async function renderAccountsSection(wrap, seq, reuse) {
+  // reuse（刷新路径）：账户壳已在 wrap 原位，直接复用；首次渲染新建。
+  // 壳内卡片区始终由快照整建（renderAccountCards 开头清空），壳本身
+  // 结构不随数据变化，复用不会残留旧结构
+  const section = reuse || document.createElement('section');
+  if (!reuse) {
+    section.className = 'usage-card';
+    section.setAttribute('aria-labelledby', 'usage-accounts-heading');
+    section.innerHTML =
+      '<div class="usage-acc-head-row">' +
+      '<h3 id="usage-accounts-heading" class="usage-h">' + dshdT('usageProviders') + '</h3>' +
+      '<span class="usage-upd" id="usage-upd"></span>' +
+      '</div><div class="usage-accounts" role="status" aria-live="polite"></div>';
+    wrap.appendChild(section);
+  }
   ensureUsageAccountsListener();
   const box = section.querySelector('.usage-accounts');
-  box.innerHTML = '<span class="usage-empty"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
+  // 「查询余额中」占位只给空盒：刷新路径沿用旧卡作占位，避免卡片闪断
+  if (!box.childElementCount) {
+    box.innerHTML = '<span class="usage-empty"><span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance') + '</span>';
+  }
   try {
     // 当前会话上下文与账户/订阅并行拉取：单次渲染无竞态（若先渲染快照再
     // 异步补标注，晚到的事件推送会被旧快照回写覆盖）；命令失败静默为 null
@@ -1682,26 +1705,41 @@ setInterval(pollDialogState, 1500);
 
 $('btn-x').addEventListener('click', close);
 // 用量页刷新（唯一刷新入口）：先触发 Rust 账户后台全量刷新（失败静默），
-// 再整页重载；转圈至 usage-accounts-updated 事件到达（至少 900ms 防抖），
-// 命令失败立即收尾，事件丢失或后台异常时 30s 超时兜底，期间禁用防连点。
+// 再原位重载（旧内容保留作加载占位，数据到达后同任务换装，不整页重建）；
+// 转圈至 usage-accounts-updated 事件到达（至少 900ms 防抖），成功收尾出
+// 轻量确认 toast；命令失败立即静默收尾，事件丢失或后台异常时 30s 超时
+// 兜底（行内提示），期间禁用防连点。
 let usageRefreshBusy = false;
 let usageRefreshTimer = null;
 let usageRefreshStart = 0;
+let usageRefreshFinishing = false;
 function setUsageRefreshBusy(busy) {
   usageRefreshBusy = busy;
+  // 复位时一并清「收尾中」：切页/关窗经 set(false) 直接中断在途收尾，
+  // 不清会把下一次刷新卡在早退上
+  if (!busy) usageRefreshFinishing = false;
   const button = $('btn-refresh');
   if (!button) return;
   button.classList.toggle('refreshing', busy);
   button.disabled = busy;
   button.toggleAttribute('aria-busy', busy);
 }
-function finishUsageRefresh(timedOut) {
-  if (!usageRefreshBusy) return;
+function finishUsageRefresh(timedOut, silent) {
+  // 收尾中再触发（事件连发、命令失败与事件竞速）只认首个：避免重复
+  // 排程收尾与重复 toast
+  if (!usageRefreshBusy || usageRefreshFinishing) return;
+  usageRefreshFinishing = true;
   clearTimeout(usageRefreshTimer);
   usageRefreshTimer = null;
   const wait = Math.max(0, 900 - (Date.now() - usageRefreshStart));
   setTimeout(() => {
     setUsageRefreshBusy(false);
+    // 成功收尾给轻量确认（静默完成不可感知）；仅在用量页仍打开时提示，
+    // 免得切页/关窗后补一声。silent=命令失败静默收尾、timedOut=超时
+    // （已有 usage-upd 行内提示），都不出成功 toast
+    if (!timedOut && !silent && openKind === 'usage') {
+      dshdToast(dshdT('usageRefreshed'), { kind: 'ok' });
+    }
     // 30s 超时兜底触发：事件丢失/后台异常时不得静默收场，在「更新于」
     // 槽位短暂提示失败并保留原快照（4s 后还原上次更新时间）
     if (!timedOut) return;
@@ -1725,8 +1763,8 @@ $('btn-refresh').addEventListener('click', () => {
   usageRefreshStart = Date.now();
   clearTimeout(usageRefreshTimer);
   usageRefreshTimer = setTimeout(() => finishUsageRefresh(true), 30000);
-  invoke('usage_accounts_refresh').catch(() => finishUsageRefresh());
-  renderUsagePage();
+  invoke('usage_accounts_refresh').catch(() => finishUsageRefresh(false, true));
+  renderUsagePage(true);
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') close();

@@ -65,6 +65,7 @@ const DSHD_MESSAGES = {
   usageFailed: ['读取用量失败', 'Could not load usage'],
   usageRefresh: ['刷新', 'Refresh'],
   usageRefreshTimeout: ['刷新超时，显示缓存数据', 'Refresh timed out; showing cached data'],
+  usageRefreshed: ['数据已更新', 'Data updated'],
   usageLastSuccessAt: ['上次成功 {time}', 'Last success {time}'],
   usageStaleGeneric: ['刷新失败，显示上次数据', 'Refresh failed; showing the last data'],
   usageWarnLow: ['余量偏低（剩余 ≤30%）', 'Running low (≤30% remaining)'],
