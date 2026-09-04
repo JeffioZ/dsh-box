@@ -5,6 +5,10 @@
 //! - 自定义/目录路由：`llm-pi-ai.providers` 字典的每个键（`displayName`、
 //!   `apiKeyEnv`、`baseURL`）。
 //!
+//! `providers` 值支持块式（缩进）与流式（花括号）两种 YAML 写法：dsh 的
+//! settings 写盘器按注释保留式 patch 重写、原样保留既有节点风格，手写或
+//! 编辑器格式化引入的流式块会长期合法存在。
+//!
 //! 只读文件，不写回。凭据引用只是环境变量名（或 `.credentials.yaml` 键），
 //! 绝不在此落盘任何密钥。
 
@@ -122,12 +126,14 @@ pub fn configured_routes(config: &Config) -> Vec<ProviderRoute> {
     out
 }
 
-/// 是否为 `providers:` 键行（允许行内注释；content 已去行首空白）。
-/// 借鉴 model_config 的同名判定；跨模块私用不可取，保留本地简化副本。
+/// 是否为 `providers:` 键行（允许行内注释与行内流式 `{` 值；content 已去
+/// 行首空白）。借鉴 model_config 的同名判定；跨模块私用不可取，保留本地
+/// 简化副本。
 fn is_providers_key(content: &str) -> bool {
     content.strip_prefix("providers:").is_some_and(|rest| {
         let rest = rest.trim_start();
-        rest.is_empty() || rest.starts_with('#')
+        // 空/注释 = 块式（花括号值可能在下一行）；`{` 起为行内流式值
+        rest.is_empty() || rest.starts_with('#') || rest.starts_with('{')
     })
 }
 
@@ -162,6 +168,11 @@ fn extract_providers_block(
         .iter()
         .position(|l| is_providers_key(l.trim_start()))?;
     let p_indent = indent_of(lines[p_pos]);
+    // 流式（花括号）值优先：行内 `providers: {` 或键行之后首行以 `{` 开头。
+    // 收集不到（块式）则继续走下方行级块式解析。
+    if let Some(flow) = collect_flow_map_text(&lines, p_pos, p_indent) {
+        return parse_flow_providers(&flow);
+    }
     // providers 块：键之后、缩进回到 providers 键层级之前（空行/注释不终结块）。
     let block: Vec<&str> = lines[p_pos + 1..]
         .iter()
@@ -228,6 +239,160 @@ fn extract_providers_block(
         None
     } else {
         Some(out)
+    }
+}
+
+/// 从 `providers:` 键行起收集流式 map 的完整文本（含外层花括号）。起点为
+/// 键行行内 `{`，或其后首条（缩进深于键行、非空非注释）以 `{` 开头的行；
+/// 字符级扫描，引号内的括号不计深度，外层花括号闭合即止。块式或花括号
+/// 在段内未闭合（畸形）返回 None。
+fn collect_flow_map_text(lines: &[&str], key_pos: usize, key_indent: usize) -> Option<String> {
+    let mut start: Option<(usize, usize)> = None; // (行号, `{` 的字节偏移)
+    let inline_rest = lines[key_pos].trim_start().strip_prefix("providers:")?;
+    if let Some(off) = inline_rest.find('{') {
+        let prefix_len = lines[key_pos].len() - inline_rest.len();
+        start = Some((key_pos, prefix_len + off));
+    } else {
+        for (i, line) in lines.iter().enumerate().skip(key_pos + 1) {
+            let content = line.trim_start();
+            if content.is_empty() || content.starts_with('#') {
+                continue;
+            }
+            if content.starts_with('{') && line.len() - content.len() > key_indent {
+                start = Some((i, line.len() - content.len()));
+            }
+            break; // 首条内容行不是 `{` 开头即为块式
+        }
+    }
+    let (first_line, first_off) = start?;
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate().skip(first_line) {
+        for (byte, ch) in line.char_indices() {
+            if i == first_line && byte < first_off {
+                continue;
+            }
+            out.push(ch);
+            if let Some(q) = quote {
+                if escaped {
+                    escaped = false;
+                } else if q == '"' && ch == '\\' {
+                    escaped = true;
+                } else if ch == q {
+                    quote = None;
+                }
+                continue;
+            }
+            match ch {
+                '"' | '\'' => quote = Some(ch),
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push('\n');
+    }
+    None
+}
+
+/// 解析 providers 的流式 map 文本（`{`…`}` 已含）：路由 → 字段 map。只取
+/// `displayName` / `apiKeyEnv` / `baseURL` 三个标量字段；`models` 等嵌套
+/// 集合由条目切分的括号深度感知自然跳过。路由值为 `null`/`~`/空时按
+/// 「无字段路由」计入（与块式同语义）；非 map 非空的畸形值跳过该路由。
+fn parse_flow_providers(
+    text: &str,
+) -> Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>> {
+    let inner = text.trim().strip_prefix('{')?.strip_suffix('}')?;
+    let mut out = std::collections::BTreeMap::new();
+    for entry in split_flow_entries(inner) {
+        let (key, value) = entry.split_once(':')?;
+        let value = value.trim();
+        let fields_text = if value.starts_with('{') && value.ends_with('}') {
+            &value[1..value.len() - 1]
+        } else if value.is_empty() || value == "null" || value == "~" {
+            ""
+        } else {
+            continue;
+        };
+        let key = unquote_flow_scalar(key.trim());
+        if key.is_empty() {
+            continue;
+        }
+        let mut fields = std::collections::BTreeMap::new();
+        for field in split_flow_entries(fields_text) {
+            let Some((name, raw)) = field.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            if matches!(name, "displayName" | "apiKeyEnv" | "baseURL") {
+                if let Some(v) = scalar_value(raw) {
+                    fields.insert(name.to_string(), v);
+                }
+            }
+        }
+        out.insert(key, fields);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// 按深度 0 的逗号切分流式集合条目；引号内与嵌套 `{}`/`[]` 内的逗号不切。
+/// 返回各条目原文（保留内部空白，含换行）。
+fn split_flow_entries(text: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in text.chars() {
+        if let Some(q) = quote {
+            cur.push(ch);
+            if escaped {
+                escaped = false;
+            } else if q == '"' && ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                cur.push(ch);
+            }
+            '{' | '[' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            '}' | ']' => {
+                depth -= 1;
+                cur.push(ch);
+            }
+            ',' if depth == 0 => parts.push(std::mem::take(&mut cur)),
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() {
+        parts.push(cur);
+    }
+    parts.retain(|p| !p.trim().is_empty());
+    parts
+}
+
+/// 流式键/标量去一层成对引号（块式 `scalar_value` 的键用简化版）。
+fn unquote_flow_scalar(s: &str) -> String {
+    let paired = |v: &str, q: char| v.len() >= 2 && v.starts_with(q) && v.ends_with(q);
+    if paired(s, '"') || paired(s, '\'') {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
     }
 }
 
@@ -307,6 +472,78 @@ llm-pi-ai:\n  providers:\n    gateway:\n      baseURL: https://x.example.com # �
         let gateway = providers.get("gateway").unwrap();
         assert_eq!(gateway.get("baseURL").unwrap(), "https://x.example.com");
         assert_eq!(gateway.get("apiKeyEnv").unwrap(), "abc#def");
+    }
+
+    #[test]
+    fn extracts_flow_style_providers_multiline() {
+        // 跨行流式形态：providers 值为流式 map（dsh 写盘器原样保留既有
+        // 流式风格），含 CJK 显示名、未声明字段（api）与嵌套 models 数组
+        let text = "\
+llm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayName: 示例网关,\n          apiKeyEnv: GATEWAY_KEY,\n          api: openai-responses,\n          baseURL: https://gateway.example.com/v1,\n          models:\n            [\n              { id: model-a },\n              { id: model-b }\n            ]\n        }\n    }\n";
+        let providers = extract_providers_block(text, "llm-pi-ai").unwrap();
+        assert_eq!(providers.len(), 1);
+        let route = providers.get("gateway").unwrap();
+        assert_eq!(route.get("displayName").unwrap(), "示例网关");
+        assert_eq!(route.get("apiKeyEnv").unwrap(), "GATEWAY_KEY");
+        assert_eq!(
+            route.get("baseURL").unwrap(),
+            "https://gateway.example.com/v1"
+        );
+        // models 与未声明字段不得混入
+        assert!(!route.contains_key("models"));
+        assert!(!route.contains_key("api"));
+    }
+
+    #[test]
+    fn extracts_flow_style_providers_inline() {
+        // 行内流式：多路由、引号值、无字段路由（null 与空 map 均按块式
+        // 「无字段路由」语义计入）
+        let text = "llm-pi-ai:\n  providers: { gw: { displayName: My GW, apiKeyEnv: K, baseURL: 'https://x.example.com' }, kimi-coding: null, bare: {} }\n";
+        let providers = extract_providers_block(text, "llm-pi-ai").unwrap();
+        assert_eq!(providers.len(), 3);
+        let gw = providers.get("gw").unwrap();
+        assert_eq!(gw.get("displayName").unwrap(), "My GW");
+        assert_eq!(gw.get("baseURL").unwrap(), "https://x.example.com");
+        assert!(!providers
+            .get("kimi-coding")
+            .unwrap()
+            .contains_key("displayName"));
+        assert!(providers.get("bare").unwrap().is_empty());
+    }
+
+    #[test]
+    fn flow_style_unclosed_braces_fall_back_to_block_path() {
+        // 花括号未闭合（畸形）：流式收集失败，块式同样提取不到 → 整体
+        // 返回 None，由调用方落「未提取到自定义路由」日志
+        let text = "llm-pi-ai:\n  providers:\n    { gw: { apiKeyEnv: K\n";
+        assert!(extract_providers_block(text, "llm-pi-ai").is_none());
+    }
+
+    #[test]
+    fn configured_routes_reads_flow_style_settings() {
+        // 端到端：流式 providers 与官方 DeepSeek 路由并列产出
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-providers-flow-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = Config::load();
+        config.dsh_home = root.clone();
+        std::fs::write(
+            root.join("settings.yaml"),
+            "llm-deepseek:\n  apiKeyEnv: DEEPSEEK_API_KEY\nllm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayName: 示例网关,\n          apiKeyEnv: GATEWAY_KEY,\n          baseURL: https://gateway.example.com/v1\n        }\n    }\n",
+        )
+        .unwrap();
+        let routes = configured_routes(&config);
+        assert!(routes.iter().any(|r| r.id == "deepseek-official"));
+        let gateway = routes.iter().find(|r| r.id == "gateway").unwrap();
+        assert_eq!(gateway.display_name, "示例网关");
+        assert_eq!(gateway.api_key_env.as_deref(), Some("GATEWAY_KEY"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -249,12 +249,13 @@ fn refresh_all(config: &Config) -> AccountsPayload {
         }
     };
     let subscriptions = super::subscriptions(config);
-    // 排查日志：只记异常态（not-configured 是"没配凭据"的正常态，不记），
-    // 300s 一轮、账户数有限，量可控。error 文本截断防日志膨胀。
-    // 假数据模式含人为构造的异常态卡片，不记。
+    // 排查日志：只记异常态（not-configured 是"没配凭据"、unsupported 是
+    // "该供应商无公开余额接口"，两者均为稳态不记——unsupported 每轮都会
+    // 产生，记了就是恒定噪音），300s 一轮、账户数有限，量可控。error
+    // 文本截断防日志膨胀。假数据模式含人为构造的异常态卡片，不记。
     if !super::dev_fake::enabled() {
         for snapshot in accounts.iter() {
-            if snapshot.status != "ok" && snapshot.status != "not-configured" {
+            if !matches!(snapshot.status, "ok" | "not-configured" | "unsupported") {
                 crate::logging::log(&format!(
                     "usage: 账户查询失败 id={} adapter={} status={} error={}",
                     snapshot.id,
@@ -265,7 +266,7 @@ fn refresh_all(config: &Config) -> AccountsPayload {
             }
         }
         for snapshot in subscriptions.iter() {
-            if snapshot.status != "ok" && snapshot.status != "not-configured" {
+            if !matches!(snapshot.status, "ok" | "not-configured" | "unsupported") {
                 crate::logging::log(&format!(
                     "usage: 订阅查询失败 id={} adapter={} status={} error={}",
                     snapshot.id,
