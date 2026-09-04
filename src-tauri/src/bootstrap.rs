@@ -295,6 +295,13 @@ pub(crate) fn run() {
             // （避免预创建于 setup 早期导致首次打开时的几何异步跳变）
             crate::logging::log("boot: 主窗口几何就绪，预创建弹窗");
             control_center::precreate(app.handle());
+            // dev 效果测试：经 dev-run.ps1 启动（注入 DSH_BOX_DEV_PREVIEW=1）
+            // 时依序弹出各自绘弹窗视图（模拟数据标记，不触发真实更新流程），
+            // 每弹一个等用户关闭后再弹下一个。直接双击 dev exe 与正式版一致。
+            if std::env::var("DSH_BOX_DEV_PREVIEW").ok().as_deref() == Some("1") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || control_center::dev_preview_dialogs(&handle));
+            }
             // 启动后越界兜底收敛：show 时系统会对窗口几何做一次协商（本机观察
             // 约 +14w/+9h，随后稳定），协商后的尺寸即最终值——不再按保存值
             // “重新应用”：中途再 set 一次会被系统再次协商拉回，形成 loading
@@ -501,6 +508,18 @@ pub(crate) fn run() {
                 }
             }
             tauri::WindowEvent::Focused(focused) => {
+                // 启动页的失焦变淡：仅在启动阶段广播——Ready 后主 webview
+                // 已导航到 dsh 页面，向其注入脚本越过了既定注入边界
+                if window.label() == MAIN_WINDOW
+                    && window.app_handle().state::<AppState>().phase()
+                        != crate::app_state::BootPhase::Ready
+                {
+                    if let Some(wv) = crate::main_webview(window.app_handle()) {
+                        let _ = wv.eval(format!(
+                            "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
+                        ));
+                    }
+                }
                 // 标题栏/状态栏失焦样式跟随主窗口焦点：子 webview 的 window
                 // focus/blur 事件与主窗口焦点并不同步（WebView2 行为），
                 // 由 Rust 侧统一广播，页面侧按此切换样式
@@ -536,6 +555,9 @@ pub(crate) fn run() {
                 if window.label() == MAIN_WINDOW =>
             {
                 titlebar::sync_bounds_for_size(window.app_handle(), *new_inner_size);
+                // 图标按 DPI 选 1:1 源图（set_window_icon）：跨不同 DPI
+                // 显示器拖动后旧源图会被放大/缩小而模糊，须随缩放变化重设
+                window::set_window_icon(window.app_handle());
             }
             tauri::WindowEvent::Resized(size) => {
                 if window.label() != MAIN_WINDOW {

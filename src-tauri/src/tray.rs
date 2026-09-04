@@ -405,16 +405,15 @@ fn pick_tray_image(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
 fn open_browser(app: &AppHandle) {
     let config = app.state::<AppState>().config();
     if !crate::dsh::health_check(config.port, config.auth_token.as_deref()) {
-        use tauri_plugin_dialog::MessageDialogKind;
-        crate::native_dialog::show_message(
+        crate::control_center::open_notice(
             app,
+            crate::locale::text("在浏览器中打开", "Open in browser"),
             crate::locale::text(
                 "dsh 服务当前未运行，无法在浏览器中打开。",
                 "The dsh service is not running, so it cannot be opened in a browser.",
             )
             .into(),
-            crate::locale::text("在浏览器中打开", "Open in browser"),
-            MessageDialogKind::Warning,
+            "warn",
         );
         return;
     }
@@ -452,31 +451,30 @@ fn open_browser(app: &AppHandle) {
 
 /// 托盘“重启服务”：启动/安装进行中拒绝，并反馈结果。
 fn restart_from_tray(app: &AppHandle) {
-    use tauri_plugin_dialog::MessageDialogKind;
     let state = app.state::<AppState>();
     if state.service_ownership().is_external() {
-        crate::native_dialog::show_message(
+        crate::control_center::open_notice(
             app,
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
             crate::locale::text(
                 "当前连接的是外部 dsh 服务，请在原服务环境中重启。",
                 "The current dsh service is external. Restart it in that service's environment.",
             )
             .into(),
-            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
-            MessageDialogKind::Info,
+            "info",
         );
         return;
     }
     if state.is_updating() {
-        crate::native_dialog::show_message(
+        crate::control_center::open_notice(
             app,
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
             crate::locale::text(
                 "更新流程正在进行，请稍后再重启。",
                 "An update is in progress. Please restart the service later.",
             )
             .into(),
-            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
-            MessageDialogKind::Warning,
+            "warn",
         );
         return;
     }
@@ -489,15 +487,15 @@ fn restart_from_tray(app: &AppHandle) {
             | crate::app_state::BootPhase::InstallingDsh
             | crate::app_state::BootPhase::StartingServer
     ) {
-        crate::native_dialog::show_message(
+        crate::control_center::open_notice(
             app,
+            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
             crate::locale::text(
                 "启动流程进行中，请稍后再试。",
                 "Startup is in progress. Please try again later.",
             )
             .into(),
-            crate::locale::text("重启 dsh 服务", "Restart dsh service"),
-            MessageDialogKind::Warning,
+            "warn",
         );
         return;
     }
@@ -524,15 +522,14 @@ fn restart_from_tray(app: &AppHandle) {
         }
         // 重启本身在内部处理成功/失败状态（失败会进错误页）；失败额外弹窗告知原因。
         if let Err(e) = crate::updater::restart_service(&handle) {
-            use tauri_plugin_dialog::MessageDialogKind;
-            crate::native_dialog::show_message(
+            crate::control_center::open_notice(
                 &handle,
+                crate::locale::text("重启 dsh 服务", "Restart dsh service"),
                 format!(
                     "{}: {e}",
                     crate::locale::text("重启 dsh 服务失败", "Failed to restart the dsh service")
                 ),
-                crate::locale::text("重启 dsh 服务", "Restart dsh service"),
-                MessageDialogKind::Warning,
+                "warn",
             );
         }
     });

@@ -294,12 +294,14 @@ fn with_directory_transaction<T>(
     Ok(())
 }
 
-/// 确保更新函数无论如何返回都会恢复更新标记。
-struct UpdatingReset<'a>(&'a AppState);
+/// 确保更新函数无论如何返回都会恢复更新标记，并兜底清除任务栏进度
+/// （各下载点已各自清除，此处覆盖异常/中断路径；幂等）。
+struct UpdatingReset<'a>(&'a AppState, &'a AppHandle);
 
 impl Drop for UpdatingReset<'_> {
     fn drop(&mut self) {
         self.0.set_updating(false);
+        crate::progress::clear(self.1);
     }
 }
 
@@ -342,7 +344,7 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         );
         return Err(msg);
     }
-    let _updating = UpdatingReset(state.inner());
+    let _updating = UpdatingReset(state.inner(), app);
     // 覆盖停止、安装、切换目录和重启的完整周期，避免与手动重启交叉执行。
     let _lifecycle = state.lifecycle_guard();
     let result = if which == "dsh" {

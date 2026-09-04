@@ -66,5 +66,10 @@ if ($serverPid) {
     Write-Host "UI 静态服务器常驻中（PID $serverPid，已记录到 $pidFile）；如需停止：Stop-Process -Id $serverPid" -ForegroundColor DarkGray
 }
 
+# dev 专属测试效果标记（自绘弹窗预览队列等，见 bootstrap.rs 的
+# DSH_BOX_DEV_PREVIEW 门控）：仅经本脚本启动的进程生效，直接双击
+# dist-dev\DSHBox-dev.exe 时与正式版行为一致
+$env:DSH_BOX_DEV_PREVIEW = '1'
+
 Write-Host "启动开发版：$exe" -ForegroundColor Cyan
 Start-Process -FilePath $exe

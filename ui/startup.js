@@ -820,3 +820,9 @@ async function init() {
 }
 
 init();
+
+// 窗口失焦变淡：Rust 侧 Focused 广播驱动（与标题栏/状态栏同一机制），
+// 仅启动阶段有效——导航到 dsh 页面后广播即停止
+window.__dshdSetWindowActive = (active) => {
+  document.body.classList.toggle('window-inactive', !active);
+};

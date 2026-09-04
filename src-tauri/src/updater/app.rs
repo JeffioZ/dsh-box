@@ -265,6 +265,8 @@ fn download_app_exe(
         return Ok(());
     }
     let result = download_app_exe_inner(app, target, release, report);
+    // 下载结束（含预下载成功待确认）：任务栏进度使命完成
+    crate::progress::clear(app);
     if result.is_err() {
         let _ = std::fs::remove_file(target);
         let _ = std::fs::remove_file(target.with_extension("exe.part"));
@@ -290,6 +292,9 @@ fn download_app_exe_inner(
     // stream_to_file 统一实施，百分比变化 + 200ms）
     let version = release.version.as_str();
     let on_progress = |done: u64, total: u64| {
+        // 任务栏进度不分交互/后台静默预下载：后台场景用户往往已切离
+        // 应用，任务栏指示恰是唯一可见渠道
+        crate::progress::set(app, done, total);
         if !report {
             return;
         }
@@ -406,33 +411,20 @@ pub(super) fn windows_replace_script(
     )
 }
 
-/// 应用已下载的更新包：确认 → 写替换脚本 → 退出（脚本替换并重启新版本）。
+/// 应用已下载的更新包：校验 → 写替换脚本 → 退出（脚本替换并重启新版本）。
+/// 确认（退出并重启）由调用链上游的自绘弹窗完成。
 #[cfg(windows)]
 fn apply_downloaded_exe(
     app: &AppHandle,
     target: &std::path::Path,
     release: &AppReleaseAsset,
 ) -> Result<(), String> {
-    // 1) 确认前再次校验，覆盖“预下载完成后文件被替换”的窗口。
+    // 1) 应用前再次校验，覆盖“预下载完成后文件被替换”的窗口。
     verify_downloaded_exe(target, &release.sha256)?;
-    // 2) 确认：更新需要退出并自动重启
-    use tauri_plugin_dialog::MessageDialogKind;
-    if !crate::native_dialog::ask(
-        app,
-        crate::locale::text(
-            "应用将退出并自动重启以完成更新。是否继续？",
-            "The app will exit and restart automatically to finish the update. Continue?",
-        )
-        .to_string(),
-        crate::locale::text("更新应用", "Update app"),
-        MessageDialogKind::Info,
-        crate::locale::text("更新并重启", "Update and restart"),
-        crate::locale::text("取消", "Cancel"),
-    ) {
-        return Ok(());
-    }
+    // 退出并重启的确认已前移到自绘弹窗（更新提示/检查更新页确认弹窗），
+    // 此处不再弹原生 msgbox 二次打扰。
 
-    // 3) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
+    // 2) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
     // File.Replace 原子替换；断电发生在提交前时旧 exe 始终保持可启动。
     let exe = std::env::current_exe().map_err(|e| {
         crate::locale::error(
@@ -454,7 +446,7 @@ fn apply_downloaded_exe(
         )
     })?;
 
-    // 4) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
+    // 3) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
     let mut replace_cmd = std::process::Command::new("powershell");
     replace_cmd
         .args([

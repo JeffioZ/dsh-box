@@ -73,17 +73,64 @@ fn dialog_card_height(app: &AppHandle) -> f64 {
         .unwrap_or(640.0)
 }
 
-/// 弹窗窗口尺寸 = 卡片 + 阴影余量。`update-prompt` 是轻量提示，
-/// 用紧凑尺寸（420×约180），其余 kind 用自适应大卡片。
-fn dialog_size(app: &AppHandle, kind: &str) -> (f64, f64) {
-    if kind == "update-prompt" {
+/// 紧凑弹窗（update-prompt / app-restart / notice）高度按文案长度自适应：
+/// CJK 感知宽度估算行数（文案列 = 400 卡片 − 左右边距 40 − 图标 34 −
+/// 间距 12 ≈ 312px，13px 字号下约 48 个半角单元/行），基准 176px 容纳
+/// 4 行，超出后每行 +20px（13px×1.55 行高），至多加 6 行；更长的内容
+/// 交由页内滚动兜底（前端按溢出切换拖动/滚动）。
+fn compact_extra_height(text: &str) -> f64 {
+    const UNITS_PER_LINE: usize = 48;
+    const BASE_LINES: usize = 4;
+    const LINE_HEIGHT: f64 = 20.0;
+    const MAX_EXTRA_LINES: usize = 6;
+    let units: usize = text
+        .chars()
+        .map(|c| if ('\u{2E80}'..).contains(&c) { 2 } else { 1 })
+        .sum();
+    let lines = units.div_ceil(UNITS_PER_LINE).max(BASE_LINES);
+    (lines - BASE_LINES).min(MAX_EXTRA_LINES) as f64 * LINE_HEIGHT
+}
+
+/// 从弹窗载荷提取紧凑尺寸的高度增量。
+/// 模板文案在前端 i18n.js，此处用版本号 + 固定长度占位串近似估算。
+fn compact_height_hint(kind: &str, initial: &serde_json::Value) -> f64 {
+    match kind {
+        "notice" => initial
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(compact_extra_height)
+            .unwrap_or(0.0),
+        "app-restart" | "update-prompt" => {
+            let version = initial
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let current = initial
+                .get("current")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            compact_extra_height(&format!(
+                "{version} {current} 新版本已就绪，将退出并自动重启完成更新，是否继续？查看更新内容"
+            ))
+        }
+        _ => 0.0,
+    }
+}
+
+/// 弹窗窗口尺寸 = 卡片 + 阴影余量。`update-prompt`、`app-restart`
+/// （更新应用确认）与 `notice`（轻量提示）是紧凑尺寸（宽 400，高按
+/// 文案自适应），其余 kind 用自适应大卡片。
+fn dialog_size(app: &AppHandle, kind: &str, compact_extra: f64) -> (f64, f64) {
+    if matches!(kind, "update-prompt" | "app-restart" | "notice") {
         // 宽度：仅容纳最长英文文案一行（约 342px @12.5px）+ 左右 padding 40px；
         // 极长版本号由 overflow-wrap 折行兜底，不为罕见冗余预留大宽度。
         const PROMPT_CARD_WIDTH: f64 = 400.0;
         const PROMPT_CARD_HEIGHT: f64 = 176.0;
+        const PROMPT_CARD_MAX_HEIGHT: f64 = 340.0;
+        let height = (PROMPT_CARD_HEIGHT + compact_extra).min(PROMPT_CARD_MAX_HEIGHT);
         return (
             PROMPT_CARD_WIDTH + SHADOW_SIDES * 2.0,
-            PROMPT_CARD_HEIGHT + SHADOW_TOP + SHADOW_BOTTOM,
+            height + SHADOW_TOP + SHADOW_BOTTOM,
         );
     }
     (
@@ -147,7 +194,7 @@ pub fn precreate(app: &AppHandle) {
     let navigation_app = app.clone();
     // 弹窗窗口 = 自适应卡片 + 自绘阴影余量；大视口仍严格对齐 dsh 的
     // width 800 / height min(800px, 100vh-48px)。
-    let (dialog_w, dialog_h) = dialog_size(app, "default");
+    let (dialog_w, dialog_h) = dialog_size(app, "default", 0.0);
     // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
     // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
     let initial_pos = main_inner_logical_rect(app).map(|rect| {
@@ -314,6 +361,8 @@ fn show_with_update_token(
                 )
         ),
     );
+    // 紧凑弹窗高度增量需在 initial 被 payload 移动前计算
+    let compact_hint = compact_height_hint(kind, &initial);
     let payload = AppDialogOpen {
         title: title.to_string(),
         kind: kind.to_string(),
@@ -345,7 +394,7 @@ fn show_with_update_token(
             crate::logging::log("app-dialog: 主窗口未呈现，已拉起后再显示弹窗");
         }
     }
-    let (ww, wh) = dialog_size(app, kind);
+    let (ww, wh) = dialog_size(app, kind, compact_hint);
     let mut pending_size = tauri::Size::Logical(tauri::LogicalSize::new(ww, wh));
     let mut pending_pos: Option<tauri::Position> = None;
     let mut center_fallback = false;
@@ -708,6 +757,30 @@ pub fn apply_update(app: &AppHandle, which: &str) {
         return;
     }
     if which == "app" {
+        // 应用更新入口分流：
+        // - 更新提示弹窗（应用更新已就绪）：按钮即“重启并更新”，已获确认，直接执行；
+        // - 检查更新页：按钮只表达更新意图，先弹自绘确认（应用将退出并重启）；
+        // - 自绘确认弹窗（app-restart）：确认按钮，直接执行。
+        // 退出并重启的确认全部走自绘弹窗，不再弹原生 msgbox。
+        match handle.state::<AppState>().dialog_kind().as_deref() {
+            Some("update-prompt") | Some("app-restart") => {}
+            Some("check") => {
+                let version = handle
+                    .state::<AppState>()
+                    .last_check()
+                    .and_then(|r| r.app)
+                    .filter(|info| info.update_available && !info.latest.is_empty())
+                    .map(|info| info.latest);
+                open_app_restart_confirm(&handle, version, false);
+                return;
+            }
+            other => {
+                crate::logging::log(&format!(
+                    "app-dialog: 忽略未知来源的应用更新请求（当前弹窗：{other:?}）"
+                ));
+                return;
+            }
+        }
         // 应用更新也是异步操作；切入统一进度页后由轮询呈现真实失败和重试信息。
         open_update_progress(&handle);
     }
@@ -728,6 +801,127 @@ pub fn apply_update(app: &AppHandle, which: &str) {
             .state::<AppState>()
             .set_update_done(ok, Some(message));
     });
+}
+
+// ---------- 更新应用确认 ----------
+
+/// 打开自绘"更新应用"确认弹窗（替代原生 msgbox：应用将退出并自动重启）。
+/// `version`：检查更新页路径可带最新版本号；dev 效果测试用 `simulated` 标记。
+pub fn open_app_restart_confirm(app: &AppHandle, version: Option<String>, simulated: bool) {
+    let mut title = crate::locale::text("更新应用", "Update app").to_string();
+    if simulated {
+        title = format!(
+            "{title}（{}）",
+            crate::locale::text("模拟数据", "Simulated")
+        );
+    }
+    show(
+        app,
+        &title,
+        "app-restart",
+        serde_json::json!({ "version": version, "simulated": simulated }),
+    );
+}
+
+/// 确认弹窗取消：不触发新检查，仅回到检查更新视图（沿用上次结果渲染）。
+pub fn open_check_view(app: &AppHandle) {
+    // nonce：返回视图的载荷可能与上次完全相同（检查结果未变），
+    // 前端 applyOpen 按载荷印章去重会跳过重渲染，确认弹窗内容残留
+    show(
+        app,
+        crate::locale::text("检查更新", "Check for updates"),
+        "check",
+        serde_json::json!({
+            "updating": app.state::<AppState>().is_updating(),
+            "nonce": app.state::<AppState>().dialog_gen(),
+        }),
+    );
+}
+
+/// 打开轻量提示弹窗（自绘，单"关闭"按钮）：替代托盘动作失败/拒绝类
+/// 原生 msgbox。`severity`："warn"（拒绝/失败，琥珀三角）或 "info"
+/// （中性说明，蓝色圆 i）。更新提示/应用更新确认正在展示时不抢占
+/// 统一弹窗（顶掉会丢失那条提示），罕见冲突路径回落原生框。
+pub fn open_notice(app: &AppHandle, title: &str, message: String, severity: &str) {
+    let info = severity == "info";
+    if matches!(
+        app.state::<AppState>().dialog_kind().as_deref(),
+        Some("update-prompt") | Some("app-restart")
+    ) {
+        crate::logging::log("app-dialog: 更新提示展示中，轻量提示回落原生框");
+        crate::native_dialog::show_message(
+            app,
+            message,
+            title,
+            if info {
+                tauri_plugin_dialog::MessageDialogKind::Info
+            } else {
+                tauri_plugin_dialog::MessageDialogKind::Warning
+            },
+        );
+        return;
+    }
+    show(
+        app,
+        title,
+        "notice",
+        serde_json::json!({ "message": message, "severity": if info { "info" } else { "warn" } }),
+    );
+}
+
+/// dev 效果预览：依序弹出自绘弹窗的各视图（均带模拟数据标记），每弹一个
+/// 等用户关闭后再弹下一个。正式构建不会调用（bootstrap 以 devUrl 门控）。
+pub fn dev_preview_dialogs(app: &AppHandle) {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    open_app_restart_confirm(app, Some("9.9.9".into()), true);
+    wait_dialog_closed(app);
+    open_notice(
+        app,
+        crate::locale::text("重启 dsh 服务", "Restart dsh service"),
+        crate::locale::text(
+            "更新流程正在进行，请稍后再重启。",
+            "An update is in progress. Please restart the service later.",
+        )
+        .into(),
+        "warn",
+    );
+    wait_dialog_closed(app);
+    open_update_prompt(
+        app,
+        UpdatePrompt {
+            kind: "app".into(),
+            version: "9.9.9".into(),
+            current: None,
+            release_url: None,
+            simulated: Some(true),
+        },
+    );
+    wait_dialog_closed(app);
+    open_update_prompt(
+        app,
+        UpdatePrompt {
+            kind: "dsh".into(),
+            version: "9.9.9".into(),
+            current: Some("1.1.0".into()),
+            release_url: None,
+            simulated: Some(true),
+        },
+    );
+    wait_dialog_closed(app);
+    // 检查更新视图（含 spinner；不触发真实检查）
+    // 检查更新视图：预览收尾切到真实检查入口（open_check 会发起网络
+    // 检查）；此前用 open_check_view 只出页面不检查，spinner 永远不停
+    open_check(app);
+}
+
+/// 等待统一弹窗关闭（dev 预览序列用）。
+fn wait_dialog_closed(app: &AppHandle) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        if app.state::<AppState>().dialog_kind().is_none() {
+            return;
+        }
+    }
 }
 
 // ---------- 关于 ----------
@@ -794,6 +988,36 @@ pub fn open_settings(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_height_stays_at_base_for_short_text() {
+        // ≤4 行（含中英混排）不加高
+        assert_eq!(compact_extra_height("dsh 服务当前未运行。"), 0.0);
+        assert_eq!(
+            compact_extra_height(&"x".repeat(48 * 4)), // 恰好 4 行
+            0.0
+        );
+        assert_eq!(compact_height_hint("check", &serde_json::json!({})), 0.0);
+    }
+
+    #[test]
+    fn compact_height_grows_per_line_and_caps() {
+        // 5 行：+19；中文字符按 2 单元计
+        assert_eq!(compact_extra_height(&"x".repeat(48 * 4 + 1)), 20.0);
+        assert_eq!(compact_extra_height(&"汉".repeat(24 * 4 + 1)), 20.0);
+        // 至多加 6 行（10 行以上封顶）
+        assert_eq!(compact_extra_height(&"x".repeat(48 * 20)), 6.0 * 20.0);
+        // 载荷提取：notice 用 message 原文，其余 kind 为 0
+        assert_eq!(
+            compact_height_hint("notice", &serde_json::json!({ "message": "短" })),
+            0.0
+        );
+        // 常规版本号的确认弹窗（模板约 2 行）维持基准高度
+        assert_eq!(
+            compact_height_hint("app-restart", &serde_json::json!({ "version": "1.0.0" })),
+            0.0
+        );
+    }
 
     #[test]
     fn dialog_card_keeps_dsh_size_on_roomy_viewports() {

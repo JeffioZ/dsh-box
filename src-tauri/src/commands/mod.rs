@@ -244,6 +244,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::app_dialog_pwsh_confirm,
         control_center::app_dialog_close,
         control_center::app_dialog_update,
+        control_center::app_dialog_cancel_app_restart,
         control_center::app_dialog_open_settings,
         control_center::app_dialog_open_stats,
         control_center::app_dialog_open_usage,

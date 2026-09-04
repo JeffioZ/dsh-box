@@ -315,4 +315,9 @@ const DSHD_MESSAGES = {
   updateNow: ['立即更新', 'Update now'],
   appUpdateReadyDesc: ['DSHBox v{version} 已下载完成，重启应用后生效。', 'DSHBox v{version} has been downloaded. Restart to apply it.'],
   dshUpdatePromptDesc: ['dsh 有新版本 v{version}（当前 v{current}）。', 'dsh v{version} is available (current: v{current}).'],
+  appRestartConfirmDesc: ['DSHBox 将退出并自动重启以完成更新，是否继续？', 'DSHBox will quit and restart automatically to finish the update. Continue?'],
+  appRestartConfirmDescWithVersion: ['新版本 v{version} 已就绪。DSHBox 将退出并自动重启以完成更新，是否继续？', 'The new version v{version} is ready. DSHBox will quit and restart automatically to finish the update. Continue?'],
+  cancel: ['取消', 'Cancel'],
+  updateAndRestart: ['更新并重启', 'Update and restart'],
+  appRestartSimulatedToast: ['模拟数据：此处仅预览弹窗效果，未执行更新。', 'Simulated: this only previews the dialog. No update was started.'],
 };

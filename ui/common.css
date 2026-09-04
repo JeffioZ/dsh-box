@@ -53,6 +53,10 @@
   --dshd-success: #3fb950;
   --dshd-success-text: #56d364;
   --dshd-warning: #d29922;
+  /* 语义浅底面：图标底/提示框着色背景（与 accent-subtle 同一语义层） */
+  --dshd-warning-subtle: rgba(210, 153, 34, 0.13);
+  --dshd-error-subtle: rgba(248, 81, 73, 0.08);
+  --dshd-error-border: rgba(248, 81, 73, 0.35);
   --dshd-input-bg: rgba(255, 255, 255, 0.06);
   --dshd-input-hover: rgba(255, 255, 255, 0.1);
   --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
@@ -61,11 +65,18 @@
   --dshd-shadow-lv3: 0 0 1px rgba(0, 0, 0, .2),
     0 0 4px rgba(0, 0, 0, .02), 0 12px 32px rgba(0, 0, 0, .08);
 
-  /* 字号层级：正文基准 14px 由 .dshd-body 直接声明（菜单/弹窗条目同款），
-     此处只提供更小的紧凑档；md=13px 为卡内强调文字（如账户名）的中间档 */
+  /* 字号层级：全 UI 唯一字号来源，8 档整步进（禁止半步字号）。
+     角色：2xs=微型徽标/日历星期；xs=弱化标注；sm=次级说明；
+     md=卡内正文/强调名；base=界面正文基准（菜单/弹窗条目同款）；
+     lg=数值强调；xl=弹窗/导航标题；2xl=页面主标题 */
+  --dshd-fs-2xs: 10px;
   --dshd-fs-xs: 11px;
   --dshd-fs-sm: 12px;
   --dshd-fs-md: 13px;
+  --dshd-fs-base: 14px;
+  --dshd-fs-lg: 15px;
+  --dshd-fs-xl: 16px;
+  --dshd-fs-2xl: 20px;
 
   /* 圆角层级（dsh 设计系统：紧凑菜单 7 / 条目 10 / 菜单面板 12） */
   --dshd-r-sm: 7px;
@@ -143,6 +154,9 @@
     --dshd-success: #1a7f37;
     --dshd-success-text: #1a7f37;
     --dshd-warning: #9a6700;
+    --dshd-warning-subtle: rgba(154, 103, 0, 0.10);
+    --dshd-error-subtle: rgba(180, 35, 24, 0.06);
+    --dshd-error-border: rgba(180, 35, 24, 0.30);
     --dshd-input-bg: rgba(38, 49, 72, 0.045);
     --dshd-input-hover: rgba(38, 49, 72, 0.075);
     --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
@@ -183,7 +197,7 @@
 .dshd-menu-motion {
   --dshd-menu-enter-y: -4px;
   opacity: 0;
-  transform: translateY(var(--dshd-menu-enter-y));
+  transform: translateY(var(--dshd-menu-enter-y)) scale(.985);
   pointer-events: none;
   transition: none;
 }
@@ -248,7 +262,7 @@
   padding: 8px 10px;
   box-sizing: border-box;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--dshd-r-md);
   background: transparent;
   color: var(--dshd-text);
   font: inherit;
@@ -258,6 +272,8 @@
   white-space: nowrap;
 }
 .dshd-row:hover { background: var(--dshd-hover); }
+.dshd-row:hover .ic { color: var(--dshd-text); }
+.dshd-row:hover .dim { color: var(--dshd-text); }
 /* hover 淡入淡出：与标题栏控件/余额 chip 的过渡一致（全局统一的微动效节奏） */
 .dshd-row { transition: var(--dshd-anim-state); }
 .dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
@@ -273,7 +289,7 @@
 .dshd-row.danger:not(:disabled).pressed .ic { color: currentColor; }
 .dshd-row .ic svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .dshd-row .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.dshd-row .dim { flex: none; font-size: 12px; color: var(--dshd-text-dim); }
+.dshd-row .dim { flex: none; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); }
 
 /* 内置输入框右键菜单复用应用菜单的表面、条目、阴影与键盘态。 */
 .dshd-text-context-menu {
@@ -282,7 +298,7 @@
   width: max-content;
   min-width: 168px;
   max-width: calc(100vw - 16px);
-  font-size: 14px;
+  font-size: var(--dshd-fs-base);
   line-height: 22px;
 }
 .dshd-text-context-menu[hidden] { display: none; }
@@ -298,6 +314,8 @@
 }
 
 .dshd-sep { height: var(--dshd-hair, 1px); margin: 4px 2px; background: var(--dshd-border); }
+/* 菜单面板内的分隔线：比通用档多留内边距，分组呼吸感（面板本体 4px pad） */
+.dshd-menu-surface .dshd-sep { margin: 6px 8px; }
 
 /* 跨页面共享：显隐工具类与加载旋转关键帧（此前各页面各自重复定义） */
 .hidden { display: none !important; }
@@ -317,10 +335,11 @@
   cursor: pointer;
   outline: none;
 }
-.dshd-btn:hover { background: var(--dshd-hover); }
+/* 次按钮 hover：底色 + 边框同步抬升（与启动页 .btn 同一状态阶梯） */
+.dshd-btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
 .dshd-btn:disabled:hover { background: transparent; }
 /* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角与主按钮一致（18px pill） */
-.dshd-btn.small { height: 24px; padding: 0 10px; font-size: 12px; border-radius: var(--dshd-r-btn); }
+.dshd-btn.small { height: 24px; padding: 0 10px; font-size: var(--dshd-fs-sm); border-radius: var(--dshd-r-btn); }
 
 /* —— 按钮状态语义（三页按钮类共用，唯一落点）——
    .dshd-btn（公共）/ .btn（启动页）/ .mi-btn（控制中心）的过渡、焦点环、
@@ -330,6 +349,7 @@
 .dshd-btn, .btn, .mi-btn { transition: var(--dshd-anim-state); }
 .dshd-btn:focus-visible, .btn:focus-visible, .mi-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 2px; }
 .dshd-btn:active, .btn:active, .mi-btn:active { background: var(--dshd-pressed); }
+.dshd-btn:active, .btn:active, .mi-btn:active { transform: scale(.97); }
 .dshd-btn.primary, .btn.primary, .mi-btn.primary { background: var(--dshd-accent-surface); border-color: var(--dshd-accent-surface); color: #fff; }
 .dshd-btn.primary:hover, .btn.primary:hover, .mi-btn.primary:hover { background: var(--dshd-accent-surface-hover); border-color: var(--dshd-accent-surface-hover); }
 .dshd-btn.primary:active, .btn.primary:active, .mi-btn.primary:active { background: var(--dshd-accent-surface-pressed); border-color: var(--dshd-accent-surface-pressed); }
@@ -344,7 +364,7 @@
   height: var(--dshd-input-height, 34px);
   padding: 0 10px;
   border: 1px solid var(--dshd-border);
-  border-radius: 8px;
+  border-radius: var(--dshd-r-md);
   outline: none;
   background: var(--dshd-input-bg);
   color: var(--dshd-text);
@@ -443,7 +463,7 @@
      动作按钮右对齐（dsh header 的 actions 为 margin-left:auto） */
   height: 54px;
   padding: 20px 14px 8px 10px;
-  font-size: 16px;
+  font-size: var(--dshd-fs-xl);
   font-weight: 500;
   line-height: 24px;
 }
@@ -503,11 +523,11 @@
   align-items: flex-start;
   gap: 8px;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: var(--dshd-r-md);
   border: 1px solid var(--dshd-border-strong);
   background: var(--dshd-overlay);
   box-shadow: var(--dshd-shadow-lv3);
-  font-size: 12.5px;
+  font-size: var(--dshd-fs-md);
   line-height: 19px;
   color: var(--dshd-text);
   /* 错误详情常含路径/版本号等长 token：不强制断词，但允许任意处换行 */
@@ -516,7 +536,7 @@
     transform var(--dshd-m-base) var(--dshd-ease-out);
 }
 .dshd-toast.enter { opacity: 0; transform: translateY(8px); }
-.dshd-toast.leave { opacity: 0; transform: translateY(8px); }
+.dshd-toast.leave { opacity: 0; transform: translateY(-6px); }
 /* 类型不做视觉区分（统一默认文字色）：错误仅以更长的停留时间与
    关闭按钮体现，避免多色文字观感杂乱 */
 .dshd-toast-body {
@@ -534,7 +554,7 @@
   padding: 0 2px;
   background: none;
   color: var(--dshd-text-dim);
-  font-size: 14px;
+  font-size: var(--dshd-fs-base);
   line-height: 19px;
   cursor: pointer;
   border-radius: 4px;

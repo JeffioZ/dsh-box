@@ -360,3 +360,14 @@ pub fn app_dialog_update(
     crate::control_center::apply_update(&app, &which);
     Ok(())
 }
+
+/// “更新应用”确认弹窗取消：回到检查更新视图（不触发新检查）。
+#[tauri::command]
+pub fn app_dialog_cancel_app_restart(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    crate::control_center::open_check_view(&app);
+    Ok(())
+}

@@ -27,6 +27,7 @@ mod notify;
 mod onboarding;
 mod plugins;
 mod processes;
+mod progress;
 mod runtime;
 mod session_log;
 #[cfg(windows)]

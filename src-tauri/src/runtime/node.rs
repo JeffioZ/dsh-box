@@ -173,6 +173,7 @@ fn download_node_archive(
             ),
             Some(pct as f64),
         );
+        crate::progress::set(app, done, total);
         if let Some(extra) = download_progress {
             extra(done, total);
         }
@@ -184,15 +185,17 @@ fn download_node_archive(
             format!("Failed to download Node.js ({source}): {error}"),
         )
     };
-    super::download::stream_to_file(super::download::StreamRequest {
+    let downloaded = super::download::stream_to_file(super::download::StreamRequest {
         url,
         path: archive_path,
         max_bytes: MAX_NODE_ARCHIVE_BYTES,
         user_agent: None,
         progress: Some(&on_progress),
         cancelled: Some(&cancelled),
-    })
-    .map_err(|error| match error {
+    });
+    // 下载结束（成功进入解压安装/失败）：清除任务栏进度
+    crate::progress::clear(app);
+    downloaded.map_err(|error| match error {
         super::download::DownloadError::Transport(e) => NodeDownloadError::Source(error_text(&e)),
         super::download::DownloadError::Body(e) => NodeDownloadError::Source(crate::locale::owned(
             format!("下载 Node.js 响应体失败：{e}"),
