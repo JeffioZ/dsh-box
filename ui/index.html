@@ -131,10 +131,12 @@
 
       <div id="error-box" class="error-box hidden" role="alert" aria-live="assertive" aria-labelledby="startup-error-title" aria-describedby="startup-error-hint">
         <div class="error-head">
-          <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
-          <div class="error-title" id="startup-error-title" tabindex="-1" data-i18n="startupFailed">启动失败</div>
+          <span class="error-icon-wrap" aria-hidden="true"><svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>
+          <div class="error-head-text">
+            <div class="error-title" id="startup-error-title" tabindex="-1" data-i18n="startupFailed">启动失败</div>
+            <div class="error-hint" id="startup-error-hint" data-i18n="startupFailedHint">请重试；若持续失败，可打开日志查看详情。</div>
+          </div>
         </div>
-        <div class="error-hint" id="startup-error-hint" data-i18n="startupFailedHint">请重试；若持续失败，可打开日志查看详情。</div>
         <details class="error-details">
           <summary data-i18n="errorDetails">错误详情</summary>
           <pre id="error-msg" class="error-msg dshd-scroll"></pre>
@@ -142,9 +144,12 @@
         <div class="error-actions">
           <button type="button" id="btn-retry" class="btn primary" data-i18n="retry">重试</button>
           <button type="button" id="btn-use-local" class="btn hidden" data-i18n="useLocalService">改用本地服务</button>
-          <button type="button" id="btn-logs" class="btn" data-i18n="openLogs">打开日志文件夹</button>
-          <button type="button" id="btn-copy-error" class="btn" data-i18n="copyError">复制错误信息</button>
           <button type="button" id="btn-quit" class="btn" data-i18n="quit">退出</button>
+        </div>
+        <div class="error-links">
+          <button type="button" id="btn-logs" class="error-link" data-i18n="openLogs">打开日志文件夹</button>
+          <span class="error-link-sep" aria-hidden="true">·</span>
+          <button type="button" id="btn-copy-error" class="error-link" data-i18n="copyError">复制错误信息</button>
         </div>
       </div>
 

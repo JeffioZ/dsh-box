@@ -78,6 +78,11 @@ body.window-inactive .footer { opacity: .6; }
 }
 .install-actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 28px; }
 .bar { height: 5px; width: 100%; background: var(--line); border-radius: 999px; overflow: hidden; }
+/* onboarding 运行时卡片上的进度条轨道：卡片底（--dshd-hover）与轨道
+   （--line = border-strong）明度接近，深色模式下轨道几乎不可见；在
+   卡片上下文内改用半透明描层拉开层次。主状态条位于页面底上，对比足够，
+   不受影响 */
+.ob-runtime .bar { background: rgba(255, 255, 255, .16); }
 .bar-fill { height: 100%; width: 12%; border-radius: 999px; background: linear-gradient(90deg, var(--blue), var(--blue-dim)); transition: width .45s ease; animation: slide 1.4s linear infinite; }
 .bar-fill.determinate { animation: none; }
 .bar-fill.done { width: 100%; animation: none; }
@@ -99,8 +104,11 @@ body.window-inactive .footer { opacity: .6; }
 .error-box { width: 100%; background: var(--dshd-error-subtle); border: 1px solid var(--dshd-error-border); border-radius: var(--dshd-r-lg); padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
 .error-box.reveal { animation: error-in .11s ease-out; }
 @keyframes error-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-.error-head { display: flex; align-items: center; gap: 8px; }
-.error-icon { width: 18px; height: 18px; color: var(--red); flex: none; }
+/* 徽章式图标：给警示符号一个承载面，比裸图标更有「状态块」的存在感 */
+.error-icon-wrap { width: 32px; height: 32px; border-radius: var(--dshd-r-md); background: rgba(248, 81, 73, .12); display: grid; place-items: center; flex: none; }
+.error-icon { width: 17px; height: 17px; color: var(--red); }
+.error-head { display: flex; align-items: flex-start; gap: 10px; }
+.error-head-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .error-title { font-size: var(--dshd-fs-base); font-weight: 600; color: var(--red); text-wrap: balance; }
 .error-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
 .error-hint { font-size: var(--dshd-fs-sm); color: var(--muted); line-height: 1.5; }
@@ -118,6 +126,13 @@ body.window-inactive .footer { opacity: .6; }
   max-height: 112px; overflow: auto; user-select: text;
 }
 .error-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 次级诊断操作降级为静默链接行：与主操作（重试/退出）分层，避免
+   五个等权按钮排成一行的选择压力；openLogs/copyError 绑定按 id 不受影响 */
+.error-links { display: flex; align-items: center; gap: 4px; margin-top: -2px; }
+.error-link { background: none; border: none; padding: 2px 6px; color: var(--muted); font-size: var(--dshd-fs-sm); font-family: inherit; cursor: pointer; border-radius: 4px; }
+.error-link:hover { color: var(--text); background: var(--dshd-hover); }
+.error-link:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.error-link-sep { color: var(--muted); opacity: .6; }
 .service-choice-box {
   width: 100%; margin-top: 18px; padding: 16px;
   display: flex; flex-direction: column; gap: 14px;
@@ -351,6 +366,9 @@ body.window-inactive .footer { opacity: .6; }
 }
 @media (prefers-color-scheme: light) {
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
+  .ob-runtime .bar { background: rgba(38, 49, 72, .16); }
+  .error-icon-wrap { background: rgba(180, 35, 24, .1); }
+  .error-link:hover { background: rgba(38, 49, 72, .06); }
 }
 @media (prefers-reduced-motion: reduce) {
   .ob-switch-row, .dshd-select-trigger, .dshd-select-list li { transition: none; }

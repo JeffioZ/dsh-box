@@ -230,7 +230,9 @@ async function init() {
   // 窗口焦点状态由 Rust 侧广播（WebView2 子窗口的 window focus/blur
   // 与主窗口焦点不同步），挂载全局函数供 Rust eval 直呼
   window.__dshdSetWindowActive = (active) => {
-    document.body.classList.toggle('window-inactive', !active);
+    // 样式切换走 common.js 的去抖实现（启动期焦点往返不渲染）；悬停
+    // 冻结保持原时序
+    window.__dshdApplyWindowFocus(active);
     if (!active) suspendWindowControlHover();
   };
   refreshMainMenu();

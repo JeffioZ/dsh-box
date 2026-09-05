@@ -45,7 +45,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
     truncated
 }
 
-const APP_REPO: &str = "JeffioZ/dsh-box";
+pub(crate) const APP_REPO: &str = "JeffioZ/dsh-box";
 #[cfg(any(windows, test))]
 const APP_WINDOWS_ASSET: &str = "DSHBox-windows-x64.exe";
 

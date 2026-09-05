@@ -303,6 +303,10 @@ pub fn precreate(app: &AppHandle) {
     .always_on_top(true)
     .skip_taskbar(true)
     .visible(false)
+    // 预创建的隐藏窗口不得参与焦点竞争：WebView2 初始化时若抢到 Win32
+    // 前台，主窗口会连续收到 Focused(false/true) 振荡（启动页闪变淡）。
+    // 弹出菜单时的键盘焦点由 show 路径显式 set_focus 提供
+    .focused(false)
     .on_navigation(move |url| {
         let allowed = crate::is_local_app_url(url, crate::app_dev_origin(&navigation_app).as_ref());
         if allowed {

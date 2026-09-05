@@ -523,3 +523,27 @@ function dshdToastDismiss(el) {
   // 兜底移除（transitionend 被打断/禁用时 300ms 内强制清理）
   setTimeout(() => el.remove(), 300);
 }
+
+// 失焦变淡的统一去抖（启动页/标题栏/状态栏共用；Rust Focused 广播驱动）：
+// 启动与窗口创建期，焦点会在本应用与此前的前台窗口间快速往返（OS 激活
+// 竞速），逐次应用会让界面闪烁。失焦延迟 200ms 生效、期间获焦即取消，
+// 持续失焦才切换样式；首次获焦前忽略失焦（默认按获焦外观呈现）。
+window.__dshdApplyWindowFocus = function (active) {
+  const w = window;
+  if (active) {
+    w.__dshdEverFocused = true;
+    if (w.__dshdBlurTimer) {
+      clearTimeout(w.__dshdBlurTimer);
+      w.__dshdBlurTimer = 0;
+    }
+    document.body.classList.remove('window-inactive');
+    return;
+  }
+  if (!w.__dshdEverFocused || performance.now() < 2000) return;
+  if (!w.__dshdBlurTimer) {
+    w.__dshdBlurTimer = setTimeout(() => {
+      w.__dshdBlurTimer = 0;
+      document.body.classList.add('window-inactive');
+    }, 200);
+  }
+};
