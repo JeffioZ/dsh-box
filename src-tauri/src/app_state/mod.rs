@@ -286,9 +286,6 @@ pub(crate) struct Inner {
     main_disabled: bool,
     /// 弹窗生命周期代次：打开/关闭时 +1，挂起的延迟动作据此判断是否过期。
     dialog_gen: u64,
-    /// 首次配置写入了需要重启本地 dsh 才能生效的内容；由 boot 在内置插件
-    /// 安装结束后一次性取走，合并成一次服务重启。
-    onboarding_restart_required: bool,
     /// PowerShell 更新的 UAC 预告在弹窗内等待确认；点击“继续”后置位。
     pwsh_pending: bool,
     pwsh_confirmed: bool,
@@ -405,7 +402,6 @@ impl AppState {
             update_done: None,
             main_disabled: false,
             dialog_gen: 0,
-            onboarding_restart_required: false,
             pwsh_pending: false,
             pwsh_confirmed: false,
             last_heartbeat: None,
@@ -432,6 +428,30 @@ impl AppState {
     /// 获取生命周期锁（引导/重启/更新串行化）。
     pub(crate) fn lifecycle_guard(&self) -> std::sync::MutexGuard<'_, ()> {
         self.lifecycle.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 以有界等待获取生命周期锁（仅退出停服路径）：boot 轮/更新/重启协调器
+    /// 全程持锁操作服务，拿到锁再停服可排除「退出中又拉起新服务」的竞态
+    /// （Unix 上该服务会随 std::process::exit 孤儿化）。持锁方卡死时返回
+    /// None 而非永久阻塞——调用方按无锁继续停服，由进程树守卫兜底回收。
+    pub(crate) fn lifecycle_guard_with_deadline(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<std::sync::MutexGuard<'_, ()>> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.lifecycle.try_lock() {
+                Ok(guard) => return Some(guard),
+                Err(std::sync::TryLockError::Poisoned(guard)) => {
+                    return Some(guard.into_inner());
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     /// 读取页面心跳状态：(最近心跳时刻, 连续重载次数)。
@@ -1060,15 +1080,6 @@ impl AppState {
         self.lock_inner().dialog_gen
     }
 
-    pub(crate) fn require_onboarding_restart(&self) {
-        self.lock_inner().onboarding_restart_required = true;
-    }
-
-    pub(crate) fn take_onboarding_restart_required(&self) -> bool {
-        let mut inner = self.lock_inner();
-        std::mem::take(&mut inner.onboarding_restart_required)
-    }
-
     /// PowerShell 更新的弹窗内确认状态（UAC 预告）。
     pub fn set_pwsh_pending(&self, v: bool) {
         self.lock_inner().pwsh_pending = v;
@@ -1138,15 +1149,6 @@ mod tests {
     fn onboarding_gate_keeps_production_persistence_semantics() {
         assert!(onboarding_required_for(false, false, false));
         assert!(!onboarding_required_for(false, false, true));
-    }
-
-    #[test]
-    fn onboarding_restart_requirement_is_consumed_once() {
-        let state = AppState::new();
-        assert!(!state.take_onboarding_restart_required());
-        state.require_onboarding_restart();
-        assert!(state.take_onboarding_restart_required());
-        assert!(!state.take_onboarding_restart_required());
     }
 
     #[test]

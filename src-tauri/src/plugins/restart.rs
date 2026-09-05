@@ -66,7 +66,7 @@ pub(crate) fn deferred_restart_pending() -> bool {
     state.pending && state.deferred
 }
 
-pub(super) fn mark_plugin_changes(app: &AppHandle, apply_when_idle: bool) {
+pub(crate) fn mark_plugin_changes(app: &AppHandle, apply_when_idle: bool) {
     {
         let mut state = RESTART_STATE.lock().unwrap_or_else(|e| e.into_inner());
         state.generation = state.generation.wrapping_add(1);

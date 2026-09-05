@@ -13,17 +13,16 @@ mod restart;
 mod runner;
 mod transaction;
 
+pub(crate) use maintenance::release_first_onboarding_bootstrap;
 pub use maintenance::start_market_bootstrap;
 use maintenance::*;
-pub(crate) use maintenance::{bootstrap_once_blocking, bootstrap_work_pending};
 pub use maintenance::{RecommendedPlugin, ReinstallableBuiltinPlugin};
 use runner::{run_dsh_plugin_auto, run_dsh_plugin_auto_user_remove};
 
 // 拆分后的域内绑定：maintenance/runner/测试经 super::* 或 super::X 继续
 // 引用这些名字；对 crate 其他模块的路径（crate::plugins::X）保持不变。
-pub(crate) use restart::deferred_restart_pending;
-use restart::mark_plugin_changes;
 pub use restart::{apply_plugin_changes, plugin_apply_status, PluginApplyStatus};
+pub(crate) use restart::{deferred_restart_pending, mark_plugin_changes};
 use transaction::{
     clear_install_marker, save_install_marker, spec_package_name, try_mark_user_removed,
     PluginMutationKind,

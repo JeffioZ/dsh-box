@@ -73,7 +73,8 @@ function notifyReadyTransition() {
   };
   document.body.addEventListener('transitionend', onEnd);
   // transitionend 可能因页面不可见、动画被系统取消而不触发；兜底保证导航必达。
-  timer = setTimeout(finish, 360);
+  // 220ms = 0.18s 淡出 + 余量，与 Rust 侧 STARTUP_TRANSITION_TIMEOUT 匹配
+  timer = setTimeout(finish, 220);
 }
 
 function phaseText(phase) {
@@ -129,12 +130,17 @@ function renderProgress(payload, progressBar, fill) {
 
 /** 首次设置与普通启动页共用同一套状态文案、明细和进度映射。 */
 function renderRuntimePresentation(payload, view) {
-  const state = phaseDisplay(payload.phase, payload.message, view.onboarding);
+  // 普通启动 ready 即淡出进入 dsh：再切换文案只会闪一帧大绿字（无信息量），
+  // 保留进入前的文案与样式；绿色就绪态只属于 onboarding 运行时卡片（供用户确认可点击）
+  const holdText = payload.phase === 'ready' && !view.onboarding;
+  const state = holdText ? '' : phaseDisplay(payload.phase, payload.message, view.onboarding);
   const detail = statusDetail(payload);
   if (view.state) {
-    view.state.textContent = state;
-    view.state.title = state;
-    view.state.classList.toggle('state-ready', payload.phase === 'ready');
+    if (!holdText) {
+      view.state.textContent = state;
+      view.state.title = state;
+    }
+    view.state.classList.toggle('state-ready', payload.phase === 'ready' && view.onboarding);
   }
   if (view.detail) {
     view.detail.textContent = detail;
@@ -788,11 +794,32 @@ function bind() {
 async function init() {
   dshdApplyI18n();
   bind();
-  // 先等 onboarding 面板显示（含磁盘读状态），再拉取/监听状态：
-  // 否则服务已就绪时 get_status 先返回 ready，而面板未显示导致
-  // onboardingActive()=false → setStatus 触发整体淡出 → 页面透明但
-  // boot 仍在等用户操作（白屏卡死）。initOnboarding 内部已 catch。
+  // 监听先挂并缓冲，再去查 onboarding 状态（含磁盘读 + IPC 往返）：
+  // 面板确定前到达的状态事件不丢失，消除窗口打开到面板出现之间的事件空窗。
+  // 回放发生在 initOnboarding 之后，onboardingActive() 已是真实值，
+  // 「面板未显示不淡出」的白屏防护语义不变（原先靠丢弃事件保证，现在靠
+  // 正确的时序判断——事件顺序保持旧→新，get_status 快照最后兜底覆盖）。
+  const buffered = [];
+  let buffering = true;
+  const onStatus = (payload) => (buffering ? buffered.push(payload) : renderStatus(payload));
+  await dshdListen('dsh-status', (e) => onStatus(e.payload));
+  await dshdListen('update-result', (e) => {
+    if (buffering) return; // 缓冲窗口极短（单次 IPC 往返）且静默检查在服务就绪后才跑；
+    // 真错过结果时，后续事件与发现新版的弹窗兜底
+    renderUpdate(e.payload);
+  });
+  await dshdListen('update-progress', (e) => {
+    if (!buffering && e.payload && e.payload.message) {
+      // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
+      // 且 Rust 文本是旧语言快照，语言切换后不重译）
+      if (onboardingPendingView()) return;
+      $('update-text').textContent = e.payload.message;
+    }
+  });
   await initOnboarding();
+  buffering = false;
+  for (const payload of buffered) renderStatus(payload);
+  buffered.length = 0;
   window.addEventListener('dshd-language-changed', () => {
     // 下拉 trigger 的值不是 data-i18n 节点，语言切换后按当前 option 文案刷新。
     if (obLangSel) obLangSel.set(obLangSel.get());
@@ -801,17 +828,6 @@ async function init() {
     // 由 phaseText/stepLine 按当前语言重译固定文案（进度数字语言无关保留）
     if (lastStatusPayload) renderStatus({ ...lastStatusPayload, message: '', detail: '' });
     if (lastUpdateResult) renderUpdate(lastUpdateResult);
-  });
-  const { listen } = window.__TAURI__.event;
-  await dshdListen('dsh-status', (e) => renderStatus(e.payload));
-  await dshdListen('update-result', (e) => renderUpdate(e.payload));
-  await dshdListen('update-progress', (e) => {
-    if (e.payload && e.payload.message) {
-      // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
-      // 且 Rust 文本是旧语言快照，语言切换后不重译）
-      if (onboardingPendingView()) return;
-      $('update-text').textContent = e.payload.message;
-    }
   });
   try {
     const payload = await window.__TAURI__.core.invoke('get_status');

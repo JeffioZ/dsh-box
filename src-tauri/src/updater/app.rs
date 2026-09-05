@@ -479,7 +479,8 @@ fn apply_downloaded_exe(
     // 周期任务在替换脚本接管前停止活动。
     app.state::<crate::app_state::AppState>().set_quitting(true);
     crate::window::save_window_state_now(app);
-    crate::dsh::shutdown(app);
+    // 与 quit_sequence 同口径：先取得生命周期锁再停服，避免退出竞态
+    crate::dsh::shutdown_for_quit(app);
     app.exit(0);
     Ok(())
 }
