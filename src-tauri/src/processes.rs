@@ -259,8 +259,6 @@ pub fn run_capture(
     let mut cmd = Command::new(program);
     cmd.args(args);
     hide_console(&mut cmd);
-    #[cfg(unix)]
-    cmd.process_group(0);
     if let Some(c) = cwd {
         cmd.current_dir(c);
     }
