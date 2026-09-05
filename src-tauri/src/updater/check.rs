@@ -28,6 +28,18 @@ pub struct VersionInfo {
     /// `update_available` 语义保持"有新版"，静默/周期弹窗不受降级影响。
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub downgrade_available: bool,
+    /// 仅 dsh 行使用：其他通道存在更高版本的跨通道发现（仅手动检查页展示，
+    /// 不参与 update_available 语义，静默/周期弹窗不触发）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_channel: Option<OtherChannelHint>,
+}
+
+/// 跨通道发现：当前通道之外某个 dist-tag 指向更高的版本。
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct OtherChannelHint {
+    /// npm dist-tag 名（latest/next/alpha），前端映射为本地化通道名。
+    pub channel: String,
+    pub version: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -60,7 +72,60 @@ fn dsh_version_info(installed: String, latest: String) -> VersionInfo {
         installed,
         latest,
         latest_error: None,
+        other_channel: None,
     }
+}
+
+/// 跨通道发现：其他 dist-tag 通道存在比"已安装版本"和"当前通道目标"都高
+/// 的版本时，返回其中最高者。比"当前通道目标"高才提示——否则当前通道
+/// 本身就能装到，切换毫无信息量。只影响手动检查页的展示入口。
+fn pick_higher_other_channel(
+    installed: &str,
+    current: runtime::DshChannel,
+    tags: &runtime::DshDistTags,
+) -> Option<OtherChannelHint> {
+    let current_target = tags.get(current)?;
+    let mut best: Option<OtherChannelHint> = None;
+    for channel in [
+        runtime::DshChannel::Latest,
+        runtime::DshChannel::Next,
+        runtime::DshChannel::Alpha,
+    ] {
+        if channel == current {
+            continue;
+        }
+        let Some(version) = tags.get(channel) else {
+            continue;
+        };
+        let higher_than_installed =
+            versions::compare_versions(version, installed) == std::cmp::Ordering::Greater;
+        let higher_than_current =
+            versions::compare_versions(version, current_target) == std::cmp::Ordering::Greater;
+        if !(higher_than_installed && higher_than_current) {
+            continue;
+        }
+        let supersedes = best.as_ref().is_none_or(|hint| {
+            versions::compare_versions(version, &hint.version) == std::cmp::Ordering::Greater
+        });
+        if supersedes {
+            best = Some(OtherChannelHint {
+                channel: channel.dist_tag().to_string(),
+                version: version.to_string(),
+            });
+        }
+    }
+    best
+}
+
+/// 当前通道版本信息 + 跨通道发现（一次 dist-tags 请求同时携带三通道版本）。
+fn dsh_version_info_with_tags(
+    installed: String,
+    current: runtime::DshChannel,
+    tags: &runtime::DshDistTags,
+) -> Result<VersionInfo, String> {
+    let mut info = dsh_version_info(installed, tags.latest_of(current)?);
+    info.other_channel = pick_higher_other_channel(&info.installed, current, tags);
+    Ok(info)
 }
 
 // ---------- 检查 ----------
@@ -103,6 +168,7 @@ pub fn silent_check(app: &AppHandle) {
                     update_available: true,
                     latest_error: None,
                     downgrade_available: false,
+                    other_channel: None,
                 });
             }
             if !result.app.as_ref().is_some_and(|a| a.update_available) {
@@ -113,6 +179,7 @@ pub fn silent_check(app: &AppHandle) {
                     update_available: true,
                     latest_error: None,
                     downgrade_available: false,
+                    other_channel: None,
                 });
             }
         }
@@ -302,8 +369,12 @@ pub fn check(app: &AppHandle) -> CheckResult {
     let dsh_handle = std::thread::spawn(move || match runtime::installed_dsh_version(&dsh_cfg) {
         Some(installed) => {
             let channel = runtime::DshChannel::from_config(&dsh_cfg);
-            match runtime::npm_latest_dsh_version(channel) {
-                Ok(latest) => (Some(dsh_version_info(installed.clone(), latest)), None),
+            // dist-tags 一次请求携带三通道版本：当前通道判"有新版"，
+            // 其余通道供跨通道发现（仅检查页提示，不影响弹窗语义）
+            match runtime::npm_dsh_dist_tags()
+                .and_then(|tags| dsh_version_info_with_tags(installed.clone(), channel, &tags))
+            {
+                Ok(info) => (Some(info), None),
                 Err(e) => {
                     // 查询失败仍保留行：前端显示"暂无法获取版本信息"，
                     // hover 经 data-tip-extra 展示原因（与 node/pwsh 行统一）
@@ -321,6 +392,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                             update_available: false,
                             latest_error: Some(error),
                             downgrade_available: false,
+                            other_channel: None,
                         }),
                         None,
                     )
@@ -391,6 +463,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                         update_available,
                         latest_error: None,
                         downgrade_available: false,
+                        other_channel: None,
                     }),
                     None,
                 )
@@ -405,6 +478,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                             latest: String::new(),
                             update_available: false,
                             downgrade_available: false,
+                            other_channel: None,
                             latest_error: Some(format!(
                                 "{}: {e}",
                                 crate::locale::text(
@@ -506,6 +580,7 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
             latest: String::new(),
             update_available: false,
             downgrade_available: false,
+            other_channel: None,
             latest_error: Some(crate::locale::owned(
                 format!("查询应用最新版本失败：{e}"),
                 format!("Failed to query the latest app version: {e}"),
@@ -545,12 +620,24 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
         update_available,
         latest_error: None,
         downgrade_available: false,
+        other_channel: None,
     })
 }
 
 #[cfg(test)]
 mod dsh_direction_tests {
     use super::dsh_version_info;
+    use super::dsh_version_info_with_tags;
+    use super::pick_higher_other_channel;
+    use crate::runtime::{DshChannel, DshDistTags};
+
+    fn tags(latest: &str, next: &str, alpha: &str) -> DshDistTags {
+        DshDistTags {
+            latest: Some(latest.into()),
+            next: Some(next.into()),
+            alpha: Some(alpha.into()),
+        }
+    }
 
     #[test]
     fn dsh_direction_upgrade_downgrade_and_equal() {
@@ -563,5 +650,70 @@ mod dsh_direction_tests {
         assert!(!equal.update_available && !equal.downgrade_available);
         // 预发布后缀按 semver 优先级：0.1.2 > 0.1.2-alpha.3
         assert!(dsh_version_info("0.1.2-alpha.3".into(), "0.1.2".into()).update_available);
+    }
+
+    #[test]
+    fn other_channel_hint_covers_next_higher_than_alpha() {
+        // 用户场景：alpha 通道用户，上游把更高版本挂在 next——
+        // 当前通道"已是最新"，但其他通道可发现
+        let t = tags("1.2.0", "2.0.0-rc.2", "1.2.1-alpha.1");
+        let info = dsh_version_info_with_tags("1.2.1-alpha.1".into(), DshChannel::Alpha, &t)
+            .expect("当前通道 alpha 有目标版本");
+        assert!(!info.update_available && !info.downgrade_available);
+        assert_eq!(
+            info.other_channel,
+            Some(super::OtherChannelHint {
+                channel: "next".into(),
+                version: "2.0.0-rc.2".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn other_channel_hint_requires_higher_than_current_target() {
+        // 其他通道虽比已安装高，但不比当前通道目标高：切了也装不到更高，不提示
+        // （当前稳定通道目标已到 1.5.0，next/alpha 的 1.3.0/1.2.9 低于目标）
+        let t = tags("1.5.0", "1.3.0-rc.1", "1.2.9-alpha.1");
+        let hint = pick_higher_other_channel("1.2.0", DshChannel::Latest, &t);
+        assert_eq!(hint, None);
+    }
+
+    #[test]
+    fn other_channel_hint_picks_the_highest_candidate() {
+        // 多个通道都符合：取最高者（next 与 alpha 均高于当前通道目标）
+        let t = tags("1.2.0", "1.4.0-rc.1", "1.3.0-alpha.1");
+        let hint = pick_higher_other_channel("1.2.0", DshChannel::Latest, &t);
+        assert_eq!(
+            hint,
+            Some(super::OtherChannelHint {
+                channel: "next".into(),
+                version: "1.4.0-rc.1".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn other_channel_hint_ignores_missing_and_equal_versions() {
+        // 缺失的通道跳过；与已安装版本相同的通道不提示
+        let t = DshDistTags {
+            latest: Some("1.2.0".into()),
+            next: None,
+            alpha: Some("1.2.0".into()),
+        };
+        assert_eq!(
+            pick_higher_other_channel("1.2.0", DshChannel::Latest, &t),
+            None
+        );
+    }
+
+    #[test]
+    fn dsh_version_info_with_tags_reports_missing_channel_target() {
+        // 上游未发布该通道（如 alpha 尚无 tag）：报错而非 panic
+        let t = DshDistTags {
+            latest: Some("1.2.0".into()),
+            next: None,
+            alpha: None,
+        };
+        assert!(dsh_version_info_with_tags("1.0.0".into(), DshChannel::Alpha, &t).is_err());
     }
 }

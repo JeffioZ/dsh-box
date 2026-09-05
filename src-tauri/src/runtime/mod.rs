@@ -263,19 +263,27 @@ impl DshChannel {
     }
 }
 
-pub(crate) fn npm_latest_dsh_version(channel: DshChannel) -> Result<String, String> {
-    let text = get_text(NPM_DIST_TAGS)?;
-    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        format!(
-            "{}: {e}",
-            crate::locale::text("解析失败", "Failed to parse the response")
-        )
-    })?;
-    let tag = channel.dist_tag();
-    json.get(tag)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
+/// @deepseek-ai/dsh 的 dist-tags。registry 的 dist-tags 端点单次请求即
+/// 同时携带全部通道版本，供"跨通道发现"比较（其他通道是否有更高版本）。
+pub(crate) struct DshDistTags {
+    pub latest: Option<String>,
+    pub next: Option<String>,
+    pub alpha: Option<String>,
+}
+
+impl DshDistTags {
+    pub(crate) fn get(&self, channel: DshChannel) -> Option<&str> {
+        match channel {
+            DshChannel::Latest => self.latest.as_deref(),
+            DshChannel::Next => self.next.as_deref(),
+            DshChannel::Alpha => self.alpha.as_deref(),
+        }
+    }
+
+    /// 取通道目标版本；缺失时报双语错误（上游未发布该 dist-tag 通道）。
+    pub(crate) fn latest_of(&self, channel: DshChannel) -> Result<String, String> {
+        let tag = channel.dist_tag();
+        self.get(channel).map(str::to_string).ok_or_else(|| {
             let zh = format!("响应中没有 {tag} 字段");
             let en = format!("The response has no {tag} field");
             if crate::locale::is_chinese() {
@@ -284,6 +292,30 @@ pub(crate) fn npm_latest_dsh_version(channel: DshChannel) -> Result<String, Stri
                 en
             }
         })
+    }
+}
+
+fn parse_dsh_dist_tags(text: &str) -> Result<DshDistTags, String> {
+    let json: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+        format!(
+            "{}: {e}",
+            crate::locale::text("解析失败", "Failed to parse the response")
+        )
+    })?;
+    let tag = |name: &str| json.get(name).and_then(|v| v.as_str()).map(str::to_string);
+    Ok(DshDistTags {
+        latest: tag("latest"),
+        next: tag("next"),
+        alpha: tag("alpha"),
+    })
+}
+
+pub(crate) fn npm_dsh_dist_tags() -> Result<DshDistTags, String> {
+    parse_dsh_dist_tags(&get_text(NPM_DIST_TAGS)?)
+}
+
+pub(crate) fn npm_latest_dsh_version(channel: DshChannel) -> Result<String, String> {
+    npm_dsh_dist_tags()?.latest_of(channel)
 }
 
 /// 已安装 dsh 版本（读 package.json）。

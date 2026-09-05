@@ -262,6 +262,8 @@ const DSHD_MESSAGES = {
   settingsChannelNext: ['预览版', 'Preview'],
   settingsChannelAlpha: ['尝鲜版', 'Alpha'],
   switchVersion: ['切换到 v{version}', 'Switch to v{version}'],
+  switchOtherChannel: ['切换到{channel} v{version}', 'Switch to {channel} v{version}'],
+  otherChannelTip: ['{channel}已有更高版本 v{version}，切换通道后即安装。', 'The {channel} channel has a newer version v{version}; switching installs it.'],
   toastClose: ['关闭', 'Close'],
   downgradeTip: ['将 dsh 切换到所选通道的版本（降级）。预览版写入的会话数据可能不被旧版本兼容。', 'Switches dsh to the selected channel version (a downgrade). Data written by preview versions may not be compatible with older ones.'],
   editUndo: ['撤销', 'Undo'],
