@@ -874,7 +874,7 @@ function renderCheckLoading(message) {
   $('body').innerHTML = '<div class="msg" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + (message || dshdT('checkingUpdates')) + '</div>';
   // 无底部操作区（dsh 设置弹窗无 footer）
 }
-function updBtn(id, label, which, primary) {
+function updBtn(id, label, which, primary, pre) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'dshd-btn' + (primary ? ' primary' : '');
@@ -889,7 +889,9 @@ function updBtn(id, label, which, primary) {
       button.disabled = true;
     });
     btn.textContent = dshdT('processing');
-    invoke('app_dialog_update', { which }).catch((e) => {
+    // pre：可选前置动作（跨通道入口先切通道再更新），失败与更新请求同路反馈
+    const run = pre ? pre() : Promise.resolve();
+    run.then(() => invoke('app_dialog_update', { which })).catch((e) => {
       updateRunning = false;
       renderNav(openKind);
       btn.disabled = false;
@@ -906,6 +908,15 @@ function verHtml(cur, latest, available) {
   }
   return esc(cur) + '<span class="v-ok">' + dshdT('upToDate') + '</span>';
 }
+// 通道标签复用设置页文案（稳定版/预览版/尝鲜版），key 缺失时兜底显示 dist-tag 名
+const DSH_CHANNEL_LABEL_KEYS = {
+  latest: 'settingsChannelLatest',
+  next: 'settingsChannelNext',
+  alpha: 'settingsChannelAlpha',
+};
+function dshdChannelLabel(channel) {
+  return dshdT(DSH_CHANNEL_LABEL_KEYS[channel] || channel);
+}
 function renderCheckResult(r) {
   if (openKind !== 'check') return;
   lastCheckResult = r;
@@ -915,6 +926,12 @@ function renderCheckResult(r) {
     // 降级行同时带"查询错误"与"降级警示"时合并展示（前者优先，便于排障）
     let dshTip = r.dsh.latest_error || '';
     if (r.dsh.downgrade_available && !dshTip) dshTip = dshdT('downgradeTip');
+    if (!dshTip && r.dsh.other_channel) {
+      dshTip = dshdT('otherChannelTip', {
+        channel: dshdChannelLabel(r.dsh.other_channel.channel),
+        version: r.dsh.other_channel.version,
+      });
+    }
     const hint = dshTip ? ' data-tip-extra="' + esc(dshTip) + '"' : '';
     // 空 latest：查询失败时如实标注"暂无法获取版本信息"，不显示"已是最新"；
     // 版本号只输出一次（verHtml 内含 esc(cur)，此处仅拼接状态标签）
@@ -994,11 +1011,22 @@ function renderCheckResult(r) {
   body.innerHTML = html;
   if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
   else if (r.dsh && r.dsh.downgrade_available) updBtn('u-dsh', dshdT('switchVersion', { version: r.dsh.latest }), 'dsh', true);
+  // 跨通道发现：当前通道已最新，但其他通道指向更高版本——先切通道再走更新
+  else if (r.dsh && r.dsh.other_channel) {
+    const hint = r.dsh.other_channel;
+    updBtn(
+      'u-dsh',
+      dshdT('switchOtherChannel', { channel: dshdChannelLabel(hint.channel), version: hint.version }),
+      'dsh',
+      true,
+      () => invoke('set_dsh_channel', { channel: hint.channel }),
+    );
+  }
   if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
   if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
   if (r.npm && r.npm.update_available) updBtn('u-npm', dshdT('update'), 'npm', false);
   if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
-  const any = (r.dsh && (r.dsh.update_available || r.dsh.downgrade_available)) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
+  const any = (r.dsh && (r.dsh.update_available || r.dsh.downgrade_available || r.dsh.other_channel)) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
   if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
     const message = document.createElement('div');
     message.className = 'msg';
