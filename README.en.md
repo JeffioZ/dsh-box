@@ -112,6 +112,7 @@ Default data root:
   "hide_balance": false,
   "auto_update_plugins": true,
   "task_notifications": true,
+  "usage_token_limit_m": null,
   "dsh_update_channel": "latest",
   "close_behavior": "tray",
   "launch_behavior": "window",
@@ -119,7 +120,7 @@ Default data root:
 }
 ```
 
-`dsh_update_channel` is `latest`, the preview channel `next`, or the riskier alpha channel; after switching channels, the update check offers upgrading to (or switching down to) the channel's latest version. `close_behavior` is `tray` / `quit`, `launch_behavior` is `window` / `tray`, and `download_source` is `auto` / `official` / `mirror`. `config.json` and `state.json` have strictly separated ownership and never fall back to each other's fields.
+`usage_token_limit_m` is the daily usage alert threshold in millions of tokens (`null` or absent = off); a system notification is sent at most once per day when the projected token usage for today crosses it. `dsh_update_channel` is `latest`, the preview channel `next`, or the riskier alpha channel; after switching channels, the update check offers upgrading to (or switching down to) the channel's latest version. `close_behavior` is `tray` / `quit`, `launch_behavior` is `window` / `tray`, and `download_source` is `auto` / `official` / `mirror`. `config.json` and `state.json` have strictly separated ownership and never fall back to each other's fields.
 
 ### Port policy
 
