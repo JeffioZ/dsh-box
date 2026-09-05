@@ -153,13 +153,16 @@ pub fn silent_check(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
         let mut result = check(&handle);
-        // dev 构建：有可更新的真实数据用它；没有（已最新/查询失败/无数据）
-        // 则注入模拟，便于开发者验证两个提示弹窗及排队逻辑。正式版
-        // dev_build() 恒为 false，不受影响。dev 下模拟 tag（9.9.9-dev）在
-        // GitHub 不存在，点「查看更新内容/重启并更新」预期 404/失败，仅验证 UI。
+        // dev 预览模式（dev-run.ps1 注入 DSH_BOX_DEV_PREVIEW=1）：没有可更新
+        // 的真实数据时注入模拟，便于开发者验证两个提示弹窗及排队逻辑；直接
+        // 双击 dev exe 时不注入——表现与正式版一致，真实更新照常提示。模拟
+        // tag（9.9.9-dev）在 GitHub 不存在，点「查看更新内容/重启并更新」
+        // 预期 404/失败，仅验证 UI。正式版 dev_build() 恒为 false，不受影响。
+        let preview_mode = crate::app_state::dev_build()
+            && std::env::var("DSH_BOX_DEV_PREVIEW").ok().as_deref() == Some("1");
         let mut dsh_simulated = false;
         let mut app_simulated = false;
-        if crate::app_state::dev_build() {
+        if preview_mode {
             if !result.dsh.as_ref().is_some_and(|d| d.update_available) {
                 dsh_simulated = true;
                 result.dsh = Some(VersionInfo {
@@ -207,8 +210,8 @@ pub fn silent_check(app: &AppHandle) {
                 }
             }
         }
-        // dev 模拟：应用更新就绪同样提示（正式版由 periodic 的 prefetch 触发）
-        if crate::app_state::dev_build() {
+        // dev 预览模式：应用更新就绪同样提示（正式版由 periodic 的 prefetch 触发）
+        if preview_mode {
             if let Some(app_info) = result.app.as_ref().filter(|info| info.update_available) {
                 crate::control_center::open_update_prompt(
                     &handle,

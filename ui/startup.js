@@ -108,8 +108,15 @@ function statusDetail(payload) {
     : (payload.detail || '');
 }
 
-function renderProgress(payload, progressBar, fill) {
+function renderProgress(payload, progressBar, fill, onboarding) {
   if (!progressBar || !fill) return;
+  // 普通启动 ready：进度条视觉零变化（维持 loading 现状），由整页淡出
+  // 统一承担过渡；仅更新无障碍语义（服务确实就绪）。onboarding 运行时
+  // 卡片的 ready 需要真实的完成态（定格 100%），不能走此捷径
+  if (payload.phase === 'ready' && !onboarding) {
+    progressBar.setAttribute('aria-valuenow', '100');
+    return;
+  }
   fill.classList.toggle('done', payload.phase === 'ready');
   fill.classList.toggle('err', payload.phase === 'error');
   if (payload.phase === 'ready' || payload.phase === 'error' || payload.phase === 'cancelled') {
@@ -140,15 +147,19 @@ function renderRuntimePresentation(payload, view) {
       view.state.textContent = state;
       view.state.title = state;
     }
-    view.state.classList.toggle('state-ready', payload.phase === 'ready' && view.onboarding);
+    // 守卫必须是严格布尔：view.onboarding 为 undefined 时 `&&` 结果是
+    // undefined，而 classList.toggle(token, undefined) 按 WebIDL 等同于
+    // 不传 force——退化为无强制翻转，ready 单次渲染会把类加上（绿字闪现）
+    view.state.classList.toggle('state-ready', payload.phase === 'ready' && view.onboarding === true);
   }
-  if (view.detail) {
+  if (view.detail && !holdText) {
+    // 明细行与文字同策略：普通启动 ready 保持原明细，整页一致淡出
     view.detail.textContent = detail;
     view.detail.title = detail;
     // 与普通启动的 status-detail 对齐：详情行恒占位（CSS min-height），
     // 不因内容有无而显示/隐藏，避免进度区高度跳动。
   }
-  renderProgress(payload, view.progressBar, view.fill);
+  renderProgress(payload, view.progressBar, view.fill, view.onboarding === true);
   return { state, detail };
 }
 
@@ -199,7 +210,11 @@ function setStatus(phaseOrPayload, message, detail) {
   const { cancellable, cancelled } = syncInstallActionButtons(phase);
   const installActions = $('install-actions');
   const cancelButtons = document.querySelectorAll('[data-install-cancel]');
-  installActions.classList.toggle('dshd-hold', !cancellable && !cancelled);
+  // 普通启动 ready：整页原样淡出，取消按钮跟其他元素一起消失，不在此刻
+  // 单独隐藏（元素消失不一致的跳跃感）；导航后页面销毁，无残留
+  if (!(phase === 'ready' && !onboardingPendingView())) {
+    installActions.classList.toggle('dshd-hold', !cancellable && !cancelled);
+  }
   if (!cancellable) installCancelRequested = false;
   if (cancellable) {
     cancelButtons.forEach((button) => {
@@ -209,11 +224,15 @@ function setStatus(phaseOrPayload, message, detail) {
     });
   } else cancelButtons.forEach((button) => button.removeAttribute('aria-busy'));
   if (phase === 'ready') {
-    spinner.classList.add('hidden');
-    // onboarding 未完成时跳过整体淡出：ready 可能在面板显示期间到达
-    // （服务复用/并发路径下 get_status 直接返回 Ready），淡出会让配置
-    // 面板视觉消失而 boot 仍在等待用户操作；保存后面板隐藏即恢复正常
-    if (!onboardingPendingView()) {
+    // 面板等待期（提交前）：ready 只更新卡片（绿色就绪态），不淡出；
+    // 提交后（含普通启动）：loading/设置视图保持原样，整页统一淡出——
+    // 元素不逐个消失，观感为「当前界面淡出 → dsh」
+    if (onboardingPendingView() && !onboardingSubmitted) {
+      spinner.classList.add('hidden');
+    } else {
+      // 提交前面板显示期间到达的 ready（服务复用/并发路径下 get_status
+      // 直接返回 Ready）跳过整体淡出：淡出会让配置面板视觉消失而 boot
+      // 仍在等待用户操作
       document.body.classList.add('fade-out');
       notifyReadyTransition();
     }
@@ -250,6 +269,9 @@ function hideError() {
   $('error-box').classList.add('hidden');
   if (onboardingPausedByError) {
     onboardingPausedByError = false;
+    // 错误清除后面板恢复等待态：若错误发生在提交之后（极边缘——保存成功
+    // 后 boot 仍报错），必须回滚提交标志，否则「开始使用」永久失效
+    onboardingSubmitted = false;
     $('ob-box').classList.remove('hidden');
     document.body.classList.add('onboarding-mode');
     $('status').classList.add('hidden');
@@ -291,7 +313,9 @@ function renderServiceChoice(payload) {
   if (onboardingActive()) {
     onboardingPausedByServiceChoice = true;
     $('ob-box').classList.add('hidden');
-    document.body.classList.remove('onboarding-mode');
+    // onboarding-mode 刻意保留：移除会让 ≤760px 窗口下原本隐藏的
+    // logo/tagline 在选择阶段突然出现。选择「启动本地」的恢复分支会重新
+    // 加上；选择「接入外部」则面板不再出现、整页原样淡出导航
   }
   $('service-choice-port').textContent = String(candidate.port || '—');
   $('service-choice-cwd').textContent = candidate.cwd || candidate.home || '—';
@@ -367,6 +391,9 @@ function renderStatus(payload) {
 // —— 首次使用配置 ——
 
 let onboardingSaving = false;
+// 「开始使用」已提交：此后 ready 到达时不再区分面板等待态——整个首次
+// 设置视图（logo + 面板）原样整页淡出，不隐藏面板、不切回普通状态区
+let onboardingSubmitted = false;
 let obLangSel = null;
 let obThemeSel = null;
 
@@ -542,7 +569,9 @@ window.__dshdOnboardingVisible = (generation) => {
 };
 
 async function submitOnboarding() {
-  if (onboardingSaving || !lastStatusPayload || lastStatusPayload.phase !== 'ready') return;
+  // onboardingSubmitted：提交后面板在整页淡出期间仍可见且按钮会被
+  // finally 重新启用，必须挡住淡出窗口期内的重复提交（重复 save）
+  if (onboardingSubmitted || onboardingSaving || !lastStatusPayload || lastStatusPayload.phase !== 'ready') return;
   const errBox = $('ob-error');
   // 格式校验（不占用 saving 状态）：非空 key 必须以 sk- 开头，否则提示并
   // 聚焦输入框；留空仍允许（之后可在桌面端设置中配置）
@@ -556,6 +585,7 @@ async function submitOnboarding() {
   }
   errBox.classList.add('hidden');
   onboardingSaving = true;
+  onboardingSubmitted = true;
   setOnboardingBusy(true);
   const payload = {
     language: obLangSel ? obLangSel.get() : 'zh-CN',
@@ -567,27 +597,26 @@ async function submitOnboarding() {
   try {
     await window.__TAURI__.core.invoke('save_onboarding', { payload });
     onboardingPausedByError = false;
-    $('ob-box').classList.add('hidden');
-    $('ob-runtime').classList.add('hidden');
-    document.body.classList.remove('onboarding-mode');
     errBox.classList.add('hidden');
-    // 用最新状态 + 当前语言刷新状态区。注意：快照的 message/detail 是
-    // 语言切换前生成的 Rust 旧语言文本（首次安装场景保存时 boot 仍在
-    // 安装/启动阶段），直接显示会"语言不跟随"——剥离后由 phaseText/
-    // stepLine 按当前语言重译固定文案，进度数字与语言无关保留。
-    // 失败时回退给 Ready 事件自然刷新
+    // 整个首次设置视图（logo + 面板）保持原样、由 ready 分支整页淡出：
+    // 不隐藏面板、不切回普通状态区——「面板消失后 logo/状态区短暂残留，
+    // 像多了一个过渡界面」的观感即来源于此。get_status 重渲染触发淡出，
+    // Rust 侧握手完成后导航。onboarding-mode 同理保留（其规则在部分
+    // 窗口高度下隐藏 logo/tagline），错误路径 showError 仍会自行移除
     try {
       const st = await window.__TAURI__.core.invoke('get_status');
       renderStatus({ ...st, message: '', detail: '' });
     } catch (e) { /* 忽略：后续事件到达会刷新 */ }
-    // boot 将立即继续；错误页已接管时不再把重复状态区强行显示出来。
-    if ($('error-box').classList.contains('hidden')) $('status').classList.remove('hidden');
   } catch (e) {
+    // 保存失败：回滚提交态，恢复控件与按钮文案，面板留在原地等待重试
+    onboardingSubmitted = false;
+    setOnboardingBusy(false);
     errBox.textContent = dshdT('saveFailed') + ': ' + e;
     errBox.classList.remove('hidden');
   } finally {
     onboardingSaving = false;
-    setOnboardingBusy(false);
+    // 提交成功不恢复按钮状态：「正在进入…」保持至整页淡出导航，文案
+    // 在其可见期内始终准确，避免淡出中回跳「开始使用」的跳跃感
   }
 }
 
@@ -838,7 +867,8 @@ async function init() {
 init();
 
 // 窗口失焦变淡：Rust 侧 Focused 广播驱动（与标题栏/状态栏同一机制），
-// 仅启动阶段有效——导航到 dsh 页面后广播即停止
+// 仅启动阶段有效——导航到 dsh 页面后广播即停止。样式切换统一走
+// common.js 的去抖实现（启动期焦点往返不渲染，持续失焦才变淡）
 window.__dshdSetWindowActive = (active) => {
-  document.body.classList.toggle('window-inactive', !active);
+  window.__dshdApplyWindowFocus(active);
 };

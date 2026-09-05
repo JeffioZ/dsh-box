@@ -10,6 +10,7 @@ use tauri::WebviewUrl;
 use tauri::{AppHandle, Manager};
 
 use crate::app_state::AppState;
+use crate::updater::APP_REPO;
 
 static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CHECK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -242,6 +243,10 @@ pub fn precreate(app: &AppHandle) {
             .minimizable(false)
             .skip_taskbar(true)
             .visible(false)
+            // 同托盘菜单：预创建的隐藏弹窗不得在 WebView2 初始化时抢焦点
+            // （否则主窗口 Focused 振荡、启动页闪变淡）；打开弹窗时显式
+            // set_focus 提供键盘焦点
+            .focused(false)
     };
     // 层级：非 macOS 把主窗口挂为 owner（Windows）/transient（Linux）——弹窗
     // 恒在主窗口之上、随应用整体激活或退到后台，替代原先的全系统置顶。
@@ -873,7 +878,21 @@ pub fn open_notice(app: &AppHandle, title: &str, message: String, severity: &str
 /// 等用户关闭后再弹下一个。正式构建不会调用（bootstrap 以 devUrl 门控）。
 pub fn dev_preview_dialogs(app: &AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(1500));
-    open_app_restart_confirm(app, Some("9.9.9".into()), true);
+    // 真实数据优先：预览弹窗先做一次真实更新检查，有可用更新则展示真实
+    // 版本与链接（非模拟）；查询失败或无更新时才回退 9.9.9 模拟数据
+    let real = crate::updater::check(app);
+    let dsh_real = real.dsh.as_ref().filter(|d| d.update_available);
+    let app_real = real.app.as_ref().filter(|a| a.update_available);
+    let dsh_version = dsh_real
+        .map(|d| d.latest.clone())
+        .unwrap_or_else(|| "9.9.9".into());
+    let dsh_simulated = dsh_real.is_none();
+    let app_version = app_real
+        .map(|a| a.latest.clone())
+        .unwrap_or_else(|| "9.9.9".into());
+    let app_simulated = app_real.is_none();
+
+    open_app_restart_confirm(app, Some(dsh_version.clone()), dsh_simulated);
     wait_dialog_closed(app);
     open_notice(
         app,
@@ -890,10 +909,11 @@ pub fn dev_preview_dialogs(app: &AppHandle) {
         app,
         UpdatePrompt {
             kind: "app".into(),
-            version: "9.9.9".into(),
+            version: app_version,
             current: None,
-            release_url: None,
-            simulated: Some(true),
+            release_url: app_real
+                .map(|a| format!("https://github.com/{APP_REPO}/releases/tag/v{}", a.latest)),
+            simulated: app_simulated.then_some(true),
         },
     );
     wait_dialog_closed(app);
@@ -901,10 +921,14 @@ pub fn dev_preview_dialogs(app: &AppHandle) {
         app,
         UpdatePrompt {
             kind: "dsh".into(),
-            version: "9.9.9".into(),
-            current: Some("1.1.0".into()),
+            version: dsh_version,
+            current: Some(
+                dsh_real
+                    .map(|d| d.installed.clone())
+                    .unwrap_or_else(|| "1.1.0".into()),
+            ),
             release_url: None,
-            simulated: Some(true),
+            simulated: dsh_simulated.then_some(true),
         },
     );
     wait_dialog_closed(app);

@@ -60,6 +60,9 @@ pub fn boot_loop(app: AppHandle) {
                 }
             }
             BootOutcome::Cancelled => {
+                if app.state::<AppState>().is_quitting() {
+                    return;
+                }
                 let message = crate::locale::text("安装已取消", "Installation cancelled");
                 crate::logging::log("boot: 用户取消安装，等待重新安装");
                 let state = app.state::<AppState>();
@@ -68,6 +71,13 @@ pub fn boot_loop(app: AppHandle) {
                 wait_retry(&app, rx.as_ref());
             }
             BootOutcome::Failed(msg) => {
+                // 退出进行中收到的「失败」只是停服连带的子进程退出（轮询
+                // 循环以 Err 收场），不是用户需要看到的故障：静默放弃本次
+                // 引导结果，避免退出前失败界面在 loading 上闪现
+                if app.state::<AppState>().is_quitting() {
+                    crate::logging::log("boot: 失败但应用正在退出，跳过失败界面");
+                    return;
+                }
                 crate::logging::log(&format!("boot: 失败：{msg}"));
                 let state = app.state::<AppState>();
                 state.set_phase(BootPhase::Error, &msg, "");

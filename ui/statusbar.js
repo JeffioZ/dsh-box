@@ -262,7 +262,8 @@ window.__dshdRepaint = () => {};
 
 // 失焦样式跟随主窗口焦点（Rust Focused 事件广播）
 window.__dshdSetWindowActive = (focused) => {
-  document.body.classList.toggle('window-inactive', !focused);
+  // 样式切换走 common.js 的去抖实现（启动期焦点往返不渲染）
+  window.__dshdApplyWindowFocus(focused);
 };
 
 function init() {

@@ -504,6 +504,16 @@ pub(crate) fn run() {
                 }
             }
             tauri::WindowEvent::Focused(focused) => {
+                // tao 的 Focused 跟随主窗口框架 HWND 的 Win32 焦点：WebView2
+                // 子窗口（Chromium 内部 HWND）获得键盘焦点时框架收到
+                // WM_KILLFOCUS，tao 上报 Focused(false)——但前台窗口仍是本
+                // 应用的窗口树，应用并未失焦。广播前核实前台归属，避免
+                // 启动/交互期的焦点内部迁移被误判为失焦（启动页、标题栏、
+                // 状态栏闪变淡）
+                #[cfg(windows)]
+                let focused = if !*focused { blur_is_real() } else { true };
+                #[cfg(not(windows))]
+                let focused = *focused;
                 // 启动页的失焦变淡：仅在启动阶段广播——Ready 后主 webview
                 // 已导航到 dsh 页面，向其注入脚本越过了既定注入边界
                 if window.label() == MAIN_WINDOW
@@ -529,7 +539,7 @@ pub(crate) fn run() {
                         ));
                     }
                 }
-                if *focused {
+                if focused {
                     // 获焦时触发重绘脉冲：合成层失效导致的标题栏空白
                     // 在窗口重新激活时自愈
                     crate::titlebar::repaint_pulse(window.app_handle());
@@ -613,6 +623,29 @@ pub(crate) fn run() {
             _ => {}
         }
     });
+}
+
+/// 前台窗口是否仍属于主窗口的窗口树（框架自身或其子窗口——含 WebView2
+/// 内部 HWND）。用于甄别 tao Focused(false) 的框架级焦点迁移噪声：焦点
+/// 移入 WebView2 子窗口时前台未易主，不应按失焦处理。
+#[cfg(windows)]
+fn blur_is_real() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
+            // 无前台窗口（切换的瞬时态）：不广播，维持当前样式
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, &mut pid);
+        // 前台属于其他进程才是真实失焦：本应用自己的任何窗口（主窗口/
+        // 托盘菜单/自绘弹窗的隐藏窗口、WebView2 子窗口）拿到焦点时，
+        // 框架同样收到 WM_KILLFOCUS 并被 tao 上报为 Focused(false)
+        pid != std::process::id()
+    }
 }
 
 /// 退出的收尾序列：停服（有界等待 + 强杀升级，并先取得生命周期锁防退出中
