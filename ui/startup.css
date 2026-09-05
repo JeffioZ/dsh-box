@@ -105,14 +105,14 @@ body.window-inactive .footer { opacity: .6; }
 .error-box.reveal { animation: error-in .11s ease-out; }
 @keyframes error-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 /* 徽章式图标：给警示符号一个承载面，比裸图标更有「状态块」的存在感 */
-.error-icon-wrap { width: 32px; height: 32px; border-radius: var(--dshd-r-md); background: rgba(248, 81, 73, .12); display: grid; place-items: center; flex: none; }
+.error-icon-wrap { width: 32px; height: 32px; border-radius: var(--dshd-r-md); background: color-mix(in srgb, var(--dshd-error) 12%, transparent); display: grid; place-items: center; flex: none; }
 .error-icon { width: 17px; height: 17px; color: var(--red); }
 .error-head { display: flex; align-items: flex-start; gap: 10px; }
 .error-head-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .error-title { font-size: var(--dshd-fs-base); font-weight: 600; color: var(--red); text-wrap: balance; }
 .error-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
 .error-hint { font-size: var(--dshd-fs-sm); color: var(--muted); line-height: 1.5; }
-.error-details { border-top: 1px solid rgba(248, 81, 73, .2); padding-top: 8px; }
+.error-details { border-top: 1px solid color-mix(in srgb, var(--dshd-error) 20%, transparent); padding-top: 8px; }
 .error-details summary {
   width: fit-content; color: var(--muted); font-size: var(--dshd-fs-sm); cursor: pointer;
   border-radius: 4px; outline: none;
@@ -121,7 +121,8 @@ body.window-inactive .footer { opacity: .6; }
 .error-details summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .error-msg {
   margin-top: 8px; padding: 8px 10px; border-radius: var(--dshd-r-md); background: rgba(0, 0, 0, .12);
-  font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  /* 等宽场景：栈见 common.css --dshd-font-mono（dsh 上游同款，含中文尾防宋体） */
+  font: 12px/1.5 var(--dshd-font-mono);
   color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
   max-height: 112px; overflow: auto; user-select: text;
 }
@@ -171,7 +172,7 @@ body.window-inactive .footer { opacity: .6; }
    此处只保留启动页特有的底色与 hover/disabled 复位 */
 .btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
 .btn:disabled:hover { background: #23232b; border-color: var(--line); }
-.btn.small { min-height: 28px; padding: 0 12px; font-size: var(--dshd-fs-sm); }
+.btn.small { min-height: 28px; padding: 0 12px; font-size: var(--dshd-fs-sm); border-radius: 14px; }
 
 .footer { position: fixed; z-index: 2; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: var(--dshd-fs-sm); color: var(--muted); pointer-events: none; }
 .versions { opacity: .75; }
@@ -185,12 +186,13 @@ body.window-inactive .footer { opacity: .6; }
      “卡片面”只有一层，避免启动页自成一格 */
   background: var(--dshd-overlay);
   border: 1px solid var(--line);
-  /* dsh 弹窗圆角 24px */
-  border-radius: 24px;
+  /* 自绘浮层统一圆角（与菜单/弹窗同档，见 common.css --dshd-r-float；
+     dsh Modal 为 24，按统一决策偏离） */
+  border-radius: var(--dshd-r-float);
   padding: 18px 22px;
   display: flex; flex-direction: column; gap: 12px;
   text-align: left;
-  /* 主卡片投影比浮层 --dshd-shadow-lv3(.08) 更重：全屏页面上的中央卡片
+  /* 主卡片投影比浮层 --dshd-shadow-lv3 更重：全屏页面上的中央卡片
      需要更强的抬升感，不等值替换为浮层阴影会明显变“飘” */
   box-shadow: 0 8px 32px rgba(0, 0, 0, .28);
 }
@@ -219,13 +221,14 @@ body.window-inactive .footer { opacity: .6; }
 .ob-option-row { align-items: flex-start; }
 .ob-option-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ob-option-copy .ob-hint { max-width: 360px; line-height: 1.4; }
-/* —— dsh 设置下拉：trigger 容器默认态（border-l2 + bg-layer-2），
-   12px 圆角、14px/22px；列表 7px 圆角；选中项勾选标记 + ghost-active-fill —— */
+/* —— dsh 设置下拉：trigger 容器按输入控件档（圆角 8px、14px/22px），
+   列表为自绘浮层统一圆角 14 + 条目 10（同心）；选中项勾选标记 + ghost-active-fill —— */
 .dshd-select { position: relative; }
+/* 下拉触发器属输入控件：圆角跟 dsh Input 8px */
 .dshd-select-trigger {
   display: inline-flex; align-items: center; gap: 8px;
   width: 112px; height: 32px; padding: 0 10px 0 12px;
-  border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-lg);
+  border: 1px solid var(--dshd-border); border-radius: 8px;
   background: var(--dshd-hover); color: var(--text);
   font: inherit; font-size: var(--dshd-fs-base); line-height: 22px; cursor: pointer; outline: none;
   transition: var(--dshd-anim-state);
@@ -245,14 +248,14 @@ body.window-inactive .footer { opacity: .6; }
 .dshd-select-list {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
   min-width: 140px; margin: 0; padding: 4px; list-style: none;
-  border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-sm);
+  border: 1px solid var(--dshd-float-border); border-radius: var(--dshd-r-float);
   background: var(--dshd-card); color: var(--text);
   box-shadow: var(--dshd-shadow-lv3);
 }
 .dshd-select-list[hidden] { display: none; }
 .dshd-select-list li {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-radius: 5px; font-size: var(--dshd-fs-base); line-height: 22px;
+  padding: 6px 10px; border-radius: var(--dshd-r-md); font-size: var(--dshd-fs-base); line-height: 22px;
   cursor: pointer; white-space: nowrap;
   transition: var(--dshd-anim-state);
 }
@@ -367,7 +370,7 @@ body.window-inactive .footer { opacity: .6; }
 @media (prefers-color-scheme: light) {
   .ob-box { box-shadow: 0 8px 32px rgba(0, 0, 0, .08); }
   .ob-runtime .bar { background: rgba(38, 49, 72, .16); }
-  .error-icon-wrap { background: rgba(180, 35, 24, .1); }
+  .error-icon-wrap { background: color-mix(in srgb, var(--dshd-error) 10%, transparent); }
   .error-link:hover { background: rgba(38, 49, 72, .06); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -384,7 +387,7 @@ body.window-inactive .footer { opacity: .6; }
   .btn:disabled:hover { background: #f0f1f5; border-color: var(--line); }
   .btn.primary { background: var(--blue-surface); border-color: var(--blue-surface); color: #fff; }
   .btn.primary:hover { background: var(--blue-surface-hover); border-color: var(--blue-surface-hover); }
-  .error-details { border-top-color: rgba(180, 35, 24, .18); }
+  .error-details { border-top-color: color-mix(in srgb, var(--dshd-error) 18%, transparent); }
   .error-msg { background: rgba(38, 49, 72, .05); }
 }
 

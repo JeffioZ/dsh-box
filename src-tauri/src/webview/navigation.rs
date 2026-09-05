@@ -93,10 +93,6 @@ document.documentElement.appendChild(s);}";
 const HIDE_TOOLS_CLEAR: &str =
     "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();";
 
-/// 隐藏会话统计行（开关开启时注入）：CSS 按当前版本 class 隐藏
-/// StatsLine，另挂文本特征 fallback + MutationObserver 补位——dsh 更新
-/// 后 class 变化时 fallback 仍能隐藏；两路都失效则统计行重新出现
-/// （静默降级，不影响任何功能）。
 /// 隐藏 StatsLine 的 CSS（initialization_script 首帧注入与 navigate 注入共用，
 /// 同一份定义避免双份拷贝；style id 与 fallback 脚本共用 guard）。
 /// 注意：属性选择器必须用双引号——注入脚本以 JS 单引号字符串承载本 CSS，

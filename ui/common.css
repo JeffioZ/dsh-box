@@ -1,8 +1,9 @@
 /* DSHBox 共享设计基础：数值与 dsh 设计系统对齐
    （client/ui-theme/src/styles/design-platform.css）
-   - 深色：卡片 bluish-800 / 文字 bluish-50 / 次级 bluish-400
+   - 深色：卡片 bluish-800 / 文字 bluish-50 / 次级 bluish-300
    - 浅色：卡片纯白 / 文字 bluish-1000 / 次级 bluish-600
-   - 菜单卡片 r12/pad4；条目 min-h40/r10/14px；hover 8% / 按压 14%
+   - 浮层卡片 r14/pad4（自绘浮层统一圆角，见 --dshd-r-float）；
+     条目 min-h40/r10/14px；hover 8% / 按压 14%
    供 tray-menu.html、control-center.html 引用；注入 dsh 页面的菜单脚本保持运行时
    读 dsh 令牌，仅回退色与本文件一致。 */
 :root {
@@ -14,6 +15,12 @@
   --dshd-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
     sans-serif;
+  /* 等宽栈：与 dsh 上游 --ds-font-family-code 逐字一致。dsh 特意不裸收
+     monospace——栈内拉丁等宽字体均无中文字形，中文落到 generic monospace
+     在 Windows 上会回退宋体，尾部苹方/雅黑即为此设。用于 YAML 编辑框、
+     错误详情等中英混排等宽场景 */
+  --dshd-font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
   /* 弹窗/悬浮层面板背景：dsh bg-layer-2（bluish-850 #2c2c2e）——
      与卡片（菜单）色区分，dsh 弹窗面板用 layer-2 */
   --dshd-overlay: #2c2c2e;
@@ -22,17 +29,27 @@
   --dshd-text-dim: #cfd3d6;
   --dshd-border: rgba(255, 255, 255, 0.06);
   --dshd-border-strong: #3a3a46;
+  /* 浮层表面描边：dsh border-l2 档（深色白 12% / 浅色黑 10%，两主题对称）。
+     dsh 上游 elevation 体系注释明确「深色主题下柔光几乎不可见，由描边承担
+     分离」——浮层窗口落在任意背景（含同色卡片）上时 l1 分隔线档不足以
+     分离，浮层统一用 l2 档 */
+  --dshd-float-border: rgba(255, 255, 255, 0.12);
+  /* 大弹窗描边：dsh border-l4 档（Modal 规格默认描边档）——控制中心这类
+     无遮罩、独立窗口承载的全屏大卡片用 */
+  --dshd-dialog-border: rgba(255, 255, 255, 0.2);
   --dshd-hover: rgba(255, 255, 255, 0.08);
   --dshd-pressed: rgba(255, 255, 255, 0.14);
-  /* 选中态：dsh button-ghost-active-fill 中性灰（深色 bluish-750 #43454a /
-     浅色 bluish-100 #ebedf2），非重点色交互（导航/分类/分段选中）；
-     品牌蓝只用于 accent 点缀与 primary 按钮 */
+  /* 选中态：dsh button-ghost-active-fill（深色 bluish-750 #43454a /
+     浅色 bluish-100 #ebeef2），非重点色交互（导航/分类/分段选中）；
+     品牌蓝只用于 accent 点缀与 primary 按钮。
+     选中后再悬停 = dsh ghost-active-hover（深色 bluish-700 / 浅色 bluish-150） */
   --dshd-selected: #43454a;
-  --dshd-selected-hover: #4d4f55;
+  --dshd-selected-hover: #61666b;
   --dshd-selected-text: #f9fafb;
-  /* 滑块开关：dshmarket 规范（38×22、未选中 bg-layer-2、选中成功绿 #16a34a） */
+  /* 滑块开关：38×22、未选中 bg-layer-2；选中绿 = dsh state-success-primary
+     （green-500 #22c55e，静态色两主题同值） */
   --dshd-switch-bg: #2c2c2e;
-  --dshd-switch-on: #16a34a;
+  --dshd-switch-on: #22c55e;
   /* 品牌强调色：dsh deepseek 色板（design-platform.css）
      - accent 450 #5686fe：图标/链接/焦点环/开关选中（深色底对比 ≥4.5）
      - accent-surface 600 #4868b2：承载白字的实心强调面（白字对比 5.4:1 ≥4.5；
@@ -45,25 +62,38 @@
   --dshd-accent-surface-pressed: #33539f;
   --dshd-accent-subtle: rgba(86, 134, 254, 0.08);
   --dshd-accent-border: rgba(86, 134, 254, 0.32);
+  /* 标题栏关闭按钮平台红（Windows 窗口控制惯例，dsh 无窗口按钮无对应物）；
+     菜单危险行不用实色红，走 danger 着色底 + error 文字（dsh Menu 原生） */
   --dshd-danger: #e81123;
   --dshd-danger-pressed: #c50f1f;
-  --dshd-error: #f85149;
-  /* 错误文字专用色：深色下比 error 更亮，保证正文对比度 ≥4.5:1 */
-  --dshd-error-text: #ff7b72;
-  --dshd-success: #3fb950;
-  --dshd-success-text: #56d364;
-  --dshd-warning: #d29922;
-  /* 语义浅底面：图标底/提示框着色背景（与 accent-subtle 同一语义层） */
-  --dshd-warning-subtle: rgba(210, 153, 34, 0.13);
-  --dshd-error-subtle: rgba(248, 81, 73, 0.08);
-  --dshd-error-border: rgba(248, 81, 73, 0.35);
+  /* 危险行着色底：dsh interactive-bg-hover-danger 逐值；按压档 dsh 未定义，
+     按 hover 加深派生 */
+  --dshd-danger-hover: rgba(242, 90, 90, 0.15);
+  --dshd-danger-active: rgba(242, 90, 90, 0.22);
+  /* 语义状态色 = dsh state-* 别名逐值：error 深色 red-400 / 浅色 red-600、
+     success green-500、warning 深色 amber-500 / 浅色 amber-600（warn-label） */
+  --dshd-error: #f25a5a;
+  --dshd-error-text: #f25a5a;
+  --dshd-success: #22c55e;
+  --dshd-success-text: #4ed17e;
+  --dshd-warning: #f59e0b;
+  /* 语义浅底面：dsh 无静态对应档，以各主题 warn/error 色为基的低透明度派生 */
+  --dshd-warning-subtle: rgba(245, 158, 11, 0.13);
+  --dshd-error-subtle: rgba(242, 90, 90, 0.10);
+  --dshd-error-border: rgba(242, 90, 90, 0.35);
   --dshd-input-bg: rgba(255, 255, 255, 0.06);
   --dshd-input-hover: rgba(255, 255, 255, 0.1);
-  --dshd-scroll-thumb: rgba(255, 255, 255, 0.24);
-  --dshd-scroll-thumb-hover: rgba(255, 255, 255, 0.38);
-  /* dsh shadow-lv3：菜单、下拉与弹窗使用同一浮层层级。 */
-  --dshd-shadow-lv3: 0 0 1px rgba(0, 0, 0, .2),
-    0 0 4px rgba(0, 0, 0, .02), 0 12px 32px rgba(0, 0, 0, .08);
+  /* 滚动条：dsh scrollbar-bg-l1 / hover-l1（深色 neutral-700/600 实色） */
+  --dshd-scroll-thumb: #3c3c3d;
+  --dshd-scroll-thumb-hover: #545557;
+  /* dsh shadow-lv3：菜单、下拉与弹窗使用同一浮层层级。本体只定义一次
+     （项目视觉契约禁止主题重复定义），主题差异下沉到校准值：深色按深底
+     重新校准黑色不透明度（dsh 原值按浅色校准，深底上柔光不可见）；
+     两套扩散几何一致——窗口阴影余量由 window.rs OVERLAY_SHADOW_* 预留
+     （侧36/上24/下48），加大模糊会溢出被透明窗口裁掉 */
+  --dshd-shadow-lv3-cali: 0 0 1px rgba(0, 0, 0, .35),
+    0 4px 12px rgba(0, 0, 0, .22), 0 12px 32px rgba(0, 0, 0, .32);
+  --dshd-shadow-lv3: var(--dshd-shadow-lv3-cali);
 
   /* 字号层级：全 UI 唯一字号来源，8 档整步进（禁止半步字号）。
      角色：2xs=微型徽标/日历星期；xs=弱化标注；sm=次级说明；
@@ -78,10 +108,16 @@
   --dshd-fs-xl: 16px;
   --dshd-fs-2xl: 20px;
 
-  /* 圆角层级（dsh 设计系统：紧凑菜单 7 / 条目 10 / 菜单面板 12） */
+  /* 圆角层级：紧凑控件 7 / 条目与内嵌块 10 / 导航与内嵌卡片 12（与 dsh 一致）。
+     --dshd-r-float = 自绘浮层统一圆角（菜单面板/弹窗/首次引导卡）：
+     取 14 使 面板 − 内边距4 = 条目 10 严格同心（上游菜单面板 20、Modal 24，
+     按「自绘浮层统一圆角」决策全局统一并注明偏离）；
+     控件圆角逐值跟 dsh：按钮 18（Button.module.css，小按钮档 14）、
+     输入框 8（Input.module.css）；toast 为紧凑瞬时元素，用条目档 10 */
   --dshd-r-sm: 7px;
   --dshd-r-md: 10px;
   --dshd-r-lg: 12px;
+  --dshd-r-float: 14px;
   --dshd-r-btn: 18px;
   --dshd-r-pill: 999px;
 
@@ -129,13 +165,17 @@
     --dshd-text: #0f1115;
     /* 次级文字：dsh label-secondary（浅色 bluish-700 #61666b） */
     --dshd-text-dim: #61666b;
-    --dshd-border: rgba(0, 0, 0, 0.06);
-    --dshd-border-strong: #d9dce3;
+    /* 分隔线 = border-l1 light（4%），输入/开关 hover 描边 = border-l2 light；
+       浮层描边同取 l2 档（10%，与深色对称） */
+    --dshd-border: rgba(0, 0, 0, 0.04);
+    --dshd-border-strong: rgba(0, 0, 0, 0.1);
+    --dshd-float-border: rgba(0, 0, 0, 0.1);
+    --dshd-dialog-border: rgba(0, 0, 0, 0.16);
     --dshd-hover: rgba(38, 49, 72, 0.06);
     --dshd-pressed: rgba(38, 49, 72, 0.1);
-    /* 浅色选中态：bluish-100 #ebedf2 */
-    --dshd-selected: #ebedf2;
-    --dshd-selected-hover: #e1e5ee;
+    /* 浅色选中态：ghost-active-fill bluish-100 #ebeef2 → hover bluish-150 #e9ecf2 */
+    --dshd-selected: #ebeef2;
+    --dshd-selected-hover: #e9ecf2;
     --dshd-selected-text: #0f1115;
     --dshd-switch-bg: #eef0f4;
     /* 浅色主题强调色：整体用 deepseek 500/600 级（450 在白底仅 3.4:1 不足）
@@ -149,18 +189,23 @@
     --dshd-accent-surface-pressed: #33539f;
     --dshd-accent-subtle: rgba(65, 118, 230, 0.07);
     --dshd-accent-border: rgba(65, 118, 230, 0.26);
-    --dshd-error: #b42318;
-    --dshd-error-text: #b42318;
-    --dshd-success: #1a7f37;
-    --dshd-success-text: #1a7f37;
-    --dshd-warning: #9a6700;
-    --dshd-warning-subtle: rgba(154, 103, 0, 0.10);
-    --dshd-error-subtle: rgba(180, 35, 24, 0.06);
-    --dshd-error-border: rgba(180, 35, 24, 0.30);
+    --dshd-danger-hover: rgba(236, 19, 19, 0.05);
+    --dshd-danger-active: rgba(236, 19, 19, 0.09);
+    --dshd-error: #ec1313;
+    --dshd-error-text: #ec1313;
+    --dshd-success: #22c55e;
+    --dshd-success-text: #22c55e;
+    --dshd-warning: #dd8629;
+    --dshd-warning-subtle: rgba(221, 134, 41, 0.13);
+    --dshd-error-subtle: rgba(236, 19, 19, 0.05);
+    --dshd-error-border: rgba(236, 19, 19, 0.30);
     --dshd-input-bg: rgba(38, 49, 72, 0.045);
     --dshd-input-hover: rgba(38, 49, 72, 0.075);
-    --dshd-scroll-thumb: rgba(38, 49, 72, 0.24);
-    --dshd-scroll-thumb-hover: rgba(38, 49, 72, 0.4);
+    --dshd-scroll-thumb: #e5e5e5;
+    --dshd-scroll-thumb-hover: #d4d4d4;
+    /* 浅色校准值维持 dsh shadow-lv3 原值：浅底上黑影天然可见，无需加深 */
+    --dshd-shadow-lv3-cali: 0 0 1px rgba(0, 0, 0, .2),
+      0 0 4px rgba(0, 0, 0, .02), 0 12px 32px rgba(0, 0, 0, .08);
   }
 }
 
@@ -185,8 +230,8 @@
   box-sizing: border-box;
   padding: 4px;
   background: var(--dshd-card);
-  border: 1px solid var(--dshd-border);
-  border-radius: var(--dshd-r-lg);
+  border: 1px solid var(--dshd-float-border);
+  border-radius: var(--dshd-r-float);
   box-shadow: var(--dshd-shadow-lv3);
   --dsh-scrollbar-thumb: var(--dshd-scroll-thumb);
   --dsh-scrollbar-thumb-hover: var(--dshd-scroll-thumb-hover);
@@ -278,12 +323,18 @@
 .dshd-row { transition: var(--dshd-anim-state); }
 .dshd-menu-keyboard .dshd-row:focus { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .dshd-row:active, .dshd-row.pressed { background: var(--dshd-pressed); }
-.dshd-row.danger:not(:disabled):hover { background: var(--dshd-danger); color: #fff; }
+/* 危险行：dsh Menu 原生——文字/图标 error 色，hover/按压用红色着色底
+   （非实色红白字）；token 出处见 :root 的 danger 注释 */
+.dshd-row.danger:not(:disabled) { color: var(--dshd-error); }
+.dshd-row.danger:not(:disabled):hover { background: var(--dshd-danger-hover); }
 .dshd-row.danger:not(:disabled):active,
-.dshd-row.danger:not(:disabled).pressed { background: var(--dshd-danger-pressed); color: #fff; }
-.dshd-row:disabled { cursor: default; opacity: .55; }
+.dshd-row.danger:not(:disabled).pressed { background: var(--dshd-danger-active); }
+/* 禁用透明度 .4 = dsh Menu .item:disabled 逐值（注入菜单同值；按钮/输入框
+   等控件的禁用态仍用 .55） */
+.dshd-row:disabled { cursor: default; opacity: .4; }
 .dshd-row:disabled:hover { background: transparent; }
 .dshd-row .ic { flex: none; width: 16px; height: 16px; color: var(--dshd-text-dim); }
+.dshd-row.danger:not(:disabled) .ic,
 .dshd-row.danger:not(:disabled):hover .ic,
 .dshd-row.danger:not(:disabled):active .ic,
 .dshd-row.danger:not(:disabled).pressed .ic { color: currentColor; }
@@ -338,8 +389,8 @@
 /* 次按钮 hover：底色 + 边框同步抬升（与启动页 .btn 同一状态阶梯） */
 .dshd-btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
 .dshd-btn:disabled:hover { background: transparent; }
-/* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角与主按钮一致（18px pill） */
-.dshd-btn.small { height: 24px; padding: 0 10px; font-size: var(--dshd-fs-sm); border-radius: var(--dshd-r-btn); }
+/* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角用 dsh 小按钮档 14px */
+.dshd-btn.small { height: 24px; padding: 0 10px; font-size: var(--dshd-fs-sm); border-radius: 14px; }
 
 /* —— 按钮状态语义（三页按钮类共用，唯一落点）——
    .dshd-btn（公共）/ .btn（启动页）/ .mi-btn（控制中心）的过渡、焦点环、
@@ -364,7 +415,8 @@
   height: var(--dshd-input-height, 34px);
   padding: 0 10px;
   border: 1px solid var(--dshd-border);
-  border-radius: var(--dshd-r-md);
+  /* 输入框圆角：dsh Input.module.css 是 8px（不取条目档 10） */
+  border-radius: 8px;
   outline: none;
   background: var(--dshd-input-bg);
   color: var(--dshd-text);
@@ -523,6 +575,8 @@
   align-items: flex-start;
   gap: 8px;
   padding: 9px 12px;
+  /* 紧凑瞬时提示：条目档 10px——浮层档 14 在约 37px 高的小元素上曲线
+     占比过大，顶部近胶囊、首行文字视觉上被圆角挤压 */
   border-radius: var(--dshd-r-md);
   border: 1px solid var(--dshd-border-strong);
   background: var(--dshd-overlay);

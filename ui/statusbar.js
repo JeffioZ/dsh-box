@@ -135,11 +135,13 @@ function balanceChipState() {
   if (!b.balances || !b.balances.length) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
   const first = b.balances[0];
   const cur = dshdCurrency(first.currency);
+  // 币种前缀：符号类（¥）紧贴金额；ISO 代码类（USD）补空格避免粘连
+  const curText = cur.length === 1 ? cur : cur + ' ';
   const low = chipLowLevel(first);
   // chip 只显示金额（币种符号足够，currency 代码与拆分明细留给详情弹窗）；
   // stale：保留上次金额但状态点转 warn，悬停提示刷新失败
   return {
-    text: cur + dshdBalanceValue(first.total_balance),
+    text: curText + dshdBalanceValue(first.total_balance),
     dot: low === 'critical' ? 'err' : low === 'warning' ? 'warn' : b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
     kind: 'ok',
     low,

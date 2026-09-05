@@ -32,10 +32,11 @@ body.window-inactive .vsep { opacity: .55; }
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
   background: var(--dshd-border);
 }
-/* —— 会话统计（点击打开详情；悬停说明由系统默认 title 提供） —— */
+/* —— 会话统计（点击打开详情；悬停说明由系统默认 title 提供） ——
+   悬停几何与右侧余额 chip 同规格：通高、r-sm、8px 水平内距 */
 .stats {
   min-width: 0; max-width: 100%; display: flex; align-items: center; gap: 0;
-  height: 100%; padding: 0 6px; border-radius: var(--dshd-r-sm);
+  height: 100%; padding: 0 8px; border-radius: var(--dshd-r-sm);
   font: inherit; font-size: var(--dshd-fs-sm); line-height: 1; white-space: nowrap; overflow: hidden;
   cursor: pointer; border: none; background: transparent; color: inherit; outline: none;
   transition: var(--dshd-anim-state);
@@ -62,28 +63,29 @@ body.window-inactive .vsep { opacity: .55; }
   background: var(--dshd-border-strong); }
 .flex-space { flex: 1; }
 
-/* —— 余额 chip（点击打开详情；悬停说明由系统默认 title 提供） —— */
+/* —— 余额 chip（点击打开详情；悬停说明由系统默认 title 提供） ——
+   与左侧统计区同一悬停几何：通高 26px、r-sm、8px 水平内距——状态栏两个
+   可点区域的 hover 药丸必须同规格（此前 chip 是 inset 2px 的小浮药丸，
+   与统计区的通高 hover 尺寸/圆角都不一致） */
 .sb-chip {
-  position: relative; z-index: 0; display: inline-flex; align-items: center; gap: 4px; height: 24px;
+  display: inline-flex; align-items: center; gap: 4px; height: 100%;
   color: var(--dshd-text); font: inherit;
   background: transparent; border: none; border-radius: var(--dshd-r-sm);
   padding: 0 8px; font-size: var(--dshd-fs-sm); line-height: 1; cursor: pointer; outline: none;
   font-variant-numeric: tabular-nums; font-weight: 500;
-  transition: color var(--dshd-m-fast) var(--dshd-ease-out);
+  transition: var(--dshd-anim-state);
 }
-.sb-chip::before {
-  content: ""; position: absolute; z-index: -1; inset: 2px; border-radius: 5px; pointer-events: none;
-  /* 静止态透明（与左侧统计按钮一致），仅悬停/按下显示底色 */
-  background: transparent; transition: background-color var(--dshd-m-fast) var(--dshd-ease-out);
-}
-.sb-chip:hover::before { background: var(--dshd-hover); }
+.sb-chip:hover { background: var(--dshd-hover); }
 .sb-chip:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
-.sb-chip:active::before { background: var(--dshd-pressed); }
+.sb-chip:active { background: var(--dshd-pressed); }
 .sb-chip:disabled { cursor: default; opacity: .55; }
 .sb-chip .c-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--dshd-text-dim); }
 .sb-chip .dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--dshd-success); flex: none;
+  /* 光学补偿：钱包图标墨迹右缘内缩 ~1.5px、金额字形左缘留白 ~0.5px，
+     flex gap 均等时状态点视觉上偏右；左 1 / 右 2 补差让墨迹间隙对称 */
+  margin: 0 2px 0 1px;
   /* 同色光晕（color-mix，WebView2 已在用量页使用）：状态点更醒目 */
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshd-success) 16%, transparent);
 }
@@ -101,7 +103,7 @@ body.window-inactive .vsep { opacity: .55; }
   .statusbar::before { background: rgba(0, 0, 0, .04); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .stats, .sb-chip, .sb-chip::before { transition: none; }
+  .stats, .sb-chip { transition: none; }
 }
   </style>
 </head>

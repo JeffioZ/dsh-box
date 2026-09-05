@@ -1,15 +1,32 @@
+// 分隔线高 = 1/dpr（恰 1 设备像素）：与内置菜单 common.js 的 --dshd-hair 同
+// 机制。1px 字面值在分数缩放（125%/150%）下会被设备像素 snap 成 1 或 2 行
+// 不等——分隔块 4+1+4=9px 在 150% 下是 13.5 设备px，每多一条分隔线相位漂移
+// 半像素，同一菜单内厚度就不一致；归一后分隔块回到整数设备高度，相位不漂移
+var HAIR_PX = (1 / (window.devicePixelRatio || 1)) + 'px';
 var css = [
-  // 与 dsh 菜单同规格：卡片 r12/pad4、条目 min-h40/r10/14px、hover 8%/按压 14%；
+  // 与 dsh 菜单同规格：卡片 r14/pad4（圆角为自绘浮层统一档，其余逐值同 dsh）、
+  // 条目 min-h40/r10/14px、hover 8%/按压 14%；
   // 最小宽 168：比 dsh 卡宽（218）窄，短条目与快捷键列之间的留白更协调，
   // 长条目自动撑宽
   '.__dshd_cm{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
   'background:var(--dsw-specific-menu,#353638);',
+  // 描边：基础档沿用 dsh inverted（浅色=透明、深色=白 6%，与改前一致）；
+  // dsh 深色主题下升级 border-l2 档——深色下阴影柔光几乎不可见，由描边承担
+  // 分离（dsh 上游 elevation 体系结论），浮层落在同色卡片上时白 6% 不够用。
+  // 无 dsh 令牌时回退白 12%（内置页菜单同档）
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.06));',
-  // dsh 默认菜单圆角 12px + shadow-lv3 + dsh 字体栈
-  'border-radius:12px;box-shadow:var(--dsw-shadow-lv3,0 0 1px rgba(0,0,0,.2),0 0 4px rgba(0,0,0,.02),0 12px 32px rgba(0,0,0,.08));',
-  'font:14px/22px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;',
+  // 菜单圆角 14px（偏离上游现值 20：同心圆要求 面板半径 − 内边距 = 条目
+  // 半径，14 − 4 = 10 与条目 r10 严格同心，全部菜单统一取舍）+ shadow-lv3
+  // + 字体跟随 dsh（--dsw-font-family）：右键菜单与 dsh 自家浮层同屏出现，
+  // 字体必须与 dsh 原生一致；令牌缺失时回退 dsh 同款系统栈
+  'border-radius:14px;box-shadow:var(--dsw-shadow-lv3,0 0 1px rgba(0,0,0,.2),0 0 4px rgba(0,0,0,.02),0 12px 32px rgba(0,0,0,.08));',
+  'font:14px/22px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);',
   'color:var(--dsw-alias-label-primary,#f9fafb);user-select:none;',
   'animation:dshd-cm-in .11s ease-out;}',
+  // 深色主题描边升级（必须是独立顶层规则：拼在基础规则块内会被 CSS 嵌套
+  // 解析成 & 后代选择器而永不匹配）；body[data-ds-dark-theme] 与 dsh 自家
+  // 样式表的深色钩子一致，主题切换时自动跟随
+  'body[data-ds-dark-theme] .__dshd_cm{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.12));}',
   '@keyframes dshd-cm-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}',
   '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:10px;cursor:default;white-space:nowrap;',
   'display:flex;align-items:center;gap:8px;box-sizing:border-box;',
@@ -18,19 +35,26 @@ var css = [
   '.__dshd_cm_i:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));}',
   '.__dshd_cm_i:focus{outline:none;}',
   '.__dshd_cm.__dshd_cm_kbd .__dshd_cm_i:focus{outline:2px solid var(--dsw-brand-color-primary,#5686fe);outline-offset:-2px;}',
-  '.__dshd_cm_i:active{background:rgba(255,255,255,.14);}',
-  '.__dshd_cm_i.__dshd_cm_p{background:rgba(255,255,255,.14);}',
+  // 按压底色读 dsh interactive-bg-active：深色 14% 白/浅色 10% 蓝灰，与内置
+  // --dshd-pressed 两主题逐值一致；fallback 为深色值
+  '.__dshd_cm_i:active{background:var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.14));}',
+  '.__dshd_cm_i.__dshd_cm_p{background:var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.14));}',
+  // 禁用透明度 .4 = dsh Menu .item:disabled 逐值（内置 .dshd-row 已同步）
   '.__dshd_cm_i.__dshd_cm_d{opacity:.4;pointer-events:none;}',
   '@media (prefers-reduced-motion:reduce){.__dshd_cm{animation:none;}',
   '.__dshd_cm_i{transition:none;}}',
   '.__dshd_cm_l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}',
-  '.__dshd_cm_ic{width:16px;height:16px;flex:none;display:block;}',
+  // 图标/快捷键 rest = label-secondary、hover 提亮 primary：与内置 .dshd-row
+  // 的 .ic/.dim 同规格（dsh 原生 itemIcon 为 tertiary 静态，此处按内置取舍）
+  '.__dshd_cm_ic{width:16px;height:16px;flex:none;display:block;color:var(--dsw-alias-label-secondary,#cfd3d6);}',
+  '.__dshd_cm_i:hover .__dshd_cm_ic{color:var(--dsw-alias-label-primary,#f9fafb);}',
   ' .__dshd_cm_ic svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;',
   'stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}',
-  '.__dshd_cm_k{color:var(--dsw-alias-label-tertiary,#adb2b8);font-size:12px;}',
+  '.__dshd_cm_k{color:var(--dsw-alias-label-secondary,#cfd3d6);font-size:12px;}',
+  '.__dshd_cm_i:hover .__dshd_cm_k{color:var(--dsw-alias-label-primary,#f9fafb);}',
   '.__dshd_cm_ar{font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;',
   'font-size:12px;color:var(--dsw-alias-label-tertiary,#adb2b8);margin-left:6px;line-height:1;}',
-  '.__dshd_cm_sep{height:1px;margin:4px 2px;background:var(--dsw-alias-border-l1,rgba(255,255,255,.06));}',
+  '.__dshd_cm_sep{height:' + HAIR_PX + ';margin:4px 2px;background:var(--dsw-alias-border-l1,rgba(255,255,255,.06));}',
   // 退出动效：与主菜单/托盘菜单一致的淡出（90ms）
   '.__dshd_cm_out{opacity:0;transition:opacity .09s ease;}',
   // 子菜单：与 dsh 一致，最小宽 163；伪元素桥接父项与子菜单间隙，鼠标跨过不丢悬停
@@ -39,7 +63,7 @@ var css = [
   // 复制结果：不移动菜单/页面布局，短暂显示后自行消失
   '.__dshd_cm_toast{position:fixed;z-index:2147483001;left:50%;bottom:18px;transform:translateX(-50%);',
   'padding:6px 10px;border-radius:7px;pointer-events:none;white-space:nowrap;',
-  'font:12px/18px -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;',
+  'font:12px/18px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif);',
   'color:var(--dsw-alias-label-primary,#f9fafb);background:var(--dsw-specific-menu,#353638);',
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.08));',
   'box-shadow:var(--dsw-shadow-lv2,0 6px 18px rgba(0,0,0,.28));animation:dshd-toast-in .1s ease-out;}',
