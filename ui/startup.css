@@ -23,8 +23,10 @@ body {
   color: var(--text);
   display: flex; align-items: center; justify-content: center;
   position: relative; user-select: none; overflow: hidden;
-  /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪 */
-  transition: opacity .3s ease;
+  /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪。
+     淡出是短距离透明度过渡，0.18s 足够平滑（UEUI：时长随距离/复杂度定，
+     无通用截断值），把 ready 到导航的固定等待压到最小 */
+  transition: opacity .18s ease;
 }
 /* 就绪后由 startup.js 添加：内容淡出，露出与 dsh 界面一致的深色背景 */
 body.fade-out { opacity: 0; }
@@ -377,7 +379,9 @@ body.window-inactive .footer { opacity: .6; }
   .error-box.reveal { animation: none; }
 }
 
-/* ready 态状态文案：字体字号对齐标题层级，颜色仅用成功色提醒，不改布局 */
+/* ready 态状态文案：仅首次设置的运行时卡片使用（用户需绿色确认可点击）；
+   普通启动 ready 后直接淡出进入 dsh，不再呈现这一态（近即时流程不闪指示）。
+   字体字号对齐标题层级，颜色仅用成功色提醒，不改布局 */
 .state-ready {
   font-size: var(--dshd-fs-xl) !important;
   /* 行盒高度对齐基础态（14px/1.5=21px）：不加会从 21 撑到 24px，

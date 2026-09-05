@@ -559,6 +559,11 @@ static MARKET_BOOTSTRAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static FIRST_ONBOARDING_BOOTSTRAP_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// 首次设置的插件安装完成后，标记待重启前的最小静默期（自放行起算，
+/// 安装耗时先抵扣）：避开「用户刚进入 dsh、会话列表恒空，空闲判定立即
+/// 通过」而把用户立刻拉回重启过渡页的窗口。
+const ONBOARDING_APPLY_QUIET_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn start_market_bootstrap(app: AppHandle) {
     use std::sync::atomic::Ordering;
     if MARKET_MAINTENANCE_RUNNING.swap(true, Ordering::AcqRel) {
@@ -603,16 +608,32 @@ pub fn start_market_bootstrap(app: AppHandle) {
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
         }
-        if wait_for_first_onboarding {
-            // 首次配置由 boot 线程同步安装并与凭据合并为一次重启。后台线程
-            // 只等待其完成，不能抢先安装或另起重启协调器。
+        let released_at = if wait_for_first_onboarding {
+            // 首次配置的插件安装已移出 boot 关键路径：等待 boot 放行信号
+            // （进入 dsh 页前发出）后由本线程安装，变更经空闲重启协调器生效。
+            // 用户接入外部服务的分支不发该信号——检测到外部归属即退出，不空转。
             while !FIRST_ONBOARDING_BOOTSTRAP_DONE.load(Ordering::Acquire) {
-                if app.state::<AppState>().is_quitting() {
+                if app.state::<AppState>().is_quitting()
+                    || app.state::<AppState>().service_ownership().is_external()
+                {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
-        } else if run_bootstrap_serialized(&app, &config) {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        if run_bootstrap_serialized(&app, &config) {
+            // 安装耗时段即天然静默期；装完仍不足静默下限时补足——刚进入
+            // dsh 的用户会话列表恒为空，空闲判定立即通过，不补足会把用户
+            // 刚进界面就拉回重启过渡页（冷缓存秒装完的边缘场景）。
+            if let Some(released) = released_at {
+                let quiet = ONBOARDING_APPLY_QUIET_PERIOD.saturating_sub(released.elapsed());
+                if !quiet.is_zero() && !app.state::<AppState>().is_quitting() {
+                    std::thread::sleep(quiet);
+                }
+            }
             crate::logging::log("market: 内置插件已变更，将在会话空闲时应用");
             mark_plugin_changes(&app, true);
         } // 版本同步：首次延迟 90s（避开启动期——安全软件弹窗/网络波动，
@@ -636,20 +657,12 @@ pub fn start_market_bootstrap(app: AppHandle) {
     });
 }
 
-/// 同步执行一次内置插件引导（不 spawn、不进入 24h 循环）：
-/// 仅在 dsh 服务已就绪、且用户已完成首次选择时可用。
-/// 返回是否有新装/卸载变更，调用方据此决定是否重启服务。
-pub(crate) fn bootstrap_once_blocking(app: &AppHandle, config: &crate::app_state::Config) -> bool {
+/// 首次设置收尾时的「放行」信号：boot 不再同步安装内置插件（数十秒的
+/// npm 安装不应挡在进入 dsh 前），市场后台线程等到本信号后自行安装，
+/// 变更交空闲重启协调器应用（外部服务归属下线程凭归属检测退出等待）。
+pub(crate) fn release_first_onboarding_bootstrap() {
     use std::sync::atomic::Ordering;
-    let changed = if builtin_plugins_consent(config).is_none()
-        || app.state::<AppState>().service_ownership().is_external()
-    {
-        false
-    } else {
-        run_bootstrap_serialized(app, config)
-    };
     FIRST_ONBOARDING_BOOTSTRAP_DONE.store(true, Ordering::Release);
-    changed
 }
 
 fn run_bootstrap_serialized(app: &AppHandle, config: &crate::app_state::Config) -> bool {
@@ -657,33 +670,6 @@ fn run_bootstrap_serialized(app: &AppHandle, config: &crate::app_state::Config) 
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     bootstrap_market_pkgs(app, config)
-}
-
-/// 当前是否真的有内置插件安装或下线工作。启动页只在该值为 true 时显示
-/// 安装进度，避免把用户的“不安装”选择说成正在执行。
-pub(crate) fn bootstrap_work_pending(config: &crate::app_state::Config) -> bool {
-    if !market_bootstrap_retry_due(config) {
-        return false;
-    }
-    let consented = builtin_plugins_enabled(config);
-    let retired_pending = consented
-        && retired_market_pkg_ids().any(|pkg| {
-            !is_market_pkg(pkg)
-                && should_retire(
-                    consented,
-                    true,
-                    market_installed_version(config, pkg).is_some(),
-                    market_user_removed(config, pkg),
-                )
-        });
-    if retired_pending {
-        return true;
-    }
-    builtin_plugins_enabled(config)
-        && market_pkg_ids().any(|pkg| {
-            !effective_market_user_removed(config, pkg)
-                && market_install_state(config, pkg) != MarketInstallState::Ready
-        })
 }
 
 /// 未安装的内置包逐个安装。返回是否有新装包（调用方据此重启服务）。

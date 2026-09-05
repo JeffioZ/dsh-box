@@ -300,6 +300,21 @@ pub fn kill_tree(pid: u32) {
     }
 }
 
+/// kill_tree 的强杀升级：TERM 宽限后仍存活的进程使用（Windows 与 kill_tree
+/// 同为 /F；Unix 从 -TERM 升级为 -KILL）。
+pub fn kill_tree_force(pid: u32) {
+    #[cfg(windows)]
+    {
+        kill_tree(pid);
+    }
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("kill");
+        cmd.arg("-KILL").arg(format!("-{pid}"));
+        let _ = cmd.spawn();
+    }
+}
+
 /// 打开目录：Windows 资源管理器；macOS Finder；Linux 默认文件管理器。
 pub fn open_in_file_manager(dir: &Path) {
     #[cfg(windows)]

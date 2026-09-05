@@ -91,10 +91,10 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         return Err(crate::locale::text("不支持的主题。", "Unsupported theme.").into());
     }
 
-    let mut credentials_changed = false;
+    // 凭据经 dsh 自身的文件监视器热发布（与 model_config 导入同口径），
+    // 无需为生效而重启服务
     if let Some(key) = api_key {
         save_credentials_api_key(&config, key)?;
-        credentials_changed = true;
     }
 
     app.state::<AppState>().set_ui_language(&payload.language)?;
@@ -128,16 +128,9 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     // 发布：boot 正在等待该标记，若先发布再设置 Starting，会有机会先进入
     // dsh、随后又立刻重启。
     persist_onboarding_completion(&config)?;
-    let managed_service =
-        app.state::<AppState>().service_ownership() == app_state::ServiceOwnership::Managed;
-    if credentials_changed && managed_service {
-        // 由正在等待 onboarding 的 boot 线程在内置插件处理结束后统一重启，
-        // 避免凭据与插件各自触发一次服务中断。
-        app.state::<AppState>().require_onboarding_restart();
-    }
     app_state::mark_onboarding_done();
     // 不在此直接导航或重启：mark_onboarding_done 会唤醒 boot_inner，后者
-    // 统一处理内置插件、凭据重启和 enter_web_app。
+    // 统一处理内置插件放行和 enter_web_app。
     Ok(())
 }
 

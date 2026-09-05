@@ -411,6 +411,20 @@ pub(crate) fn run() {
                     titlebar::repaint_pulse(&handle);
                 });
             }
+            // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标。
+            // show 放在标题栏/状态栏（防闪必须先于首帧）之后、其余预创建与后台任务
+            // 启动之前：首帧更早到达，托盘菜单/托盘图标与十余个周期任务的启动
+            // 不阻塞用户看到启动页
+            let config = app.state::<AppState>().config();
+            let minimized = std::env::args().any(|a| a == "--minimized")
+                || config.launch_behavior == "tray";
+            if minimized {
+                logging::log("启动: --minimized 静默进托盘");
+            } else if let Some(win) = main_window(app.handle()) {
+                let _ = win.show();
+                // 状态栏首帧数据由其页面加载完成后的初始拉取（api_balance/
+                // get_status）与既有 5s 周期任务负责，这里无需额外推送。
+            }
             // 托盘菜单窗口：启动时预创建（隐藏）。自绘弹窗移至主窗口几何
             // 恢复完成之后创建（见窗口恢复段）——创建时主窗口几何已知，
             // 弹窗初始几何即正确，消除首次打开时"位置不对 + 闪烁"
@@ -441,24 +455,6 @@ pub(crate) fn run() {
             crate::usage::start_usage_alerts(app.handle().clone());
             // 内置插件市场（dsh-market）：dsh 就绪后自动预装，此后每日同步最新版
             plugins::start_market_bootstrap(app.handle().clone());
-            // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标
-            let config = app.state::<AppState>().config();
-            let minimized = std::env::args().any(|a| a == "--minimized")
-                || config.launch_behavior == "tray";
-            if minimized {
-                logging::log("启动: --minimized 静默进托盘");
-            } else if let Some(win) = main_window(app.handle()) {
-                let _ = win.show();
-                // 状态栏首帧即数据：窗口显示后再推一次统计/余额。
-                // 立即 emit 时状态栏子 webview 尚未首帧，事件丢失/迟到；
-                // 延迟 150ms 覆盖子 webview 首帧渲染后再更新（消除 chip 闪烁）
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                    crate::usage::refresh_once(handle.clone());
-                    crate::balance::refresh_once(handle);
-                });
-            }
             // 启动静默期：恢复/协商产生的几何事件不落盘（3s 内），
             // 避免系统微调后的尺寸被持久化、逐次启动累积变大
             window::start_save_settle(3000);
@@ -619,10 +615,11 @@ pub(crate) fn run() {
     });
 }
 
-/// 退出的收尾序列：停服 → 给进程树收尾时间 → 退出。必须在后台线程执行
-/// （shutdown 的进程 wait 会阻塞调用线程），三处退出入口共用。
+/// 退出的收尾序列：停服（有界等待 + 强杀升级，并先取得生命周期锁防退出中
+/// 拉起新服务）→ 给进程树收尾时间 → 退出。必须在后台线程执行（shutdown
+/// 的进程 wait 会阻塞调用线程），三处退出入口共用。
 pub(crate) fn quit_sequence(app: &AppHandle) {
-    dsh::shutdown(app);
+    dsh::shutdown_for_quit(app);
     std::thread::sleep(std::time::Duration::from_millis(300));
     app.exit(0);
 }

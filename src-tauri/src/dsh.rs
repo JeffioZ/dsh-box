@@ -15,7 +15,8 @@ use crate::{emit_status, navigate, navigate_to_splash};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
-const STARTUP_TRANSITION_TIMEOUT: Duration = Duration::from_millis(400);
+// 与前端 0.18s 就绪淡出 + 220ms 兜底定时器匹配（startup.css / startup.js）
+const STARTUP_TRANSITION_TIMEOUT: Duration = Duration::from_millis(250);
 const DSH_OFFICIAL_PORT: u16 = 3080;
 const LAST_MANAGED_PORT_KEY: &str = "last_managed_port";
 const EXTERNAL_SERVICE_PREFERENCE_KEY: &str = "external_service_preference";
@@ -256,39 +257,14 @@ fn onboarding_handoff_decision(
         || (ownership == ServiceOwnership::Managed && deferred_restart_pending)
 }
 
-/// 首次本地配置的统一收尾。无论服务是本轮启动还是由并发重启路径复用，
-/// 都必须在进入 dsh 前完成插件引导，并把设置与插件变更合并为一次重启。
-fn finish_managed_onboarding(
-    app: &AppHandle,
-    state: &AppState,
-    config: &crate::app_state::Config,
-    was_onboarding: bool,
-) -> Result<(), String> {
-    if !was_onboarding || state.onboarding_pending() {
-        return Ok(());
-    }
-    let ready = crate::locale::text("已就绪", "Ready");
-    let plugin_work_pending = crate::plugins::bootstrap_work_pending(config);
-    if plugin_work_pending {
-        let message = crate::locale::text("正在安装内置插件…", "Installing built-in plugins…");
-        state.set_phase(BootPhase::Starting, message, "");
-        emit_status(app, BootPhase::Starting, message, "");
-    }
-    let plugins_changed = crate::plugins::bootstrap_once_blocking(app, config);
-    let settings_restart = state.take_onboarding_restart_required();
-    if plugins_changed || settings_restart {
-        crate::logging::log("boot: 首次设置与插件变更将通过一次服务重启生效");
-        if let Err(e) = crate::updater::restart_service_locked(app) {
-            crate::logging::log(&format!("boot: 首次设置应用重启失败：{e}"));
-            return Err(e);
-        }
-    } else if plugin_work_pending {
-        // 安装尝试可能因退避或环境错误未产生变更；恢复 Ready 后照常进入，
-        // 后台维护会按既有退避策略重试。
-        state.set_phase(BootPhase::Ready, ready, "");
-        emit_status(app, BootPhase::Ready, ready, "");
-    }
-    Ok(())
+/// 首次设置的运行时收尾信号：插件安装已移出 boot 关键路径（npm 逐包
+/// 安装可能耗时数十秒，不应挡在「开始使用」与进入 dsh 之间），市场后台
+/// 线程等到本信号后自行安装，变更交空闲重启协调器应用；凭据经 dsh 自身
+/// 的文件监视器热发布（与 model_config 导入同口径），无需重启。必须在
+/// `wait_onboarding` 返回后无条件发出——不能挂在 handoff 等后续分支上，
+/// 否则该分支提前返回会让市场线程空转到退出、本会话漏装内置插件。
+fn release_market_after_onboarding() {
+    crate::plugins::release_first_onboarding_bootstrap();
 }
 
 /// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
@@ -351,7 +327,6 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
 
     // 并发路径（更新/手动重启）可能刚把服务拉起：直接复用，避免双实例——
     // 否则端口回退会启动第二个实例，新守卫还会把刚重启好的服务及其进程树一并终止。
-    let config = state.config();
     if state.is_updating() {
         crate::logging::log("boot: 更新流程进行中，跳过本轮引导（看门狗会持续监控）");
         return Ok(());
@@ -372,10 +347,10 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
             emit_status(app, BootPhase::Ready, ready, "");
         }
         wait_onboarding(app, &state);
+        release_market_after_onboarding();
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
-        finish_managed_onboarding(app, &state, &config, was_onboarding)?;
         enter_web_app(app, &state.config().web_page_url());
         crate::plugins::start_market_bootstrap(app.clone());
         crate::updater::silent_check(app);
@@ -407,6 +382,8 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
             emit_status(app, BootPhase::Ready, ready, "");
         }
         wait_onboarding(app, &state);
+        // 外部归属下市场线程凭此信号（或外部归属检测）退出等待，不发则空转
+        release_market_after_onboarding();
         if onboarding_handoff_pending(&state) {
             return Ok(());
         }
@@ -465,12 +442,11 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     if state.onboarding_pending() {
         emit_status(app, BootPhase::Ready, ready, "");
     }
-    let was_onboarding = state.onboarding_pending();
     wait_onboarding(app, &state);
+    release_market_after_onboarding();
     if onboarding_handoff_pending(&state) {
         return Ok(());
     }
-    finish_managed_onboarding(app, &state, &config, was_onboarding)?;
     enter_web_app(app, &state.config().web_page_url());
     // 初始托管启动时后台维护线程已在等待；从外部服务切回本地时，原线程
     // 已按归属边界退出，这里负责重新启动且内部有单实例门控。
@@ -579,15 +555,28 @@ fn choose_external_service(
             ports.push(port);
         }
     }
-    for port in ports {
-        let Some(candidate) = describe_dsh(port) else {
+    // 并行探测候选端口：单端口最坏要等 800ms 连接 + 2s 读超时，防火墙 drop
+    // 场景下串行会成倍拖慢启动；线程按候选顺序 join，结果与偏好判定仍按
+    // 原优先级顺序处理
+    let probes: Vec<std::thread::JoinHandle<Option<ExternalServiceCandidate>>> = ports
+        .iter()
+        .map(|port| {
+            let port = *port;
+            std::thread::spawn(move || describe_dsh(port))
+        })
+        .collect();
+    for handle in probes {
+        let Some(candidate) = handle.join().ok().flatten() else {
             continue;
         };
         if preference
             .as_ref()
             .is_some_and(|saved| !saved.reuse && same_external_identity(&saved.service, &candidate))
         {
-            crate::logging::log(&format!("dsh: 用户已选择不接入端口 {port} 的同一外部服务"));
+            crate::logging::log(&format!(
+                "dsh: 用户已选择不接入端口 {} 的同一外部服务",
+                candidate.port
+            ));
             continue;
         }
 
@@ -1181,6 +1170,17 @@ fn watchdog(app: &AppHandle) {
 
 // ---------- 退出清理与健康检查 ----------
 
+/// 退出路径的停服入口：先以有界等待取得生命周期锁再 shutdown，排除退出
+/// 期间 boot 轮/重启协调器再拉起新服务的竞态（Unix 上新服务会随
+/// std::process::exit 孤儿化、占用端口）。锁持有到进程退出（app.exit 不
+/// 返回）。调用方必须不持有生命周期锁；boot/更新等已持锁路径直接用
+/// `shutdown`。
+pub fn shutdown_for_quit(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let _guard = state.lifecycle_guard_with_deadline(Duration::from_secs(2));
+    shutdown(app);
+}
+
 /// 退出清理：进程树守卫销毁（Windows Job / Unix 进程组）为主；仅当无
 /// 守卫时（Job 创建失败的降级路径）才按 PID 树兜底——守卫回收后 PID 可能
 /// 已被系统复用，再 taskkill 有误杀无关进程的风险。
@@ -1194,7 +1194,36 @@ pub fn shutdown(app: &AppHandle) {
         processes::kill_tree(pid);
     }
     if let Some(child) = child.as_mut() {
-        let _ = child.wait();
+        // 有界等待：服务卡死不响应终止信号时，退出流程不能永久挂起
+        // （窗口已隐藏、事件循环空转的假死态）。宽限期内未退出则升级
+        // 强杀再等一段；仍存活只能放行——进程树守卫在进程退出后兜底。
+        if !wait_for_exit(child, Duration::from_secs(3)) {
+            if let Some(pid) = pid {
+                crate::logging::log(&format!(
+                    "退出: 服务进程 {pid} 未在宽限期内退出，升级强制终止"
+                ));
+                processes::kill_tree_force(pid);
+            }
+            if !wait_for_exit(child, Duration::from_secs(2)) {
+                crate::logging::log("退出: 强制终止后服务仍未退出，放行并交由进程树守卫回收");
+            }
+        }
+    }
+}
+
+/// 轮询等待子进程退出；超时返回 false（调用方决定是否升级强杀）。
+/// try_wait 出错按已退出处理——无法查询时阻塞等待只会复制旧问题。
+fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return true,
+            Ok(None) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -1288,9 +1317,45 @@ mod tests {
     use super::{
         classify_boot_result, is_bind_failure, is_dsh_response, onboarding_handoff_decision,
         onboarding_wait_decision, parse_external_description, parse_server_port,
-        same_external_identity, select_managed_port, watchdog_step, BootOutcome, InstallAction,
-        OnboardingWaitAction, PortAvailability, ServiceOwnership, WatchdogAction,
+        same_external_identity, select_managed_port, wait_for_exit, watchdog_step, BootOutcome,
+        InstallAction, OnboardingWaitAction, PortAvailability, ServiceOwnership, WatchdogAction,
     };
+
+    #[test]
+    fn wait_for_exit_reports_completion_and_timeout() {
+        // 快速退出的子进程：宽限期内确认退出
+        #[cfg(windows)]
+        let mut quick = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        #[cfg(unix)]
+        let mut quick = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        assert!(wait_for_exit(&mut quick, std::time::Duration::from_secs(5)));
+
+        // 存活的子进程：短超时返回 false（调用方据此升级强杀），随后回收
+        #[cfg(windows)]
+        let mut stuck = std::process::Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+            .spawn()
+            .unwrap();
+        #[cfg(unix)]
+        let mut stuck = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .unwrap();
+        assert!(!wait_for_exit(
+            &mut stuck,
+            std::time::Duration::from_millis(150)
+        ));
+        let _ = stuck.kill();
+        let _ = stuck.wait();
+    }
 
     #[test]
     fn onboarding_wait_waits_indefinitely_while_panel_is_shown() {
