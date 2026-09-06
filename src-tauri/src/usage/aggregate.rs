@@ -135,6 +135,7 @@ impl CostAcc {
 /// 单个会话的增量折叠状态。
 #[derive(Default)]
 pub struct FoldState {
+    pub(crate) source_file: String,
     /// 已折叠的按日条目。
     pub days: HashMap<String, DayEntry>,
     /// 最近一次样本（用于跨折叠边界的替换去重）。
@@ -262,7 +263,7 @@ impl Event {
     pub fn parse(line: &str) -> Option<Self> {
         let value: serde_json::Value = serde_json::from_str(line).ok()?;
         Some(Self {
-            seq: value.get("seq").and_then(|v| v.as_u64()).unwrap_or(0),
+            seq: value.get("seq")?.as_u64()?,
             time_ms: value.get("time").and_then(|v| v.as_i64()),
             kind: value.get("type")?.as_str()?.to_string(),
             data: value.get("data").cloned(),
@@ -310,8 +311,20 @@ impl Event {
                 let step = data.get("step")?.as_u64()?;
                 (format!("{turn}:{step}"), chunk.get("usage")?)
             }
-            "assistant/message" => {
-                let usage = data.get("usage")?;
+            "assistant/message" | "assistant/attempt" => {
+                let usage = data.get("usage").filter(|v| v.is_object()).or_else(|| {
+                    data.get("stream")?
+                        .as_array()?
+                        .iter()
+                        .rev()
+                        .find_map(|record| {
+                            let chunk = record.get("chunk")?;
+                            (record.get("type")?.as_str()? == "chunk"
+                                && chunk.get("type")?.as_str()? == "usage")
+                                .then(|| chunk.get("usage"))
+                                .flatten()
+                        })
+                })?;
                 let turn = data.get("turn")?.as_u64().unwrap_or(0);
                 let step = data.get("step")?.as_u64().unwrap_or(0);
                 (format!("{turn}:{step}"), usage)
@@ -413,6 +426,23 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// 把一段新事件折叠进状态（顺序执行、可跨多次调用复用增量游标）。
 pub fn apply_delta(state: &mut FoldState, events: &[Event]) {
     for event in events {
+        // 同一步重试是新的计费请求，不能用成功样本覆盖前次尝试的消耗。
+        if event.kind == "llm/retry-started" {
+            if let Some(data) = &event.data {
+                if let (Some(turn), Some(step)) = (
+                    data.get("turn").and_then(|v| v.as_u64()),
+                    data.get("step").and_then(|v| v.as_u64()),
+                ) {
+                    if state
+                        .last_sample
+                        .as_ref()
+                        .is_some_and(|s| s.key == format!("{turn}:{step}"))
+                    {
+                        state.last_sample = None;
+                    }
+                }
+            }
+        }
         // 对齐上游 v0.3（lib/usage.js applyUsageDelta）：request/header 与
         // assistant/message 都推进 current_route（实时路由上下文，事件无
         // 时间戳时 updated_at 保留前一值）；token 归因语义不变——
@@ -489,6 +519,7 @@ pub fn apply_delta(state: &mut FoldState, events: &[Event]) {
 /// 对外 wire 结构（序列化为 JSON 给前端）。
 #[derive(serde::Serialize)]
 pub struct UsageReport {
+    pub unavailable_sessions: Vec<String>,
     pub days: Vec<DayReport>,
     pub total: TotalReport,
     /// 计算时刻（epoch 毫秒）。
@@ -588,6 +619,7 @@ pub fn render(days: &HashMap<String, DayEntry>, updated_at: u64) -> UsageReport 
         total_cost.merge(entry.totals_cost);
     }
     UsageReport {
+        unavailable_sessions: Vec::new(),
         days: day_reports,
         total: TotalReport {
             buckets: total.into(),
@@ -621,6 +653,45 @@ mod tests {
 
     const DAY1: i64 = 1_780_000_000_000; // ~2026-05-31 (TBD exact)
     const DAY1B: i64 = 1_780_000_000_000 + 86_400_000;
+
+    #[test]
+    fn v2_usage_keeps_retried_attempts_and_uses_last_stream_sample() {
+        let stream = |input| {
+            serde_json::json!({"turn":1,"step":1,"stream":[
+                {"type":"chunk","chunk":{"type":"usage","usage":{"inputTokens":1}}},
+                {"type":"chunk","chunk":{"type":"usage","usage":{"inputTokens":input}}}
+            ]})
+        };
+        let mut state = FoldState::default();
+        let parse = |seq, kind, data| Event::parse(&event(seq, DAY1, kind, data)).unwrap();
+        apply_delta(&mut state, &[parse(1, "assistant/attempt", stream(100))]);
+        assert_eq!(
+            state.days.values().map(|d| d.totals.input).sum::<u64>(),
+            100
+        );
+        apply_delta(
+            &mut state,
+            &[
+                parse(
+                    2,
+                    "llm/retry-started",
+                    serde_json::json!({"turn":1,"step":1}),
+                ),
+                parse(3, "assistant/message", stream(200)),
+            ],
+        );
+        assert_eq!(
+            state.days.values().map(|d| d.totals.input).sum::<u64>(),
+            300
+        );
+        let mut final_sample = stream(999);
+        final_sample["usage"] = serde_json::json!({"inputTokens":250});
+        apply_delta(&mut state, &[parse(4, "assistant/message", final_sample)]);
+        assert_eq!(
+            state.days.values().map(|d| d.totals.input).sum::<u64>(),
+            350
+        );
+    }
 
     #[test]
     fn cost_accumulates_replaces_and_fails_closed() {

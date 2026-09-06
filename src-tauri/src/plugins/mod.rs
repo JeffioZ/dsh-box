@@ -23,13 +23,12 @@ use runner::{run_dsh_plugin_auto, run_dsh_plugin_auto_user_remove};
 // 引用这些名字；对 crate 其他模块的路径（crate::plugins::X）保持不变。
 pub use restart::{apply_plugin_changes, plugin_apply_status, PluginApplyStatus};
 pub(crate) use restart::{deferred_restart_pending, mark_plugin_changes};
-use transaction::{
-    clear_install_marker, save_install_marker, spec_package_name, try_mark_user_removed,
-    PluginMutationKind,
-};
 pub(crate) use transaction::{
     clear_resolved_install_marker, recover_interrupted_plugin_mutation, try_acquire_pnpm_lock,
     PnpmGuard,
+};
+use transaction::{
+    save_install_marker, spec_package_name, try_mark_user_removed, PluginMutationKind,
 };
 
 use serde::Serialize;
@@ -416,6 +415,10 @@ fn installed_pkgs(config: &crate::app_state::Config) -> Vec<String> {
 
 /// 只读检查全部已安装插件，并为已授权但安装缺失的内置包保留修复入口
 /// （不执行安装）。用户主动卸载的内置包由独立目录提供手动重装入口。
+///
+/// 两段式取数：阶段一并发（≤3）打 dist-tags 端点（约百字节）判版本；
+/// 仅对“已安装且落后”的包再拉全量 manifest 取发布时间判冷却。此前
+/// 逐包串行拉全量清单，跨境网络下数个包即累计数秒到数十秒。
 pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
     let config = app.state::<AppState>().config();
     let builtin_consent = builtin_plugins_enabled(&config);
@@ -434,50 +437,95 @@ pub fn check_updates(app: &AppHandle) -> Result<Vec<UpdateStatus>, String> {
     }
     let now = market_unix_now();
     let mut out = vec![];
-    for pkg in pkgs {
-        let installed = market_installed_version(&config, &pkg);
-        let (latest, published) = match market_latest_info(&pkg) {
-            Some(v) => v,
-            None => {
-                out.push(UpdateStatus {
-                    pkg: pkg.clone(),
-                    installed,
-                    latest: String::new(),
-                    update_available: false,
-                    builtin: builtin_identity(
-                        builtin_consent,
-                        is_market_pkg(&pkg),
-                        effective_market_user_removed(&config, &pkg),
-                    ),
-                    cooldown_until: None,
-                    error: Some(
-                        crate::locale::text(
-                            "版本查询失败。",
-                            "Failed to query the latest version.",
-                        )
-                        .into(),
-                    ),
-                });
-                continue;
-            }
-        };
-        let needs_update = match installed.as_deref() {
-            // 未安装（用户已卸载）：不显示“有新版本”，避免出现无效更新按钮
-            None => false,
-            Some(i) => crate::versions::compare_versions(i, &latest).is_lt(),
-        };
-        let cooldown_until = (needs_update && in_release_cooldown(published, now))
-            .then_some(published + MARKET_SUPPLY_CHAIN_RETRY);
-        out.push(UpdateStatus {
+    struct Probe {
+        pkg: String,
+        installed: Option<String>,
+        latest: Option<String>,
+    }
+    let probes: Vec<Probe> = pkgs
+        .into_iter()
+        .map(|pkg| (pkg.clone(), market_installed_version(&config, &pkg)))
+        .collect::<Vec<_>>()
+        .chunks(3)
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|(pkg, installed)| {
+                        scope.spawn(|| Probe {
+                            pkg: pkg.clone(),
+                            installed: installed.clone(),
+                            latest: market_dist_tags_latest(pkg),
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    for Probe {
+        pkg,
+        installed,
+        latest,
+    } in probes
+    {
+        let builtin = builtin_identity(
+            builtin_consent,
+            is_market_pkg(&pkg),
+            effective_market_user_removed(&config, &pkg),
+        );
+        let error_status = |installed: Option<String>| UpdateStatus {
             pkg: pkg.clone(),
             installed,
-            latest,
-            update_available: needs_update && cooldown_until.is_none(),
-            builtin: builtin_identity(
-                builtin_consent,
-                is_market_pkg(&pkg),
-                effective_market_user_removed(&config, &pkg),
+            latest: String::new(),
+            update_available: false,
+            builtin,
+            cooldown_until: None,
+            error: Some(
+                crate::locale::text("版本查询失败。", "Failed to query the latest version.").into(),
             ),
+        };
+        let Some(latest) = latest else {
+            out.push(error_status(installed));
+            continue;
+        };
+        // 未安装（用户已卸载）：不显示“有新版本”，避免出现无效更新按钮
+        let behind = installed
+            .as_deref()
+            .is_some_and(|i| crate::versions::compare_versions(i, &latest).is_lt());
+        if !behind {
+            out.push(UpdateStatus {
+                installed,
+                latest,
+                update_available: false,
+                cooldown_until: None,
+                error: None,
+                pkg,
+                builtin,
+            });
+            continue;
+        }
+        // 落后才拉全量 manifest 取发布时间；拉不到发布时间就无法判
+        // supply-chain 冷却，保持旧行为按查询失败处理
+        let Some((_, published)) = market_latest_info(&pkg) else {
+            out.push(error_status(installed));
+            continue;
+        };
+        let cooldown_until =
+            in_release_cooldown(published, now).then_some(published + MARKET_SUPPLY_CHAIN_RETRY);
+        out.push(UpdateStatus {
+            pkg,
+            installed,
+            latest,
+            update_available: cooldown_until.is_none(),
+            builtin,
             cooldown_until,
             error: None,
         });
@@ -610,6 +658,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn batch_recovery_does_not_transfer_another_packages_removal_intent() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-batch-intent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home.join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dshmarket":"1"},"dsh":{"profile":{"bundles":["dshmarket"]}}}"#,
+        )
+        .unwrap();
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .unwrap();
+        transaction::finish_cli(&config).unwrap();
+        save_install_marker(
+            &config,
+            "dsh-file-upload",
+            Some("dsh-file-upload"),
+            PluginMutationKind::Remove,
+            true,
+            None,
+        )
+        .unwrap();
+        transaction::finish_cli(&config).unwrap();
+        assert!(recover_interrupted_plugin_mutation(&config, "dshmarket", None).unwrap());
+        assert!(!maintenance::market_user_removed(&config, "dshmarket"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn restart_backoff_grows_exponentially_with_cap() {
         assert_eq!(restart_backoff_secs(1), 30);
         assert_eq!(restart_backoff_secs(2), 60);
@@ -740,12 +833,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!recover_interrupted_plugin_mutation(&config, "keep-plugin").unwrap());
+        assert!(!recover_interrupted_plugin_mutation(&config, "keep-plugin", None).unwrap());
         let unchanged = std::fs::read_to_string(&manifest).unwrap();
         assert!(unchanged.contains("broken-plugin"));
         assert!(unchanged.contains("keep-plugin"));
 
-        assert!(recover_interrupted_plugin_mutation(&config, "broken-plugin").unwrap());
+        assert!(recover_interrupted_plugin_mutation(&config, "broken-plugin", None).unwrap());
         let repaired = std::fs::read_to_string(&manifest).unwrap();
         assert!(!repaired.contains("broken-plugin"));
         assert!(repaired.contains("keep-plugin"));
@@ -791,7 +884,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(recover_interrupted_plugin_mutation(&config, "dshmarket").unwrap());
+        assert!(recover_interrupted_plugin_mutation(&config, "dshmarket", None).unwrap());
         let repaired = std::fs::read_to_string(&manifest).unwrap();
         assert!(!repaired.contains("dshmarket"));
         assert!(repaired.contains("keep-plugin"));
@@ -831,6 +924,23 @@ mod tests {
         )
         .is_err());
         assert_eq!(install_marker(&config).unwrap().spec, "first-plugin");
+        transaction::finish_cli(&config).unwrap();
+        save_install_marker(
+            &config,
+            "second-plugin",
+            Some("second-plugin"),
+            PluginMutationKind::Add,
+            false,
+            Some("later manifest"),
+        )
+        .unwrap();
+        let batch = install_marker(&config).unwrap();
+        assert_eq!(batch.pending_adds, ["first-plugin", "second-plugin"]);
+        assert!(
+            batch.original_manifest.is_none(),
+            "missing original file remains missing"
+        );
+        assert!(!batch.ready_for_next);
         let _ = std::fs::remove_dir_all(root);
     }
 

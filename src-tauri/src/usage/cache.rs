@@ -12,9 +12,8 @@ use std::path::PathBuf;
 use super::aggregate::{Buckets, CostAcc, CurrentRoute, FoldKind, FoldState, ModelEntry};
 use crate::app_state::Config;
 
-// v5：FoldState 增加字节偏移游标（byte_offset/pending_line），增量折叠
-// 只解码新增 zstd 帧。旧版本缓存按现有语义静默丢弃、全新重折，不做迁移。
-const CACHE_VERSION: u64 = 5;
+// v7：补计 v2 settlement 流内用量及重试边界，旧缓存需重新折叠。
+const CACHE_VERSION: u64 = 7;
 /// 缓存文件带 `dshbox-` 前缀：与参考项目 dsh-usage-stats（其缓存为
 /// `$DSH_HOME/storages/usage-stats-cache.json`）隔离，避免两个聚合器读写
 /// 同一文件互相覆盖（缓存结构版本不同，同名会互相重置）。
@@ -33,6 +32,7 @@ struct OnDisk {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SessionOnDisk {
+    source_file: String,
     consumed: u64,
     days: HashMap<String, DayOnDisk>,
     #[serde(default)]
@@ -183,6 +183,7 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
             (
                 id,
                 FoldState {
+                    source_file: s.source_file,
                     byte_offset: s.byte_offset,
                     pending_line: s.pending_line,
                     days: s
@@ -250,6 +251,7 @@ pub(crate) fn save(config: &Config, sessions: &HashMap<String, FoldState>) -> Re
                 (
                     id.clone(),
                     SessionOnDisk {
+                        source_file: s.source_file.clone(),
                         consumed: s.consumed,
                         byte_offset: s.byte_offset,
                         pending_line: s.pending_line.clone(),

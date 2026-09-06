@@ -41,8 +41,8 @@ mod imp {
     use super::*;
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
-        HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ,
     };
 
     const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -87,10 +87,33 @@ mod imp {
     }
 
     pub fn set_enabled(enabled: bool) -> Result<(), String> {
+        let command = if enabled {
+            Some(to_wide(&app_command()?))
+        } else {
+            None
+        };
         let key = to_wide(RUN_KEY);
         let mut hkey: HKEY = std::ptr::null_mut();
-        let status =
-            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut hkey) };
+        let status = unsafe {
+            if enabled {
+                RegCreateKeyExW(
+                    HKEY_CURRENT_USER,
+                    key.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    KEY_SET_VALUE,
+                    std::ptr::null(),
+                    &mut hkey,
+                    std::ptr::null_mut(),
+                )
+            } else {
+                RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_SET_VALUE, &mut hkey)
+            }
+        };
+        if !enabled && status == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
         if status != ERROR_SUCCESS {
             return Err(format!(
                 "{}: {status}",
@@ -101,8 +124,7 @@ mod imp {
             ));
         }
         let name = to_wide(VALUE_NAME);
-        let result = if enabled {
-            let cmd = to_wide(&app_command()?);
+        let result = if let Some(cmd) = command {
             unsafe {
                 RegSetValueExW(
                     hkey,

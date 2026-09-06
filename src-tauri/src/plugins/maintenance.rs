@@ -409,6 +409,27 @@ pub(super) fn market_latest_info(pkg: &str) -> Option<(String, u64)> {
     Some((latest.to_string(), parse_rfc3339_epoch(published)?))
 }
 
+/// dist-tags 端点只返回 tag→版本映射（约百字节），供检查更新阶段一
+/// 快速判版本；发布时间（冷却判定）在确认有新版本后再由
+/// market_latest_info 拉全量 manifest 补齐。
+pub(super) fn market_dist_tags_latest(pkg: &str) -> Option<String> {
+    use std::io::Read;
+    let resp = crate::runtime::check_client()
+        .get(&format!(
+            "https://registry.npmjs.org/-/package/{pkg}/dist-tags"
+        ))
+        .header("User-Agent", "DSHBox")
+        .call()
+        .ok()?;
+    let mut text = String::new();
+    resp.into_body()
+        .into_reader()
+        .read_to_string(&mut text)
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    json.get("latest")?.as_str().map(str::to_string)
+}
+
 /// 版本发布时间是否仍在 pnpm supply-chain 冷却期内。
 pub(super) fn in_release_cooldown(published_epoch: u64, now: u64) -> bool {
     now.saturating_sub(published_epoch) < MARKET_SUPPLY_CHAIN_RETRY
@@ -641,6 +662,15 @@ pub fn start_market_bootstrap(app: AppHandle) {
           // 生效；应用退出线程随之结束，下次启动重新开始）。
         std::thread::sleep(std::time::Duration::from_secs(90));
         loop {
+            match crate::background::service_gate(&app) {
+                crate::background::Gate::Quitting => return,
+                crate::background::Gate::NotReady => {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    continue;
+                }
+                crate::background::Gate::Ready => {}
+            }
+            let config = app.state::<AppState>().config();
             if app.state::<AppState>().service_ownership().is_external() {
                 crate::logging::log("market: 服务已切换为外部归属，停止本地插件维护");
                 return;

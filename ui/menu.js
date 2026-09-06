@@ -17,24 +17,26 @@ function dshdCreateMenu(container, options) {
   const settings = options || {};
   const keyboardNavKeys = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' ']);
 
-  // 菜单条目图标（lucide 路径数据，与全局 --dshd 图标体系一致）
+  // 菜单条目图标：统一经 dshdIcon 注册表引用（各页面不得复制 path 字面量），
+  // 描边粗细由各宿主的 CSS 渲染规则统一（.ic svg = 1.8，与导航/注入菜单同档）。
+  // 键名与 Rust 侧菜单模型（tray_menu.rs 的 icon 字符串）耦合，改动需两端同步；
+  // 「重启」菜单项用注册表的逆时针变体 rotate（restart 键是更新弹窗的顺时针箭头）。
   const ICONS = {
-    wallet: '<svg viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path></svg>',
-    chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></svg>',
-    window: '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>',
-    globe: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>',
-    restart: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>',
+    chart: dshdIcon('chart'),
+    window: dshdIcon('window'),
+    globe: dshdIcon('globe'),
+    restart: dshdIcon('rotate'),
     download: dshdIcon('download'),
     puzzle: dshdIcon('puzzle'),
     gear: dshdIcon('gear'),
     info: dshdIcon('info'),
-    exit: '<svg viewBox="0 0 24 24"><path d="m16 17 5-5-5-5"></path><path d="M21 12H9"></path><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path></svg>',
-    cut: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"></circle><path d="M8.12 8.12 12 12"></path><path d="M20 4 8.12 15.88"></path><circle cx="6" cy="18" r="3"></circle><path d="M14.8 14.8 20 20"></path></svg>',
-    copy: '<svg viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>',
-    paste: '<svg viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>',
-    select: '<svg viewBox="0 0 24 24"><path d="M5 3a2 2 0 0 0-2 2"></path><path d="M19 3a2 2 0 0 1 2 2"></path><path d="M21 19a2 2 0 0 1-2 2"></path><path d="M5 21a2 2 0 0 1-2-2"></path><path d="M9 3h1"></path><path d="M9 21h1"></path><path d="M14 3h1"></path><path d="M14 21h1"></path><path d="M3 9v1"></path><path d="M21 9v1"></path><path d="M3 14v1"></path><path d="M21 14v1"></path></svg>',
-    undo: '<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></svg>',
-    redo: '<svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"></path><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path></svg>',
+    exit: dshdIcon('exit'),
+    cut: dshdIcon('cut'),
+    copy: dshdIcon('copy'),
+    paste: dshdIcon('paste'),
+    select: dshdIcon('select'),
+    undo: dshdIcon('undo'),
+    redo: dshdIcon('redo'),
   };
 
   let items = [];
@@ -148,6 +150,7 @@ function dshdCreateMenu(container, options) {
     if (keyboardNavKeys.has(event.key)) container.classList.add('dshd-menu-keyboard');
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       if (settings.onEscape) settings.onEscape();
       return;
     }

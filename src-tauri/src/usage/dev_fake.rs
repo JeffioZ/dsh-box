@@ -67,7 +67,7 @@ fn iso_after(ms_from_now: i64) -> Option<String> {
 /// 假余额卡：覆盖 ok（CNY/USD、含明细行）、预警两档、unlimited、
 /// 余额/窗口两种 mode、以及全部非 ok 状态的卡片样式。
 pub(crate) fn accounts() -> Vec<AccountSnapshot> {
-    let now = now_ms() as u64;
+    let now = (now_ms() / 1000) as u64;
     let balance_card = |id: &str,
                         name: &str,
                         adapter: Option<&'static str>,
@@ -288,6 +288,7 @@ pub(crate) fn subscriptions() -> Vec<SubscriptionSnapshot> {
         adapter,
         status: "ok",
         plan: plan.to_string(),
+        updated_at: Some((now_ms() / 1000) as u64),
         warn_level: warn_of_windows(&windows),
         windows,
         error: None,
@@ -427,6 +428,7 @@ pub(crate) fn report() -> super::UsageReport {
 /// 假当前会话上下文（账户卡上的当前会话徽标）。
 pub(crate) fn session_context() -> SessionContext {
     SessionContext {
+        selected: true,
         route_id: Some("deepseek-official".to_string()),
         display_name: Some("DeepSeek".to_string()),
         model: Some("deepseek-v4-pro".to_string()),

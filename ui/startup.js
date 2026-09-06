@@ -610,11 +610,11 @@ async function submitOnboarding() {
   } catch (e) {
     // 保存失败：回滚提交态，恢复控件与按钮文案，面板留在原地等待重试
     onboardingSubmitted = false;
-    setOnboardingBusy(false);
     errBox.textContent = dshdT('saveFailed') + ': ' + e;
     errBox.classList.remove('hidden');
   } finally {
     onboardingSaving = false;
+    if (!onboardingSubmitted) setOnboardingBusy(false);
     // 提交成功不恢复按钮状态：「正在进入…」保持至整页淡出导航，文案
     // 在其可见期内始终准确，避免淡出中回跳「开始使用」的跳跃感
   }

@@ -8,6 +8,13 @@
    读 dsh 令牌，仅回退色与本文件一致。 */
 :root {
   --dshd-bg: #151517;
+  /* 宿主 chrome 条底色（标题栏/状态栏共用）：取深色 dsh 界面与浮层卡片
+     之间的中间色（#151517 与 #353638 之间），两侧过渡自然；dsh 无对应档
+     （其 layer-1=#232324 过亮）。浅色值见浅色块 */
+  --dshd-chrome-bg: #181819;
+  /* chrome 条失焦压暗档（窗口失焦时 brand 与控件文字） */
+  --dshd-chrome-brand-inactive: #5f6068;
+  --dshd-chrome-btn-inactive: #5b5c66;
   --dshd-card: #353638;
   /* dsh 字体栈（dsw-font-family）：系统 UI 优先 + 中文回退。
      唯一定义点——各页面与子 webview 内联样式一律 var(--dshd-font)，
@@ -83,6 +90,15 @@
   --dshd-error-border: rgba(242, 90, 90, 0.35);
   --dshd-input-bg: rgba(255, 255, 255, 0.06);
   --dshd-input-hover: rgba(255, 255, 255, 0.1);
+  /* 分隔线（菜单/导航/分组/行）：dsh Menu.module.css 分隔线为 border-l1，
+     深底 6% 可见，深色沿用；浅色另行校准（见浅色块） */
+  --dshd-line: var(--dshd-border);
+  /* 输入框描边：dsh Input.module.css 即 border-l4（我们 1px，上游 0.5px） */
+  --dshd-input-border: rgba(255, 255, 255, 0.2);
+  /* 次级按钮描边：dsh Button.module.css 对话取消胶囊为 border-l3 */
+  --dshd-btn-border: rgba(255, 255, 255, 0.16);
+  /* 控件 hover 描边：深色沿用 border-strong；浅色取略高于 l4 的校准值 */
+  --dshd-hover-border: var(--dshd-border-strong);
   /* 滚动条：dsh scrollbar-bg-l1 / hover-l1（深色 neutral-700/600 实色） */
   --dshd-scroll-thumb: #3c3c3d;
   --dshd-scroll-thumb-hover: #545557;
@@ -158,6 +174,9 @@
 @media (prefers-color-scheme: light) {
   :root {
     --dshd-bg: #f7f8fa;
+    --dshd-chrome-bg: #fcfcfd;
+    --dshd-chrome-brand-inactive: #a6a6b2;
+    --dshd-chrome-btn-inactive: #9c9ca8;
     --dshd-card: #ffffff;
     /* 弹窗面板背景：dsh bg-layer-2 浅色 = bluish-00 纯白（不是浅灰）——
        与 dsh 原生设置弹窗一致 */
@@ -201,6 +220,13 @@
     --dshd-error-border: rgba(236, 19, 19, 0.30);
     --dshd-input-bg: rgba(38, 49, 72, 0.045);
     --dshd-input-hover: rgba(38, 49, 72, 0.075);
+    /* 分隔线补位：dsh 浅色 border-l1（4%）配 1 物理像素在白底渲染≈#f5f5f5
+       不可见，l2（10%）实测仍弱——提到 l4（16%，≈#d6d6d6），与 Win11 菜单
+       分隔线惯例同档；卡片等装饰性轮廓不跟随（仍用 --dshd-border） */
+    --dshd-line: rgba(0, 0, 0, 0.16);
+    --dshd-input-border: rgba(0, 0, 0, 0.16);
+    --dshd-btn-border: rgba(0, 0, 0, 0.12);
+    --dshd-hover-border: rgba(0, 0, 0, 0.2);
     --dshd-scroll-thumb: #e5e5e5;
     --dshd-scroll-thumb-hover: #d4d4d4;
     /* 浅色校准值维持 dsh shadow-lv3 原值：浅底上黑影天然可见，无需加深 */
@@ -364,7 +390,11 @@
   .dshd-row, .dshd-btn, .dshd-x, .dshd-input { transition: none; }
 }
 
-.dshd-sep { height: var(--dshd-hair, 1px); margin: 4px 2px; background: var(--dshd-border); }
+/* 分隔线用 border-top 而非填充背景：Skia 对边框做确定性的整设备像素
+   吸附——实测 125%~200% 缩放下同屏多条线恒定同粗（150% 恒 1 行、200%
+   恒 2 行）；height+background 技法在 ≥150% 时随落点相位漂移成 1~3 行
+   （"有的粗有的细"的直接来源）。 */
+.dshd-sep { height: 0; margin: 4px 2px; border-top: 1px solid var(--dshd-line); }
 /* 菜单面板内的分隔线：比通用档多留内边距，分组呼吸感（面板本体 4px pad） */
 .dshd-menu-surface .dshd-sep { margin: 6px 8px; }
 
@@ -377,7 +407,7 @@
   display: inline-flex; align-items: center; justify-content: center;
   height: 32px;
   padding: 0 14px;
-  border: 1px solid var(--dshd-border);
+  border: 1px solid var(--dshd-btn-border);
   /* dsh 按钮圆角：18px pill（design-platform.css） */
   border-radius: var(--dshd-r-btn);
   background: transparent;
@@ -387,7 +417,7 @@
   outline: none;
 }
 /* 次按钮 hover：底色 + 边框同步抬升（与启动页 .btn 同一状态阶梯） */
-.dshd-btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
+.dshd-btn:hover { background: var(--dshd-hover); border-color: var(--dshd-hover-border); }
 .dshd-btn:disabled:hover { background: transparent; }
 /* 行内小按钮：24px 高（WCAG 2.2 AA 最小点击目标），圆角用 dsh 小按钮档 14px */
 .dshd-btn.small { height: 24px; padding: 0 10px; font-size: var(--dshd-fs-sm); border-radius: 14px; }
@@ -414,7 +444,7 @@
   width: 100%;
   height: var(--dshd-input-height, 34px);
   padding: 0 10px;
-  border: 1px solid var(--dshd-border);
+  border: 1px solid var(--dshd-input-border);
   /* 输入框圆角：dsh Input.module.css 是 8px（不取条目档 10） */
   border-radius: 8px;
   outline: none;
@@ -426,7 +456,7 @@
 }
 .dshd-input::placeholder { color: var(--dshd-text-dim); opacity: .72; }
 .dshd-input:hover:not(:disabled):not(:focus) {
-  border-color: var(--dshd-border-strong);
+  border-color: var(--dshd-hover-border);
   background: var(--dshd-input-hover);
 }
 .dshd-input:focus-visible {
@@ -604,8 +634,13 @@
 }
 .dshd-toast-close {
   flex: none;
+  display: grid;
+  place-items: center;
+  /* 宿主通知控件：24px Web 点击区域，图形沿用菜单的 14px 规格。 */
+  width: 24px;
+  height: 24px;
   border: 0;
-  padding: 0 2px;
+  padding: 0;
   background: none;
   color: var(--dshd-text-dim);
   font-size: var(--dshd-fs-base);

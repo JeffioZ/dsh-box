@@ -181,6 +181,7 @@ fn download_bootstrapper(path: &std::path::Path) -> Result<(), String> {
         .take(MAX_BOOTSTRAPPER_BYTES + 1);
     let mut file = std::fs::OpenOptions::new()
         .write(true)
+        .read(true)
         .create_new(true)
         .open(path)
         .map_err(|e| {

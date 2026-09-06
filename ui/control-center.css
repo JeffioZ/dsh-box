@@ -24,7 +24,8 @@ body {
   width: 188px; flex: none; display: flex; flex-direction: column; gap: 4px;
   padding: 22px 12px 0; overflow-y: auto;
 }
-/* 导航顶部标题：dsh navTitle 规格（16px/24px 500，与列表间隔 18px） */
+/* 导航顶部标题：16px/24px/500 逐值同 dsh；与列表间隔 14px 为本仓紧凑
+   校准值（dsh 侧未找到可循的同名规格） */
 .nav-title {
   color: var(--dshd-text);
   padding: 0 12px;
@@ -60,7 +61,8 @@ body {
 }
 .nav-item.active .nic { color: var(--dshd-selected-text); }
 .nav-item svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.nav-sep { height: var(--dshd-hair, 1px); margin: 4px 12px; background: var(--dshd-border); }
+/* 与 .dshd-sep 同规格：border-top 技法（相位恒定，见 common.css 注释） */
+.nav-sep { height: 0; margin: 4px 12px; border-top: 1px solid var(--dshd-line); }
 .nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); opacity: .6; }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* 每次打开弹窗都会程序化聚焦标题：压掉全部焦点环。标题是非交互的
@@ -128,7 +130,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   animation: spin var(--dshd-anim-spin);
 }
 /* 检查更新版本行：行高给足呼吸感（9px），字号走令牌档（12/11） */
-.uprow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--dshd-border); }
+.uprow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--dshd-line); }
 .uprow:last-child { border-bottom: none; }
 .uprow .info { flex: 1; min-width: 0; }
 .uprow .name { font-weight: 500; }
@@ -169,7 +171,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .pcat-btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 24px; line-height: 1; white-space: nowrap;
-  background: transparent; color: var(--dshd-text-dim); border: 1px solid var(--dshd-border);
+  background: transparent; color: var(--dshd-text-dim); border: 1px solid var(--dshd-btn-border);
   border-radius: 999px; padding: 4px 12px; font-family: inherit; font-size: var(--dshd-fs-sm); cursor: pointer;
   transition: var(--dshd-anim-state);
 }
@@ -180,7 +182,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .pcat-btn.active:hover { background: var(--dshd-selected-hover); border-color: var(--dshd-selected-hover); }
 .pcat-btn.active:active { background: var(--dshd-pressed); border-color: var(--dshd-selected); }
 .pcat-btn:disabled { opacity: .55; cursor: default; }
-.pcat-btn:disabled:hover { color: var(--dshd-text-dim); border-color: var(--dshd-border); background: transparent; }
+.pcat-btn:disabled:hover { color: var(--dshd-text-dim); border-color: var(--dshd-btn-border); background: transparent; }
 .pcat-btn.active:disabled:hover { background: var(--dshd-selected); border-color: var(--dshd-selected); color: var(--dshd-selected-text); }
 .papply {
   display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 9px 10px;
@@ -193,11 +195,15 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .papply .dshd-btn { flex: none; }
 .pdirectory { display: flex; flex-direction: column; }
 .psection { margin-top: 6px; }
-.psection + .psection { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dshd-border); }
+.psection + .psection { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dshd-line); }
 .psection-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .psection h3 { color: var(--dshd-text); font-size: var(--dshd-fs-md); font-weight: 600; line-height: 20px; margin: 0 0 6px; letter-spacing: 0; }
 .psection-head h3 { margin: 0; }
-.settings-section + .settings-section { margin-top: 16px; }
+/* 宿主层分组采用 common.css 中源自 dsh design-platform.css 的间距和边框令牌。 */
+.settings-section + .settings-section {
+  margin-top: var(--dshd-sp-5); padding-top: var(--dshd-sp-3);
+  border-top: 1px solid var(--dshd-line);
+}
 .settings-scope-note {
   margin: 2px 0 10px; padding: 9px 11px; border-radius: var(--dshd-r-md);
   border: 1px solid var(--dshd-border); background: var(--dshd-hover);
@@ -205,6 +211,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px;
 }
 .settings-scope-note .mi-btn { flex: none; }
+.settings-scope-note[hidden] { display: none; }
 .settings-service-card { margin-bottom: 6px; }
 
 /* —— 用量与余额（统一弹窗页） —— */
@@ -215,7 +222,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 .usage-h {
   margin: 0 0 8px; font-size: var(--dshd-fs-sm); font-weight: 600;
-  color: var(--dshd-text-dim); line-height: 1.4;
+  color: var(--dshd-text); line-height: 1.4;
 }
 /* auto-fit：汇总项从 5 项扩到 7 项（成本两项）后按内容自适应换行，
    窄弹窗不再依赖手工断点维持可读列宽 */
@@ -295,13 +302,13 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 
 /* 选中日的模型明细 */
-.usage-day-detail { margin-top: 8px; border-top: 1px solid var(--dshd-border); padding-top: 8px; }
+.usage-day-detail { margin-top: 8px; border-top: 1px solid var(--dshd-line); padding-top: 8px; }
 .usage-day-detail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 
 /* 模型行：名字 + token + 命中率 + 分布条（参考项目同构，采用 dshd token）；
    最近 14 天与模型下钻复用同一行体系 */
 .usage-models { list-style: none; margin: 0; padding: 0; }
-.usage-model { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 6px 0; font-size: var(--dshd-fs-sm); line-height: 1.4; border-top: 1px solid var(--dshd-border); }
+.usage-model { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 6px 0; font-size: var(--dshd-fs-sm); line-height: 1.4; border-top: 1px solid var(--dshd-line); }
 .usage-model:first-child { border-top: none; }
 .usage-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dshd-text); }
 .usage-model b { font-variant-numeric: tabular-nums; color: var(--dshd-text); font-weight: 500; }
@@ -327,8 +334,8 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-sm);
   background: linear-gradient(135deg, color-mix(in srgb, var(--usage-accent) 8%, transparent), transparent 42%),
     var(--dshd-hover);
-  padding: var(--dshd-sp-2) 10px;
-  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--dshd-sp-3);
+  display: flex; flex-direction: column; gap: var(--dshd-sp-2);
 }
 /* 供应商品牌色：各 provider 的身份识别色，深浅主题共用（品牌色不随
    主题切换），均为字面量是有意为之 */
@@ -361,6 +368,12 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-acc-status.err { color: var(--dshd-error-text); }
 .usage-acc-status.dim { color: var(--dshd-text-dim); }
 .usage-acc-detail { display: flex; flex-direction: column; gap: var(--dshd-sp-1); }
+.usage-acc-subscription {
+  display: flex; flex-direction: column; gap: var(--dshd-sp-1);
+  margin-top: var(--dshd-sp-2); padding-top: var(--dshd-sp-2);
+  border-top: 1px solid var(--dshd-line);
+}
+.usage-acc-hint.err { color: var(--dshd-error-text); overflow-wrap: anywhere; }
 .usage-acc-hint { font-size: var(--dshd-fs-xs); line-height: 16px; color: var(--dshd-text-dim); }
 .usage-acc-amount { font-size: var(--dshd-fs-xl); font-weight: 600; color: var(--dshd-text); font-variant-numeric: tabular-nums; }
 /* 余额拆分行：已用/总额/赠送/充值（有值才渲染） */
@@ -494,16 +507,27 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   margin: 4px 2px 0; font-size: var(--dshd-fs-sm); line-height: 18px;
   color: var(--dshd-error-text);
 }
-/* 宽度按满值 7 位数字（1,000,000）+ 左右内边距算：约 52px 文字 + 20px padding，
+/* 宽度按最长内容（英文 placeholder "Empty = off" ≈77px）+ 左右内边距算；
+   与其余输入框同为左对齐（dsh Input.module.css 无右对齐档），
    去 spin 箭头后不再预留按钮空间 */
 #settings-usage-limit {
-  width: 72px; text-align: right;
+  width: 104px;
   -moz-appearance: textfield; appearance: textfield;
 }
+
 /* 隐藏原生数字 spin 箭头（不适配深色，且窄输入框内挤占空间），
    保留 type=number 的输入法/校验语义，纯键盘输入 */
 #settings-usage-limit::-webkit-outer-spin-button,
 #settings-usage-limit::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+/* Chromium 对 <input> 内文字的垂直定位不受 line-height 影响（实测 26~
+   36px 同值），在 ≥125% 缩放下整体偏低约 2px；本框窄（104px）偏移更显
+   眼，padding-bottom 抬高内容区补偿——实测 2px 在 125%/150% 下均与相邻
+   单位文本对齐。其余输入框保持 UA 原生定位（全应用一致） */
+#settings-usage-limit { padding-bottom: 2px; }
+/* 中文墨迹在中文字体行盒内天然偏低约 1px（字体度量，非布局问题）；本框
+   是全应用唯一以中文做 placeholder 的输入框，占位文字上移补偿，与输入
+   数值（拉丁数字）的视觉位置一致 */
+#settings-usage-limit::placeholder { position: relative; top: -1px; }
 .usage-limit-unit { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: nowrap; }
 #settings-usage-limit[aria-invalid='true'] { border-color: var(--dshd-error-text); }
 /* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
@@ -541,13 +565,13 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 32px; padding: 0 12px; border-radius: var(--dshd-r-btn);
   font: inherit; font-size: var(--dshd-fs-md); line-height: 18px; font-weight: 500; text-align: center;
-  border: 1px solid var(--dshd-border); background: var(--dshd-hover);
+  border: 1px solid var(--dshd-btn-border); background: var(--dshd-hover);
   color: var(--dshd-text); cursor: pointer;
 }
 /* 过渡/焦点环/按下/primary 色阶/禁用的状态语义见 common.css 共享规则；
    此处只保留控制中心的填充式底色与 hover/disabled 复位 */
-.mi-btn:hover { border-color: var(--dshd-border-strong); background: var(--dshd-selected); }
-.mi-btn:disabled:hover { border-color: var(--dshd-border); background: var(--dshd-hover); }
+.mi-btn:hover { border-color: var(--dshd-hover-border); background: var(--dshd-selected); }
+.mi-btn:disabled:hover { border-color: var(--dshd-btn-border); background: var(--dshd-hover); }
 .mi-result {
   margin-top: 6px; padding: 8px 10px; border-radius: var(--dshd-r-md);
   background: var(--dshd-hover); border: 1px solid var(--dshd-border);
@@ -556,11 +580,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* hidden 属性必须压过 display:flex，否则未解析时结果区仍占位 */
 .mi-result[hidden] { display: none; }
 .mi-key-row { display: flex; flex-direction: column; gap: 4px; }
-.mi-key-label { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
-.mi-key-input {
-  font-size: var(--dshd-fs-sm);
-}
-.api-key-input-row, .mi-key-row .dshd-password-field { --dshd-input-height: 32px; }
+.mi-key-label { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); font-family: var(--dshd-font-mono); overflow-wrap: anywhere; }
 .api-key-feedback { min-height: 16px; }
 .mi-ok { font-size: var(--dshd-fs-sm); color: var(--dshd-success-text); line-height: 16px; }
 @media (prefers-reduced-motion: reduce) {

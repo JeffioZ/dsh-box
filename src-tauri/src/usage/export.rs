@@ -25,7 +25,7 @@ fn csv_cell(raw: &str) -> String {
 /// 每日×模型明细 CSV（UTF-8 BOM，便于 Excel 直接打开）。
 pub(crate) fn daily_csv(report: &UsageReport) -> String {
     let mut out = String::from("\u{FEFF}");
-    out.push_str("date,provider,model,input tokens,cache read,cache write,output,total,cache hit %,est. cost (USD),cost complete\r\n");
+    out.push_str("date,provider,model,input tokens,cache read,cache write,output,total,cache hit %,est. cost (USD),cost complete,report complete,unavailable sessions\r\n");
     for day in &report.days {
         for model in &day.models {
             // 成本仅在完整可信时输出金额（fail-closed，不输出低估值）
@@ -48,7 +48,7 @@ pub(crate) fn daily_csv(report: &UsageReport) -> String {
             out.push(',');
             out.push_str(&csv_cell(model_name));
             out.push_str(&format!(
-                ",{},{},{},{},{},{},{},{}\r\n",
+                ",{},{},{},{},{},{},{},{},{},{}\r\n",
                 model.buckets.input_tokens,
                 model.buckets.cache_read_tokens,
                 model.buckets.cache_write_tokens,
@@ -60,8 +60,22 @@ pub(crate) fn daily_csv(report: &UsageReport) -> String {
                     .unwrap_or_default(),
                 cost,
                 if model.cost_complete { "yes" } else { "no" },
+                if report.unavailable_sessions.is_empty() {
+                    "yes"
+                } else {
+                    "no"
+                },
+                report.unavailable_sessions.len(),
             ));
         }
+    }
+    if report.days.iter().all(|day| day.models.is_empty())
+        && !report.unavailable_sessions.is_empty()
+    {
+        out.push_str(&format!(
+            ",,,,,,,,,,,no,{}\r\n",
+            report.unavailable_sessions.len()
+        ));
     }
     out
 }
@@ -80,7 +94,8 @@ pub(crate) fn export_json(report: &UsageReport) -> String {
         "cost_complete": report.total.cost_complete,
     });
     let payload = serde_json::json!({
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
+        "unavailable_sessions": report.unavailable_sessions,
         "generated_at": report.updated_at,
         "cost_currency": "USD",
         "days": days,
@@ -149,6 +164,7 @@ mod tests {
 
     fn sample_report() -> UsageReport {
         UsageReport {
+            unavailable_sessions: Vec::new(),
             days: vec![DayReport {
                 date: "2026-08-30".to_string(),
                 buckets: BucketReport {
@@ -183,6 +199,22 @@ mod tests {
     }
 
     #[test]
+    fn partial_exports_keep_explicit_completeness_including_empty_csv() {
+        let mut report = sample_report();
+        report.unavailable_sessions.push("bad".into());
+        let json: serde_json::Value = serde_json::from_str(&export_json(&report)).unwrap();
+        assert_eq!(json["unavailable_sessions"], serde_json::json!(["bad"]));
+        assert!(daily_csv(&report)
+            .lines()
+            .skip(1)
+            .all(|line| line.ends_with(",no,1")));
+        report.days.clear();
+        let csv = daily_csv(&report);
+        assert_eq!(csv.lines().count(), 2);
+        assert_eq!(csv.lines().nth(1).unwrap().split(',').count(), 13);
+    }
+
+    #[test]
     fn csv_has_bom_header_and_escapes() {
         let csv = daily_csv(&sample_report());
         assert!(csv.starts_with('\u{FEFF}'));
@@ -211,7 +243,7 @@ mod tests {
     fn json_is_schema_versioned_and_secret_free() {
         let json = export_json(&sample_report());
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["schema_version"], "1.0.0");
+        assert_eq!(value["schema_version"], "1.1.0");
         assert_eq!(value["days"][0]["models"][0]["provider"], "deepseek");
         assert_eq!(value["days"][0]["models"][0]["cost_usd"], 0.0012);
         assert_eq!(value["total"]["cost_complete"], false);

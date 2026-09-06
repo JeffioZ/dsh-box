@@ -122,6 +122,21 @@ const DSHD_ICON_PATHS = {
   warning: '<path d="m10.29 3.86 8 13.86a2 2 0 0 1-1.73 3H3.44a2 2 0 0 1-1.73-3l8-13.86a2 2 0 0 1 3.46 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
   clock: '<circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path>',
   chevronDown: '<path d="m6 9 6 6 6-6"></path>',
+  // —— 菜单条目图标（menu.js ICONS 经 dshdIcon 引用；与 Rust 侧菜单模型
+  //    的 icon 字符串耦合的是 ICONS 的键名，不是这里的注册键名）——
+  chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path>',
+  window: '<rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path>',
+  globe: '<circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path>',
+  // 菜单的“重启 dsh 服务”用逆时针变体，与上方 restart（更新确认的
+  // 顺时针循环箭头）区分语义来源，避免键名冲突
+  rotate: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path>',
+  exit: '<path d="m16 17 5-5-5-5"></path><path d="M21 12H9"></path><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>',
+  cut: '<circle cx="6" cy="6" r="3"></circle><path d="M8.12 8.12 12 12"></path><path d="M20 4 8.12 15.88"></path><circle cx="6" cy="18" r="3"></circle><path d="M14.8 14.8 20 20"></path>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>',
+  paste: '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>',
+  select: '<path d="M5 3a2 2 0 0 0-2 2"></path><path d="M19 3a2 2 0 0 1 2 2"></path><path d="M21 19a2 2 0 0 1-2 2"></path><path d="M5 21a2 2 0 0 1-2-2"></path><path d="M9 3h1"></path><path d="M9 21h1"></path><path d="M14 3h1"></path><path d="M14 21h1"></path><path d="M3 9v1"></path><path d="M21 9v1"></path><path d="M3 14v1"></path><path d="M21 14v1"></path>',
+  undo: '<path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path>',
+  redo: '<path d="m15 14 5-5-5-5"></path><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path>',
   // —— 直接换 d 的图标条目（运行时 setAttribute 切换，非 dshdIcon 标签形态）——
   // 注意：这些是裸 d 字符串，与上方给 dshdIcon 用的完整标签条目不可混用，
   // 键名故意的区分开
@@ -145,30 +160,6 @@ function dshdIcon(name, attrs) {
   return '<svg viewBox="0 0 24 24"' + (attrs ? ' ' + attrs : '') + '>'
     + (def || '') + '</svg>';
 }
-
-// —— 分隔线物理像素对齐 ——
-// 1px 高的分隔线在 125%/150% 缩放下落在半像素相位，同屏多条线因起点
-// 不同被抗锯齿成不同深浅（肉眼可见的不一致）。统一为恰好 1 物理像素的
-// CSS 高度后，线的覆盖不再依赖起点相位，所有分隔线渲染一致。导航分隔线
-// （.nav-sep）与菜单分隔线（.dshd-sep）都引用 --dshd-hair。
-(function installHairlineScale() {
-  const apply = () => {
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    document.documentElement.style.setProperty('--dshd-hair', (1 / dpr) + 'px');
-  };
-  const onDprChange = () => {
-    mq.removeEventListener('change', onDprChange);
-    apply();
-    watch();
-  };
-  let mq = null;
-  const watch = () => {
-    mq = window.matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
-    mq.addEventListener('change', onDprChange);
-  };
-  apply();
-  watch();
-})();
 
 /** API Key 等密码输入框共用的可见性按钮、焦点保持与空值状态。 */
 function dshdBindPasswordToggle(input, toggle) {
@@ -443,7 +434,7 @@ function dshdBalanceValue(v) {
 
 // —— 通用 toast：瞬态操作反馈（替代各页散落的页内状态行）——
 // 用法：dshdToast(text) / dshdToast(text, { kind: 'ok'|'err', duration: ms })
-// kind 默认 'info'；duration 默认 info 3s / ok 2.5s / err 5s，0 = 不自动消失。
+// kind 默认 'info'；duration 默认 info 3s / ok 2.5s / err 常驻，0 = 不自动消失。
 // 错误类永不叠加自动消失的不确定性：带关闭按钮；长文本可滚动查看。
 const DSHD_TOAST_MAX = 3;
 function dshdToast(text, opts) {
@@ -451,7 +442,7 @@ function dshdToast(text, opts) {
   const msg = String(text == null ? '' : text);
   const duration = opts && Number.isFinite(opts.duration)
     ? opts.duration
-    : (kind === 'err' ? 5000 : kind === 'ok' ? 2500 : 3000);
+    : (kind === 'err' ? 0 : kind === 'ok' ? 2500 : 3000);
   const doc = document;
   let host = doc.getElementById('dshd-toasts');
   if (!host) {
@@ -460,25 +451,20 @@ function dshdToast(text, opts) {
     host.className = 'dshd-toasts';
     doc.body.append(host);
   }
-  // 堆叠上限：超出时最旧的先退场（排除退场动画中的节点——它们仍占
-  // children 名额但对 dismiss 免疫，纳入判定会死循环）
-  while (host.children.length >= DSHD_TOAST_MAX) {
-    const victim = host.querySelector('.dshd-toast:not(.leave)');
-    if (!victim) break;
-    dshdToastDismiss(victim);
-  }
   // 去重：同文案同类型的活跃 toast 不重复堆叠，只刷新其计时
   // （同一操作连续失败时避免同一条错误弹出多条）
   for (const el of Array.from(host.children)) {
     if (el.classList.contains('leave')) continue;
     if (el.dataset.kind === kind && el.dataset.msg === msg) {
+      clearTimeout(el._dshdToastTimer);
       if (duration > 0) {
-        clearTimeout(el._dshdToastTimer);
         el._dshdToastTimer = setTimeout(() => dshdToastDismiss(el), duration);
       }
       return el;
     }
   }
+  const active = Array.from(host.querySelectorAll('.dshd-toast:not(.leave)'));
+  while (active.length >= DSHD_TOAST_MAX) dshdToastDismiss(active.shift());
   const toast = doc.createElement('div');
   toast.className = 'dshd-toast enter ' + kind;
   toast.dataset.kind = kind;
@@ -494,6 +480,7 @@ function dshdToast(text, opts) {
     close.type = 'button';
     close.className = 'dshd-toast-close';
     close.setAttribute('aria-label', dshdT('toastClose'));
+    close.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
     close.addEventListener('click', () => dshdToastDismiss(toast));
     toast.append(close);
   }
@@ -519,6 +506,7 @@ function dshdToastClearAll() {
 }
 function dshdToastDismiss(el) {
   if (!el || el.classList.contains('leave')) return;
+  clearTimeout(el._dshdToastTimer);
   el.classList.add('leave');
   // 兜底移除（transitionend 被打断/禁用时 300ms 内强制清理）
   setTimeout(() => el.remove(), 300);

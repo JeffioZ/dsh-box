@@ -23,6 +23,11 @@ pub(super) enum PluginMutationKind {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct PluginInstallMarker {
+    /// CLI 完成但服务尚未验证时，可继续同一批次；旧标记默认仍视为在途。
+    #[serde(default)]
+    pub(super) ready_for_next: bool,
+    #[serde(default)]
+    pub(super) pending_adds: Vec<String>,
     #[serde(default)]
     pub(super) package: Option<String>,
     pub(super) spec: String,
@@ -79,7 +84,10 @@ pub(super) fn save_install_marker(
     user_removal: bool,
     original_manifest: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(marker) = install_marker(config) {
+    let previous = install_marker(config);
+    if let Some(marker) = previous.as_ref().filter(|m| {
+        !m.ready_for_next || (matches!(m.kind, PluginMutationKind::Add) && m.package.is_none())
+    }) {
         return Err(crate::locale::owned(
             format!(
                 "上次插件操作尚未完成（{}），请先重启应用完成恢复后再试。",
@@ -91,18 +99,63 @@ pub(super) fn save_install_marker(
             ),
         ));
     }
+    let mut pending_adds = previous
+        .as_ref()
+        .map(|m| m.pending_adds.clone())
+        .unwrap_or_default();
+    if matches!(kind, PluginMutationKind::Add) {
+        if let Some(package) = package {
+            if !pending_adds.iter().any(|p| p == package) {
+                pending_adds.push(package.into());
+            }
+        }
+    }
     crate::app_state::save_state_value(
         &config.root,
         PLUGIN_INSTALL_MARKER_KEY,
         serde_json::to_value(PluginInstallMarker {
+            ready_for_next: false,
+            pending_adds,
             package: package.map(str::to_string),
             spec: spec.to_string(),
             kind,
             user_removal,
-            original_manifest: original_manifest.map(str::to_string),
+            original_manifest: previous
+                .map(|m| m.original_manifest)
+                .unwrap_or_else(|| original_manifest.map(str::to_string)),
         })
         .map_err(|e| e.to_string())?,
     )
+}
+
+pub(super) fn finish_cli(config: &crate::app_state::Config) -> Result<(), String> {
+    let Some(mut marker) = install_marker(config) else {
+        return Ok(());
+    };
+    if matches!(marker.kind, PluginMutationKind::Remove) {
+        if let Some(package) = &marker.package {
+            marker.pending_adds.retain(|p| p != package);
+        }
+        if marker.pending_adds.is_empty() {
+            return clear_install_marker(config);
+        }
+    }
+    marker.ready_for_next = true;
+    restore_marker(config, Some(&marker))
+}
+
+pub(super) fn restore_marker(
+    config: &crate::app_state::Config,
+    marker: Option<&PluginInstallMarker>,
+) -> Result<(), String> {
+    match marker {
+        Some(marker) => crate::app_state::save_state_value(
+            &config.root,
+            PLUGIN_INSTALL_MARKER_KEY,
+            serde_json::to_value(marker).map_err(|e| e.to_string())?,
+        ),
+        None => clear_install_marker(config),
+    }
 }
 
 pub(super) fn clear_install_marker(config: &crate::app_state::Config) -> Result<(), String> {
@@ -150,19 +203,27 @@ pub(crate) fn try_acquire_pnpm_lock() -> Option<PnpmGuard> {
 
 /// 服务能够启动说明 profile 已完整解析；完成可能在命令提交后、事务标记
 /// 清理前被中断的附属状态，再清除旧事务记录。
-pub(crate) fn clear_resolved_install_marker(config: &crate::app_state::Config) {
-    let Some(marker) = install_marker(config) else {
-        return;
-    };
+pub(crate) fn clear_resolved_install_marker(
+    config: &crate::app_state::Config,
+    held: Option<&PnpmGuard>,
+) {
     // 与在途 pnpm CLI 互斥（与 recover_interrupted_plugin_mutation 的加锁
     // 对称）：服务健康不证明此前在途/崩溃的命令已写完 profile。此刻清掉
     // 事务标记，随后进程再中断就没有恢复记录。拿不到锁说明有 CLI 在途，
     // 跳过本轮收敛，下次启动会再次调用。
+    if held.is_some() {
+        if let Some(marker) = install_marker(config) {
+            clear_resolved_install_marker_locked(config, marker);
+        }
+        return;
+    }
     let Some(_pnpm) = try_acquire_pnpm_lock() else {
         crate::logging::log("plugins: pnpm 操作在途，跳过本轮启动收敛（下次启动重试）");
         return;
     };
-    clear_resolved_install_marker_locked(config, marker);
+    if let Some(marker) = install_marker(config) {
+        clear_resolved_install_marker_locked(config, marker);
+    }
 }
 
 /// 决策本体（调用方已持有 pnpm 锁；单测直接调用以避开并行用例间的锁竞态）。
@@ -212,6 +273,9 @@ pub(super) fn marker_targets_package(
     current_manifest: &str,
     package: &str,
 ) -> bool {
+    if marker.pending_adds.iter().any(|p| p == package) {
+        return true;
+    }
     if let Some(recorded) = marker.package.as_deref() {
         return recorded == package;
     }
@@ -242,7 +306,17 @@ pub(super) fn marker_targets_package(
 pub(crate) fn recover_interrupted_plugin_mutation(
     config: &crate::app_state::Config,
     name: &str,
+    held: Option<&PnpmGuard>,
 ) -> Result<bool, String> {
+    let _guard = if held.is_none() {
+        Some(
+            runner::MARKET_PNPM_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
+    } else {
+        None
+    };
     let Some(marker) = install_marker(config) else {
         return Ok(false);
     };
@@ -260,17 +334,22 @@ pub(crate) fn recover_interrupted_plugin_mutation(
         ));
         return Ok(false);
     }
-    let _guard = runner::MARKET_PNPM_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
     let removed = prune_manifest_package_locked(config, name)?;
     if matches!(marker.kind, PluginMutationKind::Remove)
         && marker.user_removal
+        && marker.package.as_deref() == Some(name)
         && is_market_pkg(name)
     {
         try_mark_user_removed(config, name)?;
     }
-    clear_install_marker(config)?;
+    // 保留同批次其余插件的恢复依据，待服务真正就绪后整体清理。
+    let mut remaining = marker;
+    remaining.pending_adds.retain(|p| p != name);
+    if remaining.pending_adds.is_empty() {
+        clear_install_marker(config)?;
+    } else {
+        restore_marker(config, Some(&remaining))?;
+    }
     Ok(removed)
 }
 

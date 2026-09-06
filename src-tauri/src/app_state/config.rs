@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use super::managed_file::merge_section_field;
 use super::{load_state_value, save_state_value, update_text_file};
 
 /// 默认端口。高位端口：避开 Windows Hyper-V/WSL 动态保留段（常见于 2914~3713
@@ -193,7 +192,7 @@ impl Config {
         }
         #[cfg(not(windows))]
         {
-            self.node_dir().join("node")
+            self.node_dir().join("bin/node")
         }
     }
     pub fn dsh_dir(&self) -> PathBuf {
@@ -261,33 +260,15 @@ impl Config {
         &self.dsh_home
     }
 
-    /// 读取 dsh settings.yaml 中指定段落的字段值（顶层 `section:` 块内的
-    /// `field:` 行）。行级解析，供语言/主题跟随使用。
+    /// 读写共用 YAML 语义，保留的注释、引号和 flow 映射不影响偏好跟随。
     fn dsh_settings_value(&self, section: &str, field: &str) -> Option<String> {
         let text = std::fs::read_to_string(self.dsh_home().join("settings.yaml")).ok()?;
-        let mut in_section = false;
-        for line in text.lines() {
-            if !line.starts_with(' ') && line.trim_end() == format!("{section}:") {
-                in_section = true;
-                continue;
-            }
-            if in_section {
-                // 只认“field:”开头的行：strip_prefix 后必须以冒号开始，
-                // 避免误命中 `preferences:` 等同前缀字段
-                if let Some(rest) = line.trim_start().strip_prefix(field) {
-                    if rest.trim_start().starts_with(':') {
-                        let value = line
-                            .split_once(':')
-                            .map(|(_, v)| v.trim().trim_matches(['"', '\'']))?;
-                        return Some(value.to_string());
-                    }
-                }
-                if !line.starts_with(' ') && !line.is_empty() {
-                    break; // 段落结束
-                }
-            }
-        }
-        None
+        crate::yaml_fields::parse(&text)
+            .ok()?
+            .get(section)?
+            .get(field)?
+            .as_str()
+            .map(str::to_string)
     }
 
     /// 读取 dsh 的语言偏好（`locale.preference`：zh|en）→ 应用语言 id。
@@ -329,7 +310,7 @@ impl Config {
         }
         let path = self.dsh_home().join("settings.yaml");
         update_text_file(&path, |text| {
-            Ok(merge_section_field(&text, "locale", "preference", language))
+            crate::yaml_fields::set(&text, "locale", "preference", language.into())
         })
     }
 
@@ -341,7 +322,7 @@ impl Config {
         }
         let path = self.dsh_home().join("settings.yaml");
         update_text_file(&path, |text| {
-            Ok(merge_section_field(&text, "ui-theme", "preference", theme))
+            crate::yaml_fields::set(&text, "ui-theme", "preference", theme.into())
         })
     }
 

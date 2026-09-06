@@ -152,6 +152,16 @@ fn with_directory_transaction<T>(
 
     // 2) 停服前准备：网络与安装器等昂贵操作仅在本地状态可进入事务时执行。
     let prepared = prepare()?;
+    let _pnpm = wait_pnpm_for_restart(app)?;
+    if app.state::<AppState>().is_quitting()
+        || app.state::<AppState>().service_ownership().is_external()
+    {
+        return Err(crate::locale::text(
+            "服务状态已改变，已取消更新。",
+            "The service state changed; the update was cancelled.",
+        )
+        .into());
+    }
 
     // 3) 进入事务：停止可用服务、备份当前版本。
     emit_progress(
@@ -159,13 +169,15 @@ fn with_directory_transaction<T>(
         crate::locale::text("正在停止 dsh 服务…", "Stopping the dsh service…"),
     );
     update_txn::create_marker(marker)?;
+    app.state::<AppState>()
+        .set_phase(BootPhase::Starting, "", "");
     dsh::shutdown(app);
     navigate_to_splash(app);
     std::thread::sleep(Duration::from_millis(800));
     if current.exists() {
         if let Err(e) = std::fs::rename(current, backup) {
             let marker_error = update_txn::remove_marker(marker).err();
-            let _ = restart_service_locked(app);
+            let _ = restart_service_with_pnpm(app, &_pnpm);
             return Err(crate::locale::owned(
                 match marker_error.as_ref() {
                     Some(cleanup) => format!("备份当前 {name} 失败：{e}；{cleanup}"),
@@ -190,7 +202,7 @@ fn with_directory_transaction<T>(
                 return Err(restore_note.after_install_failure(name, &e, &re));
             }
         };
-        let result = match restart_service_locked(app) {
+        let result = match restart_service_with_pnpm(app, &_pnpm) {
             Ok(()) => crate::locale::owned(
                 format!("{e}；已恢复旧版本"),
                 format!("{e}; the previous version was restored"),
@@ -211,7 +223,7 @@ fn with_directory_transaction<T>(
             format!("{name} update complete. Restarting the service…").as_str(),
         ),
     );
-    if let Err(e) = restart_service_locked(app) {
+    if let Err(e) = restart_service_with_pnpm(app, &_pnpm) {
         dsh::shutdown(app);
         let rollback = match update_txn::rollback_directory(current, backup, marker) {
             Ok(outcome) => outcome,
@@ -228,7 +240,7 @@ fn with_directory_transaction<T>(
                 ));
             }
         };
-        let restore_result = restart_service_locked(app);
+        let restore_result = restart_service_with_pnpm(app, &_pnpm);
         // dsh 专属诊断：新版起不来但崩溃点在用户插件（如与新 dsh 的 API
         // 不兼容）时，记录包名并改用可操作的指引文案；Node 更新回滚解决
         // 不了插件问题，不参与诊断。
@@ -305,7 +317,7 @@ impl Drop for UpdatingReset<'_> {
     }
 }
 
-fn emit_progress(app: &AppHandle, message: &str) {
+pub(crate) fn emit_progress(app: &AppHandle, message: &str) {
     // 事件之外同步写入状态：检查更新弹窗关闭再打开后，进行中的更新进度
     // 仍能经轮询（app_dialog_check_get）拉取——事件通道对隐藏窗口不可靠。
     app.state::<AppState>()
@@ -356,8 +368,7 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
     } else if which == "app" {
         update_app_exe(app, &state.config())
     } else if which == "npm" {
-        // strict：手动更新失败要报给用户（区别于启动时静默降级）
-        runtime::upgrade_portable_npm(app, &state.config(), true)
+        runtime::upgrade_portable_npm(app, &state.config())
     } else {
         Err(format!(
             "{}: {which}",
@@ -365,6 +376,20 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         ))
     };
     if let Err(msg) = &result {
+        if !state.is_quitting()
+            && !state.has_running_process()
+            && !state.service_ownership().is_external()
+        {
+            emit_status(
+                app,
+                BootPhase::Error,
+                crate::locale::text(
+                    "更新后服务未能恢复",
+                    "The service could not be restored after the update",
+                ),
+                msg,
+            );
+        }
         // 让启动页/托盘能看到失败原因
         emit_progress(
             app,
@@ -493,6 +518,15 @@ fn wait_pnpm_for_restart(app: &AppHandle) -> Result<crate::plugins::PnpmGuard, S
 
 /// 调用方已持有生命周期锁时使用。
 pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
+    let _pnpm = wait_pnpm_for_restart(app)?;
+    restart_service_with_pnpm(app, &_pnpm)
+}
+
+/// 调用方已经依次持有 lifecycle 与 pnpm，避免更新事务内重入同一把锁。
+fn restart_service_with_pnpm(
+    app: &AppHandle,
+    pnpm: &crate::plugins::PnpmGuard,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.service_ownership().is_external() {
         return Err(crate::locale::text(
@@ -501,7 +535,6 @@ pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
         )
         .into());
     }
-    let _pnpm = wait_pnpm_for_restart(app)?;
     let mut config = state.config();
     let resume_url = crate::main_webview(app)
         .and_then(|webview| webview.url().ok())
@@ -518,7 +551,7 @@ pub(crate) fn restart_service_locked(app: &AppHandle) -> Result<(), String> {
         let node = runtime::ensure_node(app, &config)?;
         state.set_node_version(Some(node.version.clone()));
         state.set_npm_version(runtime::npm_version(&config));
-        let port = dsh::launch_managed(app, &mut config, &node.executable)?;
+        let port = dsh::launch_managed(app, &mut config, &node.executable, Some(pnpm))?;
         config.port = port;
         Ok(())
     })();

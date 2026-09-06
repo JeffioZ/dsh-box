@@ -32,6 +32,7 @@ pub struct SubscriptionSnapshot {
     pub plan: String,
     pub windows: Vec<QuotaWindow>,
     pub error: Option<String>,
+    pub updated_at: Option<u64>,
     /// 瞬错保旧标记：true 表示本快照是上次成功数据。
     pub stale: bool,
     /// 预警级别："none" | "warning" | "critical"。
@@ -925,6 +926,12 @@ fn snapshot(
         warn_level: warn_of_windows(&windows),
         windows,
         error,
+        updated_at: (status == "ok").then(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        }),
         stale: false,
     }
 }
@@ -954,24 +961,33 @@ const KNOWN_IDS: &[(&str, SubscriptionAdapter)] = &[
 
 /// 阶段 3 入口：枚举所有支持订阅的路由并查询。
 pub fn subscriptions(config: &Config) -> Vec<SubscriptionSnapshot> {
-    let mut out = Vec::new();
+    let mut selected = Vec::new();
     // 以已配置路由为主，缺失时用已知 id 的默认路由（外部凭据可能未在
     // settings.yaml 建模，但环境变量已提供 key）。
     let routes = super::providers::configured_routes(config);
     for (id, adapter) in KNOWN_IDS {
-        let route = routes
+        let matching: Vec<_> = routes
             .iter()
-            .find(|r| adapter_of(&r.id) == Some(*adapter))
+            .filter(|r| adapter_of(&r.id) == Some(*adapter))
             .cloned()
-            .unwrap_or_else(|| ProviderRoute {
-                id: id.to_string(),
-                display_name: id.to_string(),
-                api_key_env: None,
-                base_url: None,
-            });
-        out.push(query_subscription(config, &route, *adapter));
+            .collect();
+        if matching.is_empty() {
+            selected.push((
+                ProviderRoute {
+                    id: id.to_string(),
+                    display_name: id.to_string(),
+                    api_key_env: None,
+                    base_url: None,
+                },
+                *adapter,
+            ));
+        } else {
+            selected.extend(matching.into_iter().map(|route| (route, *adapter)));
+        }
     }
-    out
+    super::query_bounded(&selected, |(route, adapter)| {
+        query_subscription(config, route, *adapter)
+    })
 }
 
 #[cfg(test)]

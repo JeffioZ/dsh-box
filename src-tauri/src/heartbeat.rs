@@ -2,7 +2,8 @@
 //! 停摆、心跳停报），由桌面端重载页面自愈；连续失败指数退避，避免
 //! 反复重载风暴。主窗口不可交互时暂停判死，避免 WebView 后台挂起误报。
 //!
-//! 心跳由 navigate 注入的 `HEARTBEAT_INJECT` 每 10s 上报一次；
+//! 心跳由 navigate 注入的 `HEARTBEAT_INJECT` 上报：稳态至少间隔 10s，
+//! 页面选中会话变化时立即上报（附带会话 id，见 usage::set_visible_session）；
 //! 仅在服务健康且页面为 dsh 页面时判定（服务异常交给 dsh 看门狗处理）。
 
 use std::time::Duration;
@@ -39,7 +40,11 @@ pub fn beat(app: &AppHandle) {
 
 /// 页面心跳命令：仅允许 dsh 页面调用（命令本身无副作用，只更新存活标记）。
 #[tauri::command]
-pub fn page_heartbeat(webview: tauri::Webview) -> Result<(), String> {
+pub fn page_heartbeat(
+    webview: tauri::Webview,
+    session_id: Option<String>,
+    selection_known: Option<bool>,
+) -> Result<(), String> {
     let url = webview.url().map_err(|e| e.to_string())?;
     let config = webview.app_handle().state::<AppState>().config();
     if !crate::is_dsh_url(&url, &config) {
@@ -49,6 +54,13 @@ pub fn page_heartbeat(webview: tauri::Webview) -> Result<(), String> {
         )
         .into());
     }
+    if session_id
+        .as_ref()
+        .is_some_and(|id| id.len() > 512 || id.chars().any(char::is_control))
+    {
+        return Err("Invalid session ID".into());
+    }
+    crate::usage::set_visible_session(config.port, selection_known.unwrap_or(false), session_id);
     beat(webview.app_handle());
     Ok(())
 }

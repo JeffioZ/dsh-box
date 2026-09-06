@@ -259,7 +259,24 @@ pub(crate) use crate::net_guard::is_private_address;
 /// 校验并构造余额请求 URL：委托 `net_guard::guard_https_or_lan_http`
 /// （https 任意主机；http 仅回环/私有——自托管网关场景；拒绝 userinfo）。
 fn guard_url(base: &str, path: &str) -> Result<String, &'static str> {
-    crate::net_guard::guard_https_or_lan_http(base, path)
+    let mut url = url::Url::parse(base).map_err(|_| "invalid-url")?;
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("invalid-url");
+    }
+    let current = url.path().trim_end_matches('/');
+    let prefixes: &[&str] = match path {
+        "/user/balance" => &["/v1", "/beta"],
+        "/api/v1/credits" => &["/api/v1"],
+        "/v1/users/me/balance" => &["/v1"],
+        "/api/paas/v4/balance" => &["/api/coding/paas/v4", "/api/paas/v4"],
+        _ => &[],
+    };
+    let prefix = prefixes
+        .iter()
+        .find_map(|suffix| current.strip_suffix(suffix))
+        .unwrap_or(current);
+    url.set_path(&format!("{prefix}{path}"));
+    crate::net_guard::guard_full_url(url.as_str())
 }
 
 /// 查询一个路由的余额（同步、阻塞线程调用）。无 key / 无适配器时给出
@@ -314,7 +331,14 @@ pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
                     ),
                 );
             }
-            Some(env) => (env, resolve_credential(config, env)),
+            Some(env) => (
+                env,
+                if scheme == BalanceScheme::DeepSeek {
+                    crate::credentials::resolve_api_key(config, Some(env))
+                } else {
+                    resolve_credential(config, env)
+                },
+            ),
         }
     };
     let Some(key) = key else {
@@ -1004,11 +1028,9 @@ fn query_sub2api(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
     }
 }
 
-/// 凭据解析走统一链（credentials::resolve_api_key）：DSH_BOX_API_KEY →
-/// DEEPSEEK_API_KEY → 路由声明 env → 凭据文件。DeepSeek 官方路由因此同样
-/// 响应壳级 DSH_BOX_API_KEY 覆盖，与状态栏余额口径一致。
+/// 其他供应商只能使用其声明的引用，不能将 DeepSeek 的全局覆盖发给它们。
 fn resolve_credential(config: &Config, name: &str) -> Option<String> {
-    crate::credentials::resolve_api_key(config, Some(name))
+    named_env_or_credentials(config, name)
 }
 
 /// 具名环境变量 → 凭据文件（OpenRouter 管理密钥等非 DeepSeek 链）。
@@ -1066,6 +1088,33 @@ fn balance_agent() -> &'static ureq::Agent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn balance_url_preserves_gateway_prefix_without_duplicate_api_version() {
+        for (base, path, expected) in [
+            (
+                "https://x.test/proxy/api/v1/",
+                "/api/v1/credits",
+                "https://x.test/proxy/api/v1/credits",
+            ),
+            (
+                "https://x.test/v1",
+                "/user/balance",
+                "https://x.test/user/balance",
+            ),
+            (
+                "https://x.test/v1",
+                "/v1/users/me/balance",
+                "https://x.test/v1/users/me/balance",
+            ),
+            (
+                "https://x.test/api/coding/paas/v4",
+                "/api/paas/v4/balance",
+                "https://x.test/api/paas/v4/balance",
+            ),
+        ] {
+            assert_eq!(super::guard_url(base, path).unwrap(), expected);
+        }
+    }
     use super::*;
 
     #[test]
@@ -1396,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_credential_lets_shell_override_route_env() {
+    fn resolve_credential_isolates_route_from_deepseek_overrides() {
         let _guard = crate::credentials::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1409,15 +1458,15 @@ mod tests {
         std::env::set_var("DSH_BOX_API_KEY", "box-key");
         let mut config = Config::load();
         config.dsh_home = std::env::temp_dir().join("dshbox-usage-bal-cred-nonexistent");
-        // DSH_BOX_API_KEY 覆盖一切（DeepSeek 官方路由与状态栏同口径）。
+        // 其他路由不接收 DeepSeek 专用环境变量。
         assert_eq!(
             resolve_credential(&config, ROUTE).as_deref(),
-            Some("box-key")
+            Some("route-key")
         );
         std::env::remove_var("DSH_BOX_API_KEY");
         assert_eq!(
             resolve_credential(&config, ROUTE).as_deref(),
-            Some("deep-key")
+            Some("route-key")
         );
         std::env::remove_var("DEEPSEEK_API_KEY");
         assert_eq!(

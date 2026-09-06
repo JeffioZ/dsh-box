@@ -618,17 +618,7 @@ pub fn prefetch_app_update(app: &AppHandle) {
 /// 已预下载且摘要吻合的安装包，不重复下载。
 #[cfg(windows)]
 fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
-    let release_url = format!("https://github.com/{APP_REPO}/releases/tag/v{version}");
-    crate::control_center::open_update_prompt(
-        app,
-        crate::control_center::UpdatePrompt {
-            kind: "app".into(),
-            version: version.to_string(),
-            current: None,
-            release_url: Some(release_url),
-            simulated: None,
-        },
-    );
+    super::check::notify_update_available(app, "DSHBox", version);
 }
 
 #[cfg(test)]

@@ -5,9 +5,7 @@ mod managed_file;
 mod store;
 
 pub use config::Config;
-#[cfg(test)]
-use managed_file::merge_section_field;
-pub(crate) use managed_file::{atomic_write, update_text_file};
+pub(crate) use managed_file::{atomic_write, update_text_file, update_text_pair};
 pub(crate) use store::{load_state_value, remove_state_value, save_config_value, save_state_value};
 
 use serde::{Deserialize, Serialize};
@@ -276,7 +274,6 @@ pub(crate) struct Inner {
     active_update_prompt: Option<(u64, crate::control_center::UpdatePrompt)>,
     update_prompt_sequence: u64,
     /// 最近一次余额查询结果（余额弹窗轮询拉取；事件通道对该窗口不可靠）。
-    last_balance: Option<crate::balance::BalancePayload>,
     /// 最近一次更新检查结果 + 进度文案 + 更新完成结果（检查更新弹窗轮询拉取）。
     last_check: Option<crate::updater::CheckResult>,
     check_progress: Option<String>,
@@ -395,7 +392,6 @@ impl AppState {
             pending_update_prompts: std::collections::VecDeque::new(),
             active_update_prompt: None,
             update_prompt_sequence: 0,
-            last_balance: None,
             last_check: None,
             check_progress: None,
             update_done_ok: false,
@@ -1033,12 +1029,6 @@ impl AppState {
 
     // ---------- 弹窗轮询数据（事件通道对该窗口不可靠，页面轮询拉取） ----------
 
-    pub fn set_last_balance(&self, payload: Option<crate::balance::BalancePayload>) {
-        self.lock_inner().last_balance = payload;
-    }
-    pub fn last_balance(&self) -> Option<crate::balance::BalancePayload> {
-        self.lock_inner().last_balance.clone()
-    }
     pub fn set_last_check(&self, result: Option<crate::updater::CheckResult>) {
         self.lock_inner().last_check = result;
     }
@@ -1121,8 +1111,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_onboarding_probe, complete_onboarding_probe, merge_section_field,
-        onboarding_required_for, version_probe_allowed, wait_onboarding_probe, AppState,
+        begin_onboarding_probe, complete_onboarding_probe, onboarding_required_for,
+        version_probe_allowed, wait_onboarding_probe, AppState,
     };
 
     #[test]
@@ -1149,44 +1139,6 @@ mod tests {
     fn onboarding_gate_keeps_production_persistence_semantics() {
         assert!(onboarding_required_for(false, false, false));
         assert!(!onboarding_required_for(false, false, true));
-    }
-
-    #[test]
-    fn merge_section_field_replaces_only_the_target() {
-        let source = "locale:\n  preference: zh\n  extra: keep\nui-theme:\n  preference: dark\n";
-        let merged = merge_section_field(source, "locale", "preference", "en");
-        assert_eq!(
-            merged,
-            "locale:\n  preference: en\n  extra: keep\nui-theme:\n  preference: dark\n"
-        );
-    }
-
-    #[test]
-    fn merge_section_field_appends_missing_field_or_section() {
-        assert_eq!(
-            merge_section_field("locale:\n  extra: keep\n", "locale", "preference", "zh"),
-            "locale:\n  extra: keep\n  preference: zh\n"
-        );
-        assert_eq!(
-            merge_section_field("other:\n  value: keep\n", "locale", "preference", "en"),
-            "other:\n  value: keep\nlocale:\n  preference: en\n"
-        );
-    }
-
-    #[test]
-    fn merge_section_field_collapses_duplicate_target_fields() {
-        let source = "locale:\n  preference: zh\n  preference: en\n";
-        let merged = merge_section_field(source, "locale", "preference", "zh");
-        assert_eq!(merged.matches("preference:").count(), 1);
-    }
-
-    #[test]
-    fn merge_section_field_tolerates_bom_on_section_header() {
-        // 文件首行段头带 BOM 时仍应命中，而不是追加重复段
-        let source = "\u{feff}locale:\n  preference: zh\n";
-        let merged = merge_section_field(source, "locale", "preference", "en");
-        assert!(merged.contains("preference: en"));
-        assert_eq!(merged.matches("locale:").count(), 1);
     }
 
     #[test]

@@ -189,6 +189,32 @@ mod tests {
     }
 
     #[test]
+    fn preferences_round_trip_comments_and_flow() {
+        let dir = std::env::temp_dir().join(format!(
+            "dshbox-pref-roundtrip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = config_with_root(dir.clone());
+        config.dsh_home = dir.clone();
+        for source in [
+            "ui-theme: # note\n  preference: dark # keep\nlocale: {preference: zh}\n",
+            "ui-theme: {preference: dark}\nlocale: # note\n  preference: zh # keep\n",
+        ] {
+            std::fs::write(dir.join("settings.yaml"), source).unwrap();
+            config.save_dsh_theme("light").unwrap();
+            config.save_dsh_locale("en").unwrap();
+            assert_eq!(config.load_dsh_theme(), Some("light"));
+            assert_eq!(config.load_dsh_locale(), Some("en"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn onboarding_required_without_marker() {
         let dir = std::env::temp_dir().join(format!("dshd-onb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -272,7 +298,10 @@ mod tests {
         .unwrap();
         cfg.save_dsh_theme("light").unwrap();
         let text = std::fs::read_to_string(home.join("settings.yaml")).unwrap();
-        assert!(text.contains("ui-theme:\n  preference: light"));
+        assert_eq!(
+            crate::yaml_fields::parse(&text).unwrap()["ui-theme"]["preference"],
+            "light"
+        );
         assert!(
             text.contains("locale:\n  preference: zh"),
             "其他段落不得被触碰"
@@ -283,7 +312,10 @@ mod tests {
         std::fs::write(home.join("settings.yaml"), "locale:\n  preference: zh\n").unwrap();
         cfg.save_dsh_theme("dark").unwrap();
         let text = std::fs::read_to_string(home.join("settings.yaml")).unwrap();
-        assert!(text.contains("ui-theme:\n  preference: dark"));
+        assert_eq!(
+            crate::yaml_fields::parse(&text).unwrap()["ui-theme"]["preference"],
+            "dark"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -303,7 +335,10 @@ mod tests {
         .unwrap();
         save_credentials_api_key(&cfg, "new-key").unwrap();
         let text = std::fs::read_to_string(home.join(".credentials.yaml")).unwrap();
-        assert!(text.contains("  DEEPSEEK_API_KEY: 'new-key'"));
+        assert_eq!(
+            crate::yaml_fields::parse(&text).unwrap()["refs"]["DEEPSEEK_API_KEY"],
+            "new-key"
+        );
         assert!(text.contains("  IBRAIN_API_KEY: keep-me"));
         assert!(!text.contains("old-key"));
         assert!(crate::credentials::has(&cfg, DEEPSEEK_API_KEY_NAME));

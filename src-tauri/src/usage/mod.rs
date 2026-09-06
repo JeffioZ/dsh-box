@@ -24,13 +24,15 @@ pub(crate) use alerts::{cached_payload, start_usage_alerts};
 pub use balance::AccountSnapshot;
 #[cfg(test)]
 pub(crate) use balance::Balance;
+#[cfg(windows)]
+pub(crate) use live::session_is_listed;
 pub(crate) use live::{
-    current_session_id, refresh_once, session_activity, snapshot, start_live_rate, start_periodic,
+    refresh_once, session_activity, set_visible_session, snapshot, start_live_rate, start_periodic,
     StatsPayload,
 };
 pub(crate) use log::session_log_path;
 pub(crate) use monitor::{
-    cached_accounts, cached_deepseek, cached_subscriptions, request_account_refresh,
+    cached_deepseek, request_account_refresh, snapshots as account_snapshots,
     start_account_monitor, start_credentials_follow,
 };
 #[cfg(test)]
@@ -51,10 +53,33 @@ pub fn accounts(config: &crate::app_state::Config) -> Result<Vec<AccountSnapshot
     if dev_fake::enabled() {
         return Ok(dev_fake::accounts());
     }
-    Ok(providers::configured_routes(config)
-        .into_iter()
-        .map(|route| balance::query_route(config, &route))
-        .collect())
+    Ok(query_bounded(
+        &providers::configured_routes(config),
+        |route| balance::query_route(config, route),
+    ))
+}
+
+/// 单轮最多三个阻塞请求并行，保持输入顺序，避免账户数直接变成线程数。
+fn query_bounded<T: Sync, R: Send>(items: &[T], query: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    items
+        .chunks(3)
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|item| scope.spawn(|| query(item)))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect()
 }
 
 /// 查询全部订阅额度适配器（阶段 3 入口）。
@@ -76,6 +101,21 @@ pub fn subscriptions(config: &crate::app_state::Config) -> Vec<SubscriptionSnaps
 /// 重建兜底：文件变短（截断/重建）或新事件 seq 回退（同长度重建）时，
 /// 退回一次性整段重折，旧聚合清零重来。
 pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), String> {
+    if !log::supported_generation(path) {
+        return Err(crate::locale::text(
+            "会话日志格式较新，请更新 DSHBox 后再查看用量。",
+            "The session log format is newer; update DSHBox to view usage.",
+        )
+        .into());
+    }
+    let source_file = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if state.source_file != source_file {
+        state.reset_fold();
+        state.source_file = source_file.into();
+    }
     let file_len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
     if state.byte_offset == file_len {
         return Ok(());
@@ -158,6 +198,7 @@ pub fn list_session_logs(config: &crate::app_state::Config) -> Vec<(String, std:
 /// 不得更改；无活动会话或会话尚无路由归因时全部为 null。
 #[derive(serde::Serialize)]
 pub struct SessionContext {
+    pub selected: bool,
     pub route_id: Option<String>,
     pub display_name: Option<String>,
     pub model: Option<String>,
@@ -189,11 +230,14 @@ pub fn session_context(config: &crate::app_state::Config) -> SessionContext {
     let route = sessions
         .get(&session_id)
         .and_then(|s| s.current_route.as_ref());
-    context_of(route, &providers::configured_routes(config))
+    let mut context = context_of(route, &providers::configured_routes(config));
+    context.selected = live::visible_session(config).is_some();
+    context
 }
 
 fn empty_context() -> SessionContext {
     SessionContext {
+        selected: false,
         route_id: None,
         display_name: None,
         model: None,
@@ -215,6 +259,7 @@ fn context_of(
         .map(|r| r.display_name.clone())
         .unwrap_or_else(|| route.provider_id.clone());
     SessionContext {
+        selected: false,
         route_id: Some(route.provider_id.clone()),
         display_name: Some(display_name),
         model: Some(route.model.clone()),
@@ -236,12 +281,15 @@ pub fn report(config: &crate::app_state::Config) -> Result<UsageReport, String> 
     }
     let _guard = REPORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut sessions = cache::load(config);
+    let mut unavailable_sessions = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (id, path) in list_session_logs(config) {
         seen.insert(id.clone());
         let state = sessions.entry(id.clone()).or_default();
         if let Err(e) = fold_log(state, &path) {
             crate::logging::log(&format!("usage: 会话 {id} 聚合失败：{e}"));
+            unavailable_sessions.push(id.clone());
+            sessions.remove(&id);
         }
     }
     sessions.retain(|id, _| seen.contains(id));
@@ -258,7 +306,10 @@ pub fn report(config: &crate::app_state::Config) -> Result<UsageReport, String> 
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    Ok(render(&days, updated_at))
+    let mut report = render(&days, updated_at);
+    unavailable_sessions.sort();
+    report.unavailable_sessions = unavailable_sessions;
+    Ok(report)
 }
 
 fn merge_days(
@@ -323,6 +374,28 @@ mod tests {
 
     fn total_tokens(state: &FoldState) -> u64 {
         state.days.values().map(|d| d.totals.total()).sum()
+    }
+
+    #[test]
+    fn report_isolates_unreadable_generations_and_recovers_on_next_round() {
+        let root = temp_log("partial-report").parent().unwrap().to_path_buf();
+        let mut config = crate::app_state::Config::load();
+        config.root = root.clone();
+        config.dsh_home = root.clone();
+        let good = root.join("sessions/good");
+        let bad = root.join("sessions/bad");
+        std::fs::create_dir_all(&good).unwrap();
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(good.join("session.v2.jsonl"), usage_line(1, 1, 100, 20)).unwrap();
+        std::fs::write(bad.join("session.v3.jsonl"), usage_line(1, 1, 5, 5)).unwrap();
+        let partial = report(&config).unwrap();
+        assert_eq!(partial.total.tokens, 120);
+        assert_eq!(partial.unavailable_sessions, ["bad"]);
+        std::fs::rename(bad.join("session.v3.jsonl"), bad.join("session.v2.jsonl")).unwrap();
+        let complete = report(&config).unwrap();
+        assert_eq!(complete.total.tokens, 130);
+        assert!(complete.unavailable_sessions.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

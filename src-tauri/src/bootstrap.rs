@@ -511,7 +511,7 @@ pub(crate) fn run() {
                 // 启动/交互期的焦点内部迁移被误判为失焦（启动页、标题栏、
                 // 状态栏闪变淡）
                 #[cfg(windows)]
-                let focused = if !*focused { blur_is_real() } else { true };
+                let focused = *focused || !blur_is_real();
                 #[cfg(not(windows))]
                 let focused = *focused;
                 // 启动页的失焦变淡：仅在启动阶段广播——Ready 后主 webview

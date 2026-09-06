@@ -197,7 +197,7 @@ if (runtimeHeading < 0 || apiKeyField < runtimeHeading || runtimeSectionEnd < ap
     || modelUi.includes('settings-api-heading') || modelUi.includes('api-key-box')) {
   fail('设置页的 DeepSeek API 必须归入“服务管理”，不能保留单独的浅层板块');
 }
-const renderStart = modelUi.indexOf('function miRenderResult(preview)');
+const renderStart = modelUi.indexOf('function miRenderResult(');
 const applyAction = modelUi.indexOf("applyBtn.textContent = dshdT('modelImportApply')", renderStart);
 const renderEnd = modelUi.indexOf('box.hidden = false', renderStart);
 if (renderStart < 0 || applyAction < renderStart || renderEnd < applyAction) {

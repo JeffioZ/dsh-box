@@ -33,7 +33,12 @@ struct ImportedProvider {
     display_name: Option<String>,
     #[serde(default)]
     api_key_env: Option<String>,
-    models: Vec<serde::de::IgnoredAny>,
+    models: Vec<ImportedModel>,
+}
+
+#[derive(Deserialize)]
+struct ImportedModel {
+    id: String,
 }
 
 /// 密钥样字段名集合（小写、去 -/_ 归一）。凭据只允许经 `apiKeyEnv` 引用
@@ -58,43 +63,61 @@ fn secret_like_field(key: &str) -> bool {
             | "clientsecret"
             | "password"
             | "passwd"
+            | "authorization"
+            | "proxyauthorization"
+            | "xapikey"
+            | "cookie"
+            | "setcookie"
     )
 }
 
 /// 扫描文本中的密钥样字段行，返回首个命中的字段名（导入拒绝用）。
 pub(super) fn find_secret_field(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let Some((key, _)) = trimmed.split_once(':') else {
-            continue;
-        };
-        // 跳过注释与路由键（缩进层级不区分：providers 内任意深度的
-        // 密钥样键都算命中；顶层段键 llm-pi-ai 不在集合内）
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if secret_like_field(key.trim()) {
-            return Some(key.trim().to_string());
+    fn visit(value: &serde_json::Value) -> Option<String> {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if secret_like_field(key) {
+                        return Some(key.clone());
+                    }
+                    if let Some(found) = visit(child) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(visit),
+            _ => None,
         }
     }
-    None
+    let value: serde_json::Value = serde_saphyr::from_str(text).ok()?;
+    visit(&value)
 }
 
 /// 剔除密钥样字段行（导出脱敏用：分享文本绝不携带明文凭据）。
-pub(super) fn strip_secret_lines(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let is_secret = !trimmed.starts_with('#')
-            && trimmed
-                .split_once(':')
-                .is_some_and(|(key, _)| secret_like_field(key.trim()));
-        if !is_secret {
-            out.push_str(line);
-            out.push('\n');
+pub(super) fn strip_secret_lines(text: &str) -> Result<String, String> {
+    fn scrub(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, _| !secret_like_field(key));
+                for child in map.values_mut() {
+                    scrub(child);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(scrub),
+            _ => {}
         }
     }
-    out
+    let mut value: serde_json::Value = serde_saphyr::from_str(text).map_err(|_| {
+        crate::locale::text(
+            "配置无法安全解析，未导出任何内容。",
+            "The configuration could not be parsed safely; nothing was exported.",
+        )
+        .to_string()
+    })?;
+    scrub(&mut value);
+    // 重新生成分享副本，避免块标量残留、锚点或注释携带被删除的秘密。
+    Ok(crate::yaml_fields::render(&value))
 }
 
 /// 用完整 YAML 解析器校验语义，再投影成预览所需的最小类型。写盘仍保留用户
@@ -121,11 +144,12 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
             ),
         ));
     }
-    let document: ImportedDocument = serde_saphyr::from_str(yaml).map_err(|error| {
-        crate::locale::owned(
-            format!("模型配置 YAML 无效：{error}"),
-            format!("Invalid model configuration YAML: {error}"),
+    let document: ImportedDocument = serde_saphyr::from_str(yaml).map_err(|_| {
+        crate::locale::text(
+            "模型配置 YAML 无效，请检查结构、字段类型和模型 id。",
+            "Invalid model configuration YAML; check its structure, field types and model IDs.",
         )
+        .to_string()
     })?;
     if extract_section_text(yaml).trim().is_empty() {
         return Err(crate::locale::text(
@@ -160,6 +184,18 @@ pub(super) fn parse_providers(yaml: &str) -> Result<Vec<ProviderInfo>, String> {
                 "Provider {route} declares no models.",
             )
             .replace("{route}", &route));
+        }
+        let mut model_ids = std::collections::HashSet::new();
+        if provider.models.iter().any(|model| {
+            model.id.trim().is_empty()
+                || model.id.chars().any(char::is_control)
+                || !model_ids.insert(model.id.as_str())
+        }) {
+            return Err(crate::locale::text(
+                "模型 id 不能为空、重复或包含控制字符。",
+                "Model IDs must be nonempty, unique and free of control characters.",
+            )
+            .into());
         }
         let api_key_env = provider
             .api_key_env

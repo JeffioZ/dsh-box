@@ -1,6 +1,7 @@
 //! 运行时安装与维护入口：Node、自管 pnpm、dsh 包与服务启动。
 
 mod download;
+mod download_transport;
 mod dsh_package;
 mod node;
 mod package_manager;
@@ -110,13 +111,17 @@ pub(crate) fn check_client() -> ureq::Agent {
 /// 整体预算放宽到 1 小时；响应头最多等 30s，避免用户取消后仍长时间卡在
 /// 同步建连阶段。进入响应体后每个读取周期都会检查取消状态。
 pub(crate) fn download_client() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    let config = ureq::Agent::config_builder()
         .tls_config(crate::default_tls_config())
         .timeout_connect(Some(Duration::from_secs(15)))
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(Duration::from_secs(3600)))
-        .build()
-        .new_agent()
+        .build();
+    ureq::Agent::with_parts(
+        config,
+        download_transport::IdleConnector,
+        ureq::unversioned::resolver::DefaultResolver::default(),
+    )
 }
 
 /// 读取一个小 URL 到字符串（供版本检查等使用；短超时快速失败）。
