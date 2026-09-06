@@ -70,6 +70,12 @@ fn run_round(app: &AppHandle) {
     let Ok(report) = super::report(&config) else {
         return;
     };
+    if !report.unavailable_sessions.is_empty() {
+        // 不把部分账单外推成全天预测；正常会话的报告与导出仍可用。
+        *LAST_PROJECTION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        crate::emit_signed(app, "usage-prediction-updated", &cached_payload(&config));
+        return;
+    }
     let today = super::day_key_now();
     let input = build_input(&report, &today, &config);
     let now_ms = std::time::SystemTime::now()
@@ -169,6 +175,7 @@ mod tests {
             models: Vec::new(),
         };
         super::super::UsageReport {
+            unavailable_sessions: Vec::new(),
             days: vec![day],
             total: super::super::aggregate::TotalReport {
                 buckets: zero_buckets(),

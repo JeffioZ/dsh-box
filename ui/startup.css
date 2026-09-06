@@ -17,8 +17,9 @@ html, body { height: 100%; }
 body {
   /* dsh 字体栈（dsw-font-family）：唯一定义见 common.css --dshd-font */
   font: var(--dshd-fs-md)/1.5 var(--dshd-font);
-  /* 渐变起点取标题栏底色 #181819 与原蓝紫 #1b1b26 之间的过渡值：
-     保留一丝深度感，同时让就绪淡出与主界面标题栏/状态栏衔接更连续 */
+  /* 渐变起点取 chrome 条底色（--dshd-chrome-bg，#181819）与原蓝紫
+     #1b1b26 之间的过渡值：保留一丝深度感，同时让就绪淡出与主界面
+     标题栏/状态栏衔接更连续；浅色起点见浅色块覆盖 */
   background: radial-gradient(1200px 600px at 50% -10%, #191a1f 0%, var(--bg) 60%);
   color: var(--text);
   display: flex; align-items: center; justify-content: center;
@@ -201,11 +202,10 @@ body.window-inactive .footer { opacity: .6; }
 .ob-sub { font-size: var(--dshd-fs-md); color: var(--muted); line-height: 1.5; }
 .ob-section { display: flex; flex-direction: column; gap: 10px; }
 /* 第二组起带细分隔线（dsh 设置分组语言）：凭据/偏好设置边界一目了然 */
-.ob-section + .ob-section { border-top: 1px solid var(--dshd-border); padding-top: 12px; }
+.ob-section + .ob-section { border-top: 1px solid var(--dshd-line); padding-top: 12px; }
 .ob-sec-label { font-size: var(--dshd-fs-xs); color: var(--muted); opacity: .85; letter-spacing: .8px; text-transform: uppercase; }
 .ob-field { display: flex; flex-direction: column; gap: 5px; }
 .ob-label { font-size: var(--dshd-fs-md); color: var(--text); }
-.ob-api-key-row { --dshd-input-height: 38px; }
 .ob-input { padding-right: 12px; padding-left: 12px; font-size: var(--dshd-fs-base); }
 .ob-hint { font-size: var(--dshd-fs-sm); color: var(--muted); }
 .ob-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -228,16 +228,16 @@ body.window-inactive .footer { opacity: .6; }
 .dshd-select-trigger {
   display: inline-flex; align-items: center; gap: 8px;
   width: 112px; height: 32px; padding: 0 10px 0 12px;
-  border: 1px solid var(--dshd-border); border-radius: 8px;
+  border: 1px solid var(--dshd-input-border); border-radius: 8px;
   background: var(--dshd-hover); color: var(--text);
   font: inherit; font-size: var(--dshd-fs-base); line-height: 22px; cursor: pointer; outline: none;
   transition: var(--dshd-anim-state);
 }
-.dshd-select-trigger:hover { border-color: var(--dshd-border-strong); }
+.dshd-select-trigger:hover { border-color: var(--dshd-hover-border); }
 .dshd-select-trigger:active { background: var(--dshd-pressed); }
 .dshd-select-trigger:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .dshd-select-trigger:disabled { opacity: .55; cursor: default; }
-.dshd-select-trigger:disabled:hover { border-color: var(--dshd-border); }
+.dshd-select-trigger:disabled:hover { border-color: var(--dshd-input-border); }
 .dshd-select-value { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dshd-select-arrow {
   width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;

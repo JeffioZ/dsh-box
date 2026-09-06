@@ -10,7 +10,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
 body {
-  background: #181819;
+  background: var(--dshd-chrome-bg);
   color: var(--dshd-text);
   /* dsh 字体栈（dsw-font-family） */
   font-family: var(--dshd-font);
@@ -25,7 +25,7 @@ body.window-inactive .vsep { opacity: .55; }
 .statusbar {
   position: absolute; left: 0; right: 0; bottom: 0; height: 26px;
   display: flex; align-items: center; gap: 6px;
-  padding: 0 8px 0 8px; background: #181819;
+  padding: 0 8px 0 8px; background: var(--dshd-chrome-bg);
 }
 /* 与 dsh 内容的分层线：画在 26px 条内（box-shadow 落条外会被子 webview 裁剪） */
 .statusbar::before {
@@ -98,8 +98,7 @@ body.window-inactive .vsep { opacity: .55; }
 
 /* 浅色主题覆盖 */
 @media (prefers-color-scheme: light) {
-  body { background: #fcfcfd; }
-  .statusbar { background: #fcfcfd; }
+  /* 底色随 --dshd-chrome-bg 令牌切换，无需浅色覆盖 */
   .statusbar::before { background: rgba(0, 0, 0, .04); }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -41,6 +41,7 @@ mod usage;
 mod versions;
 mod webview;
 mod window;
+mod yaml_fields;
 
 use dev_ui::ensure_dev_ui_server;
 #[cfg(test)]
@@ -176,7 +177,16 @@ pub fn emit_status_progress(
     // 共享状态是 IPC 查询、安装取消/切源和托盘可用性的权威来源；必须先提交
     // 再构造事件。此前只广播事件会出现“页面显示正在安装、后端仍是 Starting”，
     // 从而把本应可取消的安装判断为已结束。
-    app.state::<AppState>().set_phase(phase, message, detail);
+    let state = app.state::<AppState>();
+    if state.is_updating()
+        && state.phase() == BootPhase::Ready
+        && matches!(phase, BootPhase::InstallingNode | BootPhase::InstallingDsh)
+    {
+        // 停服前的准备与 npm 维护不会改变仍在运行的服务生命周期。
+        updater::emit_progress(app, message);
+        return;
+    }
+    state.set_phase(phase, message, detail);
     // 事件载荷带完整版本信息：此前这里固定 None，前端每次收到事件都会
     // 重算 footer（版本/端口行）并将其清空——启动过程中 footer 短暂出现
     // 后即“消失”。snapshot 里 dsh 版本每次读 package.json（安装/更新后

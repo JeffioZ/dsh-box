@@ -1,8 +1,15 @@
-// 分隔线高 = 1/dpr（恰 1 设备像素）：与内置菜单 common.js 的 --dshd-hair 同
-// 机制。1px 字面值在分数缩放（125%/150%）下会被设备像素 snap 成 1 或 2 行
-// 不等——分隔块 4+1+4=9px 在 150% 下是 13.5 设备px，每多一条分隔线相位漂移
-// 半像素，同一菜单内厚度就不一致；归一后分隔块回到整数设备高度，相位不漂移
-var HAIR_PX = (1 / (window.devicePixelRatio || 1)) + 'px';
+// 分隔线用 border-top 技法并按 dsh 主题取色：填充背景(height+background)
+// 的线在 ≥150% 缩放下随设备像素落点漂移成 1~3 行不等（同屏粗细不一），
+// border 由 Skia 整像素吸附，实测各缩放下恒定一致（与内置菜单同结论，
+// 见 common.css .dshd-sep 注释）。颜色：浅色主题取 dsh border-l4（16%，
+// 与内置菜单 --dshd-line 浅色同值）；深色取 l1（6% 白，与内置菜单深色
+// 同值）——以 l1 的实时值探测主题（dsh 深色令牌为白色系）。
+var SEP_BORDER_TOKEN = '--dsw-alias-border-l4';
+try {
+  if (/255\s*,\s*255\s*,\s*255/.test(
+    getComputedStyle(document.documentElement).getPropertyValue('--dsw-alias-border-l1')
+  )) SEP_BORDER_TOKEN = '--dsw-alias-border-l1';
+} catch (e) {}
 var css = [
   // 与 dsh 菜单同规格：卡片 r14/pad4（圆角为自绘浮层统一档，其余逐值同 dsh）、
   // 条目 min-h40/r10/14px、hover 8%/按压 14%；
@@ -54,7 +61,7 @@ var css = [
   '.__dshd_cm_i:hover .__dshd_cm_k{color:var(--dsw-alias-label-primary,#f9fafb);}',
   '.__dshd_cm_ar{font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;',
   'font-size:12px;color:var(--dsw-alias-label-tertiary,#adb2b8);margin-left:6px;line-height:1;}',
-  '.__dshd_cm_sep{height:' + HAIR_PX + ';margin:4px 2px;background:var(--dsw-alias-border-l1,rgba(255,255,255,.06));}',
+  '.__dshd_cm_sep{height:0;margin:4px 2px;border-top:1px solid var(' + SEP_BORDER_TOKEN + ',rgba(255,255,255,.06));}',
   // 退出动效：与主菜单/托盘菜单一致的淡出（90ms）
   '.__dshd_cm_out{opacity:0;transition:opacity .09s ease;}',
   // 子菜单：与 dsh 一致，最小宽 163；伪元素桥接父项与子菜单间隙，鼠标跨过不丢悬停
@@ -280,25 +287,38 @@ function joinPath(base, rel) {
   return b + sep + r;
 }
 var pathBaseCache = { key: '', value: null, expiresAt: 0, pending: null };
+// 上游 session-controller/client/sessions/service.ts 的持久化选择；只读，不进入框架内部。
+function dshSelectedSession() {
+  try {
+    var raw = localStorage.getItem('dsh.sessions.current');
+    if (raw === null) return { known: false, id: null };
+    var value = JSON.parse(raw);
+    if (!value || typeof value !== 'object') return { known: false, id: null };
+    var id = value.subagentAddress && value.subagentAddress.childSessionId || value.sessionId;
+    return { known: true, id: typeof id === 'string' && id ? id : null };
+  } catch (_) { return { known: false, id: null }; }
+}
 function pathBaseKey() {
+  var selected = dshSelectedSession();
+  if (selected.known) return 'id:' + (selected.id || '');
   return typeof dshSessionTitle === 'string' ? dshSessionTitle.trim() : '';
 }
 function fetchPathBase(key) {
-  return rpc('session.list', {}).then(function (json) {
+  function compatibleList(kind) {
+    return rpc(kind + '/list', { args: { _request: {} } }).then(function (json) {
+      return rpcValue(json) ? json : rpc(kind + '.list', {});
+    }).catch(function () { return rpc(kind + '.list', {}); });
+  }
+  return compatibleList('session').then(function (json) {
     var sessionItems = (rpcValue(json) || {}).items || [];
-    var exact = key ? sessionItems.filter(function (it) { return it.title === key; }) : [];
-    var candidates = exact.length ? exact : sessionItems;
-    var best = null;
-    candidates.forEach(function (it) {
-      if (!it.cwd) return;
-      if (it.running) {
-        if (!best || !best.running || it.updatedAt > best.updatedAt) best = it;
-        return;
-      }
-      if (!best || (!best.running && it.updatedAt > best.updatedAt)) best = it;
-    });
+    var byId = key.slice(0, 3) === 'id:';
+    var exact = key ? sessionItems.filter(function (it) { return byId ? it.sessionId === key.slice(3) : it.title === key; }) : [];
+    // 标题可能重名；无法唯一确认时不把文件路径拼到另一会话的工作区。
+    var best = exact.length === 1 ? exact[0] : (!key && sessionItems.length === 1 ? sessionItems[0] : null);
     if (best && best.cwd) return best.cwd;
-    return rpc('workspace.list', {}).then(function (json) {
+    if (byId) return null;
+    if (sessionItems.length) return null;
+    return compatibleList('workspace').then(function (json) {
       var workspaceItems = (rpcValue(json) || {}).items || [];
       return workspaceItems.length === 1 && workspaceItems[0].path ? workspaceItems[0].path : null;
     }).catch(function () { return null; });

@@ -32,6 +32,22 @@ pub(crate) fn read_tail_frames(path: &Path, limit: usize) -> Result<Vec<String>,
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)
         .map_err(|error| error.to_string())?;
+    if path.extension().is_some_and(|ext| ext == "jsonl") {
+        let start = if len > TAIL_WINDOW {
+            buf.iter()
+                .position(|b| *b == b'\n')
+                .map_or(buf.len(), |i| i + 1)
+        } else {
+            0
+        };
+        let end = buf.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        if start >= end || limit == 0 {
+            return Ok(Vec::new());
+        }
+        return String::from_utf8(buf[start..end].to_vec())
+            .map(|text| vec![text])
+            .map_err(|e| e.to_string());
+    }
     let mut search_from = buf.len();
     let mut frames = Vec::new();
     for _ in 0..limit.saturating_mul(4).max(8) {

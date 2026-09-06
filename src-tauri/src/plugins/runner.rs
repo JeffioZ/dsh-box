@@ -179,6 +179,14 @@ fn run_dsh_plugin_auto_with_intent(
     user_removal: bool,
 ) -> Result<String, String> {
     let _guard = MARKET_PNPM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state = app.state::<AppState>();
+    if state.is_updating() || state.is_quitting() || state.service_ownership().is_external() {
+        return Err(crate::locale::text(
+            "服务正在切换，稍后再试插件操作。",
+            "The service is changing; retry the plugin operation later.",
+        )
+        .into());
+    }
     let config = app.state::<AppState>().config();
     let mutation = args.first().and_then(|command| match *command {
         "add" => Some(super::PluginMutationKind::Add),
@@ -190,6 +198,7 @@ fn run_dsh_plugin_auto_with_intent(
     let manifest_path = config.dsh_home().join("profiles/web/package.json");
     let original_manifest =
         mutation_spec.and_then(|_| std::fs::read_to_string(&manifest_path).ok());
+    let previous_marker = super::transaction::install_marker(&config);
     if let (Some(kind), Some(spec)) = (mutation, mutation_spec) {
         super::save_install_marker(
             &config,
@@ -223,17 +232,7 @@ fn run_dsh_plugin_auto_with_intent(
                     }
                 }
             }
-            // Add 类事务保留标记到服务重启验证成功后再由启动收敛清除：
-            // 安装命令成功不代表插件能加载（如与新 dsh 的 API 不兼容会在
-            // 重启时 SyntaxError 崩溃），标记是届时定向回退的唯一依据。
-            // Remove 类无此问题（卸载不会让服务起不来），维持成功即清。
-            if !matches!(mutation, Some(super::PluginMutationKind::Add)) {
-                if let Err(e) = super::clear_install_marker(&config) {
-                    crate::logging::log(&format!(
-                        "plugins: 命令成功，但清理插件事务标记失败（下次服务就绪后重试）：{e}"
-                    ));
-                }
-            }
+            super::transaction::finish_cli(&config)?;
             Ok(output)
         }
         Err(error) => {
@@ -247,7 +246,7 @@ fn run_dsh_plugin_auto_with_intent(
             });
             match rollback {
                 Some(Ok(())) => {
-                    if let Err(e) = super::clear_install_marker(&config) {
+                    if let Err(e) = super::transaction::restore_marker(&config, previous_marker.as_ref()) {
                         crate::logging::log(&format!(
                             "plugins: manifest 已回滚，但清理插件事务标记失败：{e}"
                         ));

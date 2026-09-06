@@ -4,14 +4,6 @@ use super::*;
 
 // ---------- 统一自绘弹窗（dialog 窗口调用；内容预渲染+轮询为主，事件兜底） ----------
 
-/// 标题栏余额 chip 点击：打开余额弹窗。
-#[tauri::command]
-pub fn app_dialog_open_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    crate::control_center::open_balance(&app);
-    Ok(())
-}
-
 /// 打开设置页（统一弹窗）。
 #[tauri::command]
 pub fn app_dialog_open_settings(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
@@ -76,9 +68,8 @@ pub async fn usage_subscriptions_get(
         )
         .into());
     }
-    let config = app.state::<AppState>().config();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::usage::cached_subscriptions().unwrap_or_else(|| crate::usage::subscriptions(&config))
+        crate::usage::account_snapshots(&app).subscriptions
     })
     .await
     .map_err(|e| {
@@ -103,20 +94,14 @@ pub async fn usage_accounts_get(
         )
         .into());
     }
-    let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(cached) = crate::usage::cached_accounts() {
-            return Ok(cached);
-        }
-        crate::usage::accounts(&config)
-    })
-    .await
-    .map_err(|e| {
-        crate::locale::owned(
-            format!("账户查询任务异常结束：{e}"),
-            format!("The account query task ended unexpectedly: {e}"),
-        )
-    })?
+    tauri::async_runtime::spawn_blocking(move || crate::usage::account_snapshots(&app).accounts)
+        .await
+        .map_err(|e| {
+            crate::locale::owned(
+                format!("账户查询任务异常结束：{e}"),
+                format!("The account query task ended unexpectedly: {e}"),
+            )
+        })
 }
 
 /// 手动触发账户全量刷新：single-flight 合并、立即返回，结果经
@@ -161,7 +146,7 @@ pub async fn usage_export(
     app: AppHandle,
     webview: tauri::Webview,
     format: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     ensure_local_origin(&webview)?;
     if !crate::tray_menu::managed_service_ready(&app) {
         return Err(crate::locale::text(
@@ -201,7 +186,7 @@ pub async fn usage_export(
             .blocking_save_file()
             .and_then(|d| d.into_path().ok())
         else {
-            return Ok(()); // 用户取消
+            return Ok(false); // 用户取消，没有导出文件
         };
         std::fs::write(&dest, content.as_bytes()).map_err(|e| {
             crate::locale::owned(
@@ -210,7 +195,7 @@ pub async fn usage_export(
             )
         })?;
         crate::logging::log(&format!("usage: 已导出 {file_name} → {}", dest.display()));
-        Ok(())
+        Ok(true)
     })
     .await
     .map_err(|e| {
@@ -264,26 +249,6 @@ pub async fn usage_session_context_get(
         })
 }
 
-/// 余额弹窗内“刷新”按钮：后台重新查询，结果经轮询通道返回。
-/// 不清空旧结果：刷新期间弹窗继续显示上次数据。
-#[tauri::command]
-pub fn app_dialog_refresh_balance(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    if !crate::tray_menu::action_enabled(&app, "balance") {
-        return Err(crate::locale::text(
-            "余额由外部 dsh 管理。",
-            "Balance is managed by the external dsh service.",
-        )
-        .into());
-    }
-    std::thread::spawn(move || {
-        let config = app.state::<AppState>().config();
-        let payload = crate::balance::query_balance(&config);
-        app.state::<AppState>().set_last_balance(Some(payload));
-    });
-    Ok(())
-}
-
 /// 弹窗页面主动拉取最近一次打开载荷（隐藏窗口收不到 emit 时的兜底）。
 #[tauri::command]
 pub fn app_dialog_get(
@@ -292,16 +257,6 @@ pub fn app_dialog_get(
 ) -> Result<Option<crate::control_center::AppDialogOpen>, String> {
     ensure_local_origin(&webview)?;
     Ok(app.state::<AppState>().last_dialog())
-}
-
-/// 余额弹窗轮询拉取：最近一次查询结果（None=查询中）。
-#[tauri::command]
-pub fn app_dialog_balance_get(
-    app: AppHandle,
-    webview: tauri::Webview,
-) -> Result<Option<crate::balance::BalancePayload>, String> {
-    ensure_local_origin(&webview)?;
-    Ok(app.state::<AppState>().last_balance())
 }
 
 /// 检查更新弹窗轮询拉取：进度文案 + 检查结果 + 更新完成文案 + UAC 确认状态。

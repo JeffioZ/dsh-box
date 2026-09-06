@@ -35,7 +35,7 @@ function usageLimitRow() {
     '<span class="srow-desc">' + dshdT('settingsUsageLimitDesc') + '</span>' +
     '</span>' +
     '<span class="usage-limit-field">' +
-    '<input id="settings-usage-limit" class="dshd-input" type="number" inputmode="numeric" min="1" max="1000000" step="1" placeholder="—" aria-describedby="settings-usage-limit-unit settings-usage-limit-error" />' +
+    '<input id="settings-usage-limit" class="dshd-input" type="number" inputmode="numeric" min="1" max="1000000" step="1" placeholder="' + esc(dshdT('settingsUsageLimitPlaceholder')) + '" aria-describedby="settings-usage-limit-unit settings-usage-limit-error" />' +
     '<span id="settings-usage-limit-unit" class="usage-limit-unit">' + dshdT('settingsUsageLimitUnit') + '</span>' +
     '</span>' +
     '</div>' +
@@ -315,6 +315,7 @@ function initApiKeySettings() {
 }
 // —— 模型配置导入（设置页）——
 let miPreviewRefs = [];
+let miDraft = '';
 function miFeedback(message, ok) {
   const el = $('mi-feedback');
   if (!el) return;
@@ -344,6 +345,7 @@ function initModelImport() {
   const previewBtn = $('mi-preview');
   const resizeBar = $('mi-resize-bar');
   if (!textarea || !previewBtn) return;
+  textarea.value = miDraft;
   miResizeMode = 'auto';
   textarea.addEventListener('input', miTextareaAutosize);
   miTextareaAutosize();
@@ -424,8 +426,11 @@ function initModelImport() {
     });
   }
   // 解析当前输入框文本，成功后渲染结果。
+  let previewSequence = 0;
   async function runPreview() {
     const yaml = textarea.value;
+    const sequence = ++previewSequence;
+    const current = () => textarea.isConnected && sequence === previewSequence && textarea.value === yaml;
     if (!yaml.trim()) {
       miFeedback(dshdT('modelImportEmpty'), false);
       return;
@@ -436,9 +441,9 @@ function initModelImport() {
     previewBtn.textContent = dshdT('modelImportPreviewing');
     try {
       const preview = await invoke('preview_model_import', { yaml });
-      miRenderResult(preview);
+      if (current()) miRenderResult(preview, yaml);
     } catch (e) {
-      miFeedback(String(e), false);
+      if (current()) miFeedback(String(e), false);
     } finally {
       previewBtn.disabled = false;
       previewBtn.textContent = dshdT('modelImportPreview');
@@ -456,14 +461,18 @@ function initModelImport() {
       } catch {
         clipboard = ''; // 无权限或读取失败时当作空剪贴板
       }
-      if (clipboard) {
+      if (!textarea.isConnected) return;
+      if (clipboard && !textarea.value.trim()) {
         textarea.value = clipboard;
+        miDraft = clipboard;
         miTextareaAutosize();
       }
     }
     await runPreview();
   });
   textarea.addEventListener('input', () => {
+    miDraft = textarea.value;
+    previewSequence++;
     miClearFeedback();
     $('mi-result').hidden = true;
     miPreviewRefs = [];
@@ -471,9 +480,11 @@ function initModelImport() {
   const exportBtn = $('mi-export');
   if (exportBtn) {
     exportBtn.addEventListener('click', async () => {
+      exportBtn.disabled = true;
       miClearFeedback();
       try {
         const yaml = await invoke('export_model_config');
+        if (!exportBtn.isConnected) return;
         if (!yaml) {
           dshdToast(dshdT('modelExportNone'));
           return;
@@ -481,13 +492,17 @@ function initModelImport() {
         await navigator.clipboard.writeText(yaml);
         dshdToast(dshdT('modelExportCopied'), { kind: 'ok' });
       } catch (e) {
-        miFeedback(String(e), false);
+        if (exportBtn.isConnected) miFeedback(String(e), false);
+      } finally {
+        exportBtn.disabled = false;
       }
     });
   }
 }
-function miRenderResult(preview) {
+function miRenderResult(preview, previewYaml) {
   miPreviewRefs = preview.api_key_envs || [];
+  const refs = [...miPreviewRefs];
+  const textarea = $('mi-textarea');
   const box = $('mi-result');
   box.textContent = '';
   const summary = document.createElement('div');
@@ -538,14 +553,15 @@ function miRenderResult(preview) {
   applyBtn.className = 'mi-btn primary';
   applyBtn.textContent = dshdT('modelImportApply');
   applyBtn.addEventListener('click', async () => {
-    const yaml = $('mi-textarea').value;
+    if (!textarea.isConnected || textarea.value !== previewYaml) return;
+    const yaml = previewYaml;
     const keys = [];
     const filled = new Set();
     box.querySelectorAll('input[data-ref]').forEach((input) => {
       const value = input.value.trim();
       if (value) { keys.push([input.dataset.ref, value]); filled.add(input.dataset.ref); }
     });
-    const missing = miPreviewRefs.filter((ref) => !filled.has(ref));
+    const missing = refs.filter((ref) => !filled.has(ref));
     if (missing.length > 0) {
       miFeedback(dshdT('modelImportKeyMissing', { ref: missing.join(', ') }), false);
       return;
@@ -553,13 +569,19 @@ function miRenderResult(preview) {
     miClearFeedback();
     applyBtn.disabled = true;
     applyBtn.textContent = dshdT('modelImportApplying');
+    textarea.readOnly = true;
+    const previewButton = $('mi-preview');
+    if (previewButton) previewButton.disabled = true;
+    box.querySelectorAll('input').forEach(input => { input.disabled = true; });
     let applied = false;
     try {
       await invoke('apply_model_import', { payload: { yaml, keys } });
       applied = true;
+      if (miDraft === yaml) miDraft = '';
+      if (!textarea.isConnected) return;
       // 成功后收尾：清空粘贴区与凭据行（连同密码可见性按钮），已填 key
       // 不留残态；结果区只保留摘要与成功消息
-      $('mi-textarea').value = '';
+      textarea.value = '';
       miTextareaReset();
       miPreviewRefs = [];
       box.querySelectorAll('.mi-key-row').forEach((row) => row.remove());
@@ -574,8 +596,11 @@ function miRenderResult(preview) {
         box.scrollIntoView({ block: 'center', behavior: 'auto' });
       });
     } catch (e) {
-      miFeedback(String(e), false);
+      if (textarea.isConnected) miFeedback(String(e), false);
     } finally {
+      textarea.readOnly = false;
+      if (previewButton) previewButton.disabled = false;
+      box.querySelectorAll('input').forEach(input => { input.disabled = false; });
       // 成功时按钮已随操作区移除，不再复位其状态
       if (!applied) {
         applyBtn.disabled = false;

@@ -272,6 +272,10 @@ pub fn start_periodic_check(app: AppHandle) {
 /// 有新版时的启动提示（自绘弹窗：立即更新 / 稍后 / 查看更新内容；与应用提示体验一致）。
 /// 「立即更新」由弹窗前端走 app_dialog_update("dsh") → apply_dsh_update。
 fn show_update_dialog(app: &AppHandle, d: &VersionInfo, simulated: bool) {
+    if !simulated {
+        notify_update_available(app, "dsh", &d.latest);
+        return;
+    }
     // dsh 的 GitHub tag 形如 `dsh-v0.1.1-rc.2`（monorepo，前缀 dsh-v），
     // 与 DSHBox 应用自身的 `v` 前缀不同；`d.latest` 来自 npm 裸 semver（无 v）。
     let release_url = format!(
@@ -288,6 +292,27 @@ fn show_update_dialog(app: &AppHandle, d: &VersionInfo, simulated: bool) {
             simulated: simulated.then_some(true),
         },
     );
+}
+
+/// 后台检查不抢占正在使用的窗口，同一版本仅提醒一次。
+pub(super) fn notify_update_available(app: &AppHandle, kind: &str, version: &str) {
+    let config = app.state::<AppState>().config();
+    let key = format!("update_notified_{kind}");
+    if crate::app_state::load_state_value(&config.root, &key)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .as_deref()
+        == Some(version)
+    {
+        return;
+    }
+    let title = crate::locale::text("有可用更新", "Update available");
+    let body = crate::locale::owned(
+        format!("{kind} {version} 已就绪，可在“检查更新”中查看并安装。"),
+        format!("{kind} {version} is available. Open Check for Updates to review and install it."),
+    );
+    if crate::notify::notify(app, title, &body).is_ok() {
+        let _ = crate::app_state::save_state_value(&config.root, &key, serde_json::json!(version));
+    }
 }
 
 /// 执行 dsh 更新（统一入口：检查更新弹窗的更新按钮 与 更新提示弹窗的立即更新共用）。

@@ -26,13 +26,13 @@ body {
 }
 /* 窗口失焦：品牌文字与窗口按钮变暗，与系统窗口失焦标题栏一致；
    class 由 Rust 侧 WindowEvent::Focused 广播驱动 */
-body.window-inactive .brand { color: #5f6068; }
-body.window-inactive .tb-btn { color: #5b5c66; }
+body.window-inactive .brand { color: var(--dshd-chrome-brand-inactive); }
+body.window-inactive .tb-btn { color: var(--dshd-chrome-btn-inactive); }
 .titlebar {
   position: relative;
   height: 36px; display: flex; align-items: center; gap: 8px;
-  /* 标题栏底色取深色 dsh 界面与浮层卡片之间的中间色，两侧过渡自然 */
-  padding: 0 0 0 10px; background: #181819;
+  /* 底色为宿主 chrome 条令牌（取值依据见 common.css --dshd-chrome-bg 注释） */
+  padding: 0 0 0 10px; background: var(--dshd-chrome-bg);
 }
 /* 与 dsh 内容的分层线：画在 36px 条内（box-shadow 落在条外会被子 webview 裁剪，
    导致平时无分隔线、浮层展开加高时才“多出”一条线——错误观感） */
@@ -105,11 +105,9 @@ body.macos .titlebar { padding-left: 82px; }
 
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留标题栏专用覆盖） */
 @media (prefers-color-scheme: light) {
-  /* 浅色标题栏底色 #fcfcfd + 底边分层线（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
-  .titlebar { background: #fcfcfd; }
+  /* 底色与失焦色由 --dshd-chrome-* 令牌随主题切换；仅保留底边分层线
+     覆盖（与 dsh 浅色分隔线 rgba(0,0,0,.04) 一致） */
   .titlebar::after { background: rgba(0, 0, 0, .04); }
-  body.window-inactive .brand { color: #a6a6b2; }
-  body.window-inactive .tb-btn { color: #9c9ca8; }
 }
 
 /* 系统“减弱动态效果”：关闭动画 */

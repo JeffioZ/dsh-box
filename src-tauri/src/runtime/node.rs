@@ -238,13 +238,16 @@ fn download_node_archive(
 /// 便携运行时损坏或版本不满足要求时自动清理，再选择合格的系统 Node 或重新安装。
 /// 返回探测时已经取得的版本，启动链路无需再次创建 node 子进程。
 pub(crate) fn ensure_node(app: &AppHandle, config: &Config) -> Result<NodeRuntime, String> {
+    // dsh 依赖树已交给自管 pnpm，npm 只引导一个无依赖包；升级不再挡住启动。
     let runtime = ensure_node_inner(app, config)?;
-    // 对「任何拿到 Node 的路径」统一升级便携 npm 到 12：Node v24 官方自带
-    // npm 11，其 idealTree 在解析 dsh 数百包依赖树时会卡死。此调用必须保留
-    // 在 wrapper（而非 inner）末尾——inner 的多个早退点会跳过升级，使已装好
-    // 便携 Node 的机器永远停留在 npm 11（历史回归）。非 strict：失败静默沿用
-    // 自带版，不阻断启动；系统 Node 由升级函数内部跳过（归系统管理）。
-    upgrade_portable_npm(app, config, false)?;
+    if runtime.executable == config.node_exe() {
+        // 仍保留无网络的中断恢复，不能因移除自动升级而遗失旧 npm 的隔离备份。
+        npm_recover_interrupted(
+            &config.node_dir().join(portable_npm_rel()),
+            &npm_quarantine_dir(&config.node_dir()),
+            |dir| npm_major_version(&runtime.executable, &dir.join("bin/npm-cli.js")).is_some(),
+        );
+    }
     Ok(runtime)
 }
 
@@ -637,62 +640,38 @@ fn npm_recover_interrupted(live: &Path, quarantine: &Path, live_ok: impl Fn(&Pat
     }
 }
 
-/// 升级 Node 自带 npm 到 12。strict=false（启动自动升级）：失败降级沿用
-/// 自带版、不阻断；strict=true（检查更新手动触发）：失败返回具体错误展示给
-/// 用户。走官方 registry，失败切 npmmirror 兜底；外层 150s 超时。
+/// 手动升级便携 Node 的 npm（仅「检查更新」入口）：解析 registry 的精确
+/// 最新版本并验证 staging 产物，失败返回具体错误展示给用户。启动链路不
+/// 再自动升级（dsh 依赖树已交给自管 pnpm，npm 只引导无依赖包）。走官方
+/// registry，失败切 npmmirror 兜底；外层 150s 超时。
 ///
 /// 事务化：新 npm 先装入独立 staging 前缀并校验版本，再把旧 npm 隔离、
 /// 一次性换入——`npm install -g` 不再直接改写受管 node 目录，任何失败
 /// （含超时杀进程、断电）都保得住旧 npm 或在下次启动时收敛（隔离目录
 /// 存在即未完成标记）。shims 不替换：新旧布局一致，旧 shim 指向的
 /// `node_modules/npm/bin/npm-cli.js` 换入后即新 npm。
-pub(crate) fn upgrade_portable_npm(
-    app: &AppHandle,
-    config: &Config,
-    strict: bool,
-) -> Result<(), String> {
+pub(crate) fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(), String> {
     let node_exe = config.node_exe();
     // 仅升级便携 Node 的 npm。系统 Node 的 npm 归系统管理（Program Files
-    // 写入需管理员权限、且不该由便携外壳污染系统环境），strict 模式明确
-    // 拒绝而非静默降级——启动自动升级（非 strict）对系统 Node 本就不触发
-    // （install_portable_node 只在装便携 Node 后调用）。
+    // 写入需管理员权限、且不该由便携外壳污染系统环境），明确拒绝。
     if !node_exe.exists() {
-        if strict {
-            return Err(crate::locale::text(
-                "当前使用系统安装的 Node.js，npm 由其管理，请在系统环境升级",
-                "The system-installed Node.js manages npm; upgrade it in the system environment",
-            )
-            .into());
-        }
-        return Ok(());
-    }
-    let node_dir = node_exe.parent().ok_or_else(|| {
-        crate::locale::text(
-            "Node.js 可执行文件路径无父目录",
-            "The Node.js executable path has no parent directory",
+        return Err(crate::locale::text(
+            "当前使用系统安装的 Node.js，npm 由其管理，请在系统环境升级",
+            "The system-installed Node.js manages npm; upgrade it in the system environment",
         )
-    })?;
+        .into());
+    }
+    let node_dir = config.node_dir();
     let npm_rel = portable_npm_rel();
     let live_npm = node_dir.join(npm_rel);
     let npm_cli = live_npm.join("bin/npm-cli.js");
-    let quarantine = npm_quarantine_dir(node_dir);
+    let quarantine = npm_quarantine_dir(&node_dir);
     let live_ok = |dir: &Path| {
         npm_major_version(&node_exe, &dir.join("bin/npm-cli.js")).is_some_and(|m| m >= 12)
     };
     npm_recover_interrupted(&live_npm, &quarantine, live_ok);
     if !npm_cli.exists() {
-        let msg = crate::locale::text("未找到 npm", "npm was not found");
-        if strict {
-            return Err(msg.into());
-        }
-        crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
-        return Ok(());
-    }
-    // 已是 12+ 则跳过（首次 dsh 安装与手动检查都可能进入，不能重复升级联网）。
-    if let Some(major) = npm_major_version(&node_exe, &npm_cli) {
-        if major >= 12 {
-            return Ok(());
-        }
+        return Err(crate::locale::text("未找到 npm", "npm was not found").into());
     }
     emit_status(
         app,
@@ -701,20 +680,15 @@ pub(crate) fn upgrade_portable_npm(
         "",
     );
     let staging = npm_upgrade_staging(config);
+    let target = super::npm_latest_version()?;
     // 清掉上次崩溃遗留的半成品 staging 与隔离残留，全新开始
     let _ = std::fs::remove_dir_all(&staging);
-    // 暂存目录创建失败同样遵守 strict 契约：非 strict 静默沿用自带版，
-    // 绝不阻断启动链路（ensure_node 对非 strict 结果直接 ?）
     if let Err(e) = std::fs::create_dir_all(&staging) {
-        let msg = crate::locale::owned(
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(crate::locale::owned(
             format!("创建 npm 升级暂存目录失败：{e}"),
             format!("Failed to create the npm upgrade staging directory: {e}"),
-        );
-        if strict {
-            return Err(msg);
-        }
-        crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
-        return Ok(());
+        ));
     }
     let prefix = staging.to_string_lossy().into_owned();
     let mut staged = false;
@@ -731,7 +705,7 @@ pub(crate) fn upgrade_portable_npm(
             "--global".to_string(),
             "--prefix".to_string(),
             prefix.clone(),
-            "npm@12".to_string(),
+            format!("npm@{target}"),
             "--no-audit".to_string(),
             "--no-fund".to_string(),
             // 单请求 60s 超时——升级只有 1 个包，60s 足够，挂起时快速失败
@@ -744,17 +718,11 @@ pub(crate) fn upgrade_portable_npm(
             match processes::spawn_process(&node_exe, &args, &envs, Some(&config.root), None) {
                 Ok(c) => c,
                 Err(e) => {
-                    let msg = crate::locale::owned(
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(crate::locale::owned(
                         format!("运行 npm 失败：{e}"),
                         format!("Failed to run npm: {e}"),
-                    );
-                    if strict {
-                        let _ = std::fs::remove_dir_all(&staging);
-                        return Err(msg);
-                    }
-                    crate::logging::log(&format!("runtime: 升级 npm 启动失败：{e}，沿用自带版"));
-                    let _ = std::fs::remove_dir_all(&staging);
-                    return Ok(());
+                    ));
                 }
             };
         let _guard = processes::TreeGuard::from_child(&child);
@@ -770,41 +738,44 @@ pub(crate) fn upgrade_portable_npm(
                         return Err(install_cancelled_error());
                     }
                     if std::time::Instant::now() > deadline {
-                        // 超时先杀进程树（strict/非 strict 都杀，避免泄漏）
+                        // 超时先杀进程树，避免泄漏
                         processes::kill_tree(child.id());
                         super::package_manager::wait_after_kill(&mut child);
                         let _ = std::fs::remove_dir_all(&staging);
-                        if strict {
-                            return Err(crate::locale::text(
-                                "升级 npm 超时（150s）",
-                                "npm upgrade timed out (150s)",
-                            )
-                            .into());
-                        }
-                        crate::logging::log("runtime: 升级 npm 超时（150s），沿用自带版");
-                        return Ok(());
+                        return Err(crate::locale::text(
+                            "升级 npm 超时（150s）",
+                            "npm upgrade timed out (150s)",
+                        )
+                        .into());
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(e) => {
-                    let msg = crate::locale::owned(
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(crate::locale::owned(
                         format!("等待 npm 失败：{e}"),
                         format!("Failed while waiting for npm: {e}"),
-                    );
-                    let _ = std::fs::remove_dir_all(&staging);
-                    if strict {
-                        return Err(msg);
-                    }
-                    crate::logging::log(&format!("runtime: {msg}，沿用自带版"));
-                    return Ok(());
+                    ));
                 }
             }
         };
         drop(child);
         if code == 0 {
-            // 校验 staging 产物：版本达到 12 才进入换入（防止空/残缺产物）
+            // 校验 staging 产物：major 达标且版本精确等于解析目标才换入
+            // （防止空/残缺产物或 registry 解析与安装不一致）
             let staged_cli = staging.join(npm_rel).join("bin/npm-cli.js");
-            if npm_major_version(&node_exe, &staged_cli).is_some_and(|m| m >= 12) {
+            let installed_version =
+                std::fs::read_to_string(staging.join(npm_rel).join("package.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|json| {
+                        json.get("version")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    });
+            if npm_major_version(&node_exe, &staged_cli).is_some_and(|m| m >= 12)
+                && installed_version.as_deref() == Some(target.as_str())
+            {
                 staged = true;
                 break;
             }
@@ -813,36 +784,26 @@ pub(crate) fn upgrade_portable_npm(
             ));
         } else {
             crate::logging::log(&format!(
-                "runtime: 升级 npm 到 12 失败（{registry} 退出码 {code}），尝试兜底源"
+                "runtime: 升级 npm 到 {target} 失败（{registry} 退出码 {code}），尝试兜底源"
             ));
         }
     }
     if !staged {
         let _ = std::fs::remove_dir_all(&staging);
-        if strict {
-            return Err(crate::locale::text(
-                "升级 npm 失败（官方源与镜像均失败）",
-                "Failed to upgrade npm (both the default registry and mirror failed)",
-            )
-            .into());
-        }
-        crate::logging::log("runtime: 升级 npm 到 12 失败，沿用自带版");
-        return Ok(());
+        return Err(crate::locale::text(
+            "升级 npm 失败（官方源与镜像均失败）",
+            "Failed to upgrade npm (both the default registry and mirror failed)",
+        )
+        .into());
     }
     let result = npm_swap_in(&live_npm, &quarantine, &staging.join(npm_rel), live_ok);
     let _ = std::fs::remove_dir_all(&staging);
     match result {
         Ok(()) => {
-            crate::logging::log("runtime: npm 已升级到 12");
+            crate::logging::log(&format!("runtime: npm 已升级到 {target}"));
             Ok(())
         }
-        Err(e) => {
-            if strict {
-                return Err(e);
-            }
-            crate::logging::log(&format!("runtime: {e}，沿用自带版"));
-            Ok(())
-        }
+        Err(e) => Err(e),
     }
 }
 

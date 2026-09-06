@@ -21,7 +21,7 @@
 | `src-tauri/src/usage/balance.rs` | `lib/balance.js` + `lib/accounts.js` 契约（含 OrcaRouter / New API / Sub2API 适配器） | 适配器契约参考，结构重写 |
 | `src-tauri/src/usage/subscriptions.rs` | `lib/subscriptions.js`（五适配器 + v0.3.1 的区域主机/端点回退/裸 key 鉴权） | 解析逻辑参考 |
 | `src-tauri/src/net_guard.rs`（`guard_https_or_lan_http` / `read_json_capped`） | `lib/network.js` + `lib/accounts.js` 传输层 | 同一口径（https 任意主机 / http 仅私网放行、1 MiB 响应上限）；状态栏余额与用量账户共用 |
-| `src-tauri/src/usage/cache.rs` | `lib/index.js` 缓存段 | 同概念；文件名与版本号有意独立（当前 v5，含成本账与字节偏移增量折叠游标） |
+| `src-tauri/src/usage/cache.rs` | `lib/index.js` 缓存段 | 同概念；文件名与版本号有意独立（当前 v7，含日志代次、v2 流内用量和重试边界） |
 | `src-tauri/src/usage/log.rs` | `scripts/verify-raw.mjs` | 同「直扫会话日志」思路 |
 | `ui/control-center.js` 用量页 | `lib/client.js` 面板结构 | 结构参照，视觉用本仓设计体系重写 |
 
@@ -49,9 +49,11 @@
 
 ## 观察名单（暂不跟进）
 
-- **dsh 持久化格式演进**：dsh 0.1.2 起默认开启 delta 打包（`text-chunks`/`reasoning-chunks`/`tool-call-chunks` 存储行）；聚合只读 usage 块（永不打包）不受影响，实时速率（`live.rs`）已双形态兼容。另有 opt-in 的 SQLite 持久化后端（`session-persistence-sqlite`，无默认启用）——若上游翻转默认值，「直扫 jsonl.zstd」数据源失效，需迁移到别的通道。
+- **dsh 持久化格式演进**：dsh 0.1.2 起默认开启 delta 打包（`text-chunks`/`reasoning-chunks`/`tool-call-chunks` 存储行）；v2 把流记录收进 `assistant/message` / `assistant/attempt`，聚合读取直接 usage 或流内最后一个 usage，并在 `llm/retry-started` 分开累计重试消耗；实时速率（`live.rs`）也解析嵌入流。另有 opt-in 的 SQLite 持久化后端（`session-persistence-sqlite`，无默认启用）——若上游翻转默认值，「直扫 jsonl.zstd」数据源失效，需迁移到别的通道。
 - **成本预算**（上游 `budgets.currency/daily/monthly` + 80%/100% 告警）：需 config.json 新键 + 设置界面；有需求再加。
-- **导出范围**：已实现每日明细 CSV 与全量 JSON（`usage/export.rs`，UTF-8 BOM、RFC 4180 转义、公式注入防护、schema 1.0.0）；上游的 `sessions.csv` 未做（按会话级数据不在聚合缓存中，为导出扩缓存不划算）。
+- **导出范围**：已实现每日明细 CSV 与全量 JSON（`usage/export.rs`，UTF-8 BOM、RFC 4180 转义、公式注入防护、schema 1.1.0）；上游的 `sessions.csv` 未做（按会话级数据不在聚合缓存中，为导出扩缓存不划算）。
 - **自适应账户刷新**（上游 active 60s / detail 120s / background 900s + 限流退避）：我们固定 300s 一轮。
 - 低余额绝对阈值配置（`warning.warnBelow/criticalBelow`）：我们当前只实现 30%/10% 比例阈值，无设置界面；有需求再加。
 - **声明式余额查询**（上游 JSON-Pointer 自定义查询模板）：自托管网关可先用 New API / Sub2API 适配器。
+
+- **部分日志失败**：正常会话继续统计，报告与 JSON 的 `unavailable_sessions` 列出未读取的会话；CSV 的 `report complete` / `unavailable sessions` 标记完整性。页面明确提示部分数据，暂停基于不完整数据的全天预测，避免将漏失会话当成零消耗。

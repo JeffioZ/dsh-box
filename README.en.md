@@ -23,7 +23,9 @@ DSHBox (`dsh-box`) is a cross-platform desktop shell for [DeepSeek Harness](http
 
 ## Quick start
 
-Install Rust 1.85+, Node.js `^22.19.0` or `>=24.0.0`, and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform. On Windows:
+Download the matching artifact from [Releases](https://github.com/JeffioZ/dsh-box/releases) and follow "Installation and first run" below; the first launch guides you through runtime setup and model configuration.
+
+To build from source, install Rust 1.85+, Node.js `^22.19.0` or `>=24.0.0`, and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform. On Windows:
 
 ```powershell
 git clone https://github.com/JeffioZ/dsh-box.git
@@ -47,7 +49,7 @@ The Windows executable is written to `dist\DSHBox.exe`. For macOS and Linux requ
 | Plugin management | Search, install, uninstall, and update through the official `dsh plugin` CLI; first-run built-in plugins are explicitly optional |
 | Usage and balance | Per-day/per-model token aggregation, month heatmap, recent 14 days with model drill-down; provider balance and subscription cards with background monitoring, stale-on-error retention, and low-balance warnings |
 | Model configuration | Typed validation and import/export of custom `llm-pi-ai` routes, with credentials stored separately from settings |
-| Portable mode | Place `portable.txt` next to the Windows exe to keep the runtime and configuration in an adjacent `data/` directory |
+| Portable mode | Place `portable.txt` next to the Windows exe to keep the shell configuration and runtime in an adjacent `data/` directory; dsh sessions and credentials still use `$DSH_HOME` |
 
 ## Platforms
 
@@ -55,7 +57,7 @@ The Windows executable is written to `dist\DSHBox.exe`. For macOS and Linux requ
 |---|---|---|---|
 | Windows | x64 | Windows 10; WebView2 Runtime | Single `DSHBox.exe` |
 | macOS | arm64 / x64 | macOS 13.5+ | Unsigned dmg |
-| Linux | x64 / arm64 | Ubuntu 22.04, Debian 12, or an equivalent WebKitGTK 4.1 environment | zip |
+| Linux | x64 / arm64 | WebKitGTK 4.1 and a glibc compatible with the release artifacts; the minimum distribution has not been verified on real machines | zip |
 
 Windows is the primary locally tested platform; GitHub Actions builds all five targets. On Linux, dsh's Landlock requires kernel 5.13+; older kernels degrade inside dsh itself.
 

@@ -437,7 +437,7 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     state.set_phase(BootPhase::StartingServer, starting_server, "");
     emit_status(app, BootPhase::StartingServer, starting_server, "");
     config.port = requested_port;
-    let actual_port = launch_managed(app, &mut config, &node.executable)?;
+    let actual_port = launch_managed(app, &mut config, &node.executable, None)?;
     config.port = actual_port;
 
     // 5) 就绪，进入界面
@@ -690,9 +690,10 @@ pub(crate) fn launch_managed(
     app: &AppHandle,
     config: &mut crate::app_state::Config,
     node_exe: &std::path::Path,
+    pnpm: Option<&crate::plugins::PnpmGuard>,
 ) -> Result<u16, String> {
     let requested_port = config.port;
-    let actual_port = start_and_wait_managed(app, config, node_exe).or_else(|error| {
+    let actual_port = start_and_wait_managed(app, config, node_exe, pnpm).or_else(|error| {
         if requested_port != 0
             && (is_bind_failure(&error)
                 || port_availability(requested_port) != PortAvailability::Free)
@@ -702,7 +703,7 @@ pub(crate) fn launch_managed(
             ));
             shutdown(app);
             config.port = 0;
-            start_and_wait_managed(app, config, node_exe)
+            start_and_wait_managed(app, config, node_exe, pnpm)
         } else {
             Err(error)
         }
@@ -722,15 +723,17 @@ fn start_and_wait_managed(
     app: &AppHandle,
     config: &crate::app_state::Config,
     node_exe: &std::path::Path,
+    pnpm: Option<&crate::plugins::PnpmGuard>,
 ) -> Result<u16, String> {
-    start_and_wait_managed_inner(app, config, node_exe, true)
+    start_and_wait_managed_inner(app, config, node_exe, 16, pnpm)
 }
 
 fn start_and_wait_managed_inner(
     app: &AppHandle,
     config: &crate::app_state::Config,
     node_exe: &std::path::Path,
-    allow_install_recovery: bool,
+    recoveries_left: usize,
+    pnpm: Option<&crate::plugins::PnpmGuard>,
 ) -> Result<u16, String> {
     let state = app.state::<AppState>();
     let started = start_server(app, config, node_exe)?;
@@ -760,7 +763,7 @@ fn start_and_wait_managed_inner(
             if health_check(port, auth_token.as_deref()) {
                 // 供后续看门狗/心跳/重启与导航使用（与 set_port 同步的伴生状态）
                 state.set_auth_token(auth_token.clone());
-                crate::plugins::clear_resolved_install_marker(config);
+                crate::plugins::clear_resolved_install_marker(config, pnpm);
                 return Ok(port);
             }
         }
@@ -768,7 +771,7 @@ fn start_and_wait_managed_inner(
             let log = read_log_since(&config.dsh_log(), log_offset);
             // 仅对 DSHBox 记录的中断安装做一次定向恢复。相同上游错误也可能
             // 来自用户自行维护的 profile，未命中事务标记时绝不修改 manifest。
-            if allow_install_recovery {
+            if recoveries_left > 0 {
                 // 两种可恢复形态：bundle 残留引用（半写）与刚变更插件加载崩溃
                 // （装得上但起不来，如与新 dsh API 不兼容的 SyntaxError）。
                 let recoverable =
@@ -777,13 +780,20 @@ fn start_and_wait_managed_inner(
                     crate::logging::log(&format!(
                         "dsh: 启动失败指向插件 {stale}，核对 DSHBox 插件事务"
                     ));
-                    match crate::plugins::recover_interrupted_plugin_mutation(config, &stale) {
+                    match crate::plugins::recover_interrupted_plugin_mutation(config, &stale, pnpm)
+                    {
                         Ok(true) => {
                             crate::logging::log(&format!(
                                 "dsh: 已回退 DSHBox 记录的 {stale} 插件变更，重试启动一次"
                             ));
                             shutdown(app);
-                            return start_and_wait_managed_inner(app, config, node_exe, false);
+                            return start_and_wait_managed_inner(
+                                app,
+                                config,
+                                node_exe,
+                                recoveries_left - 1,
+                                pnpm,
+                            );
                         }
                         Ok(false) => {
                             crate::logging::log(&format!(
@@ -1137,7 +1147,11 @@ fn watchdog(app: &AppHandle) {
                 }
                 // 达到阈值：复检更新/重启可能刚把服务拉起，避免误停刚就绪的服务
                 WatchdogAction::MarkExternalDisconnected => {
-                    if state.is_updating() || state.phase() != BootPhase::Ready {
+                    if state.is_updating()
+                        || state.is_quitting()
+                        || state.phase() != BootPhase::Ready
+                        || state.service_ownership() != ServiceOwnership::External
+                    {
                         failures = 0;
                         break;
                     }
@@ -1156,7 +1170,16 @@ fn watchdog(app: &AppHandle) {
                     return;
                 }
                 WatchdogAction::RestartManaged => {
-                    if state.is_updating() || state.phase() != BootPhase::Ready {
+                    let _lifecycle = state.lifecycle_guard();
+                    let Some(_pnpm) = crate::plugins::try_acquire_pnpm_lock() else {
+                        failures = 0;
+                        break;
+                    };
+                    if state.is_updating()
+                        || state.is_quitting()
+                        || state.service_ownership() != ServiceOwnership::Managed
+                        || state.phase() != BootPhase::Ready
+                    {
                         failures = 0;
                         break;
                     }

@@ -367,7 +367,7 @@ fn pick_session_item(value: &serde_json::Value) -> Option<&serde_json::Value> {
 
 fn current_session(config: &Config) -> Option<(String, bool)> {
     let value = rpc_session_list(config)?;
-    let item = pick_session_item(&value)?;
+    let item = selected_session_item(config, &value)?;
     let id = item.get("sessionId")?.as_str()?.to_string();
     let running = item
         .get("running")
@@ -377,7 +377,55 @@ fn current_session(config: &Config) -> Option<(String, bool)> {
 }
 
 pub(crate) fn current_session_id(config: &Config) -> Option<String> {
+    if let Some(selected) = visible_session(config) {
+        return selected;
+    }
     current_session(config).map(|(id, _)| id)
+}
+
+#[cfg(windows)]
+pub(crate) fn session_is_listed(config: &Config, id: &str) -> bool {
+    rpc_session_list(config)
+        .and_then(|value| {
+            value.get("items").and_then(|v| v.as_array()).map(|items| {
+                items
+                    .iter()
+                    .any(|item| item.get("sessionId").and_then(|v| v.as_str()) == Some(id))
+            })
+        })
+        .unwrap_or(false)
+}
+
+type VisibleSession = (u16, Option<String>, std::time::Instant);
+static VISIBLE_SESSION: std::sync::Mutex<Option<VisibleSession>> = std::sync::Mutex::new(None);
+
+pub(crate) fn set_visible_session(port: u16, known: bool, id: Option<String>) {
+    *VISIBLE_SESSION.lock().unwrap_or_else(|e| e.into_inner()) =
+        known.then(|| (port, id, std::time::Instant::now()));
+}
+
+pub(crate) fn visible_session(config: &Config) -> Option<Option<String>> {
+    VISIBLE_SESSION
+        .lock()
+        .ok()?
+        .as_ref()
+        .filter(|(port, _, time)| *port == config.port && time.elapsed() < Duration::from_secs(30))
+        .map(|(_, id, _)| id.clone())
+}
+
+fn selected_session_item<'a>(
+    config: &Config,
+    value: &'a serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    match visible_session(config) {
+        Some(Some(id)) => value
+            .get("items")?
+            .as_array()?
+            .iter()
+            .find(|item| item.get("sessionId").and_then(|v| v.as_str()) == Some(id.as_str())),
+        Some(None) => None,
+        None => pick_session_item(value),
+    }
 }
 
 /// 当前是否有正在执行的会话。Some(false) 也覆盖“会话列表为空”；
@@ -425,7 +473,7 @@ type BuiltGroups = (Vec<StatsGroup>, Option<f64>, Vec<StatsDetail>);
 /// details 仅承载状态栏未显示的额外数据（如缓存拆分），tooltip 不重复已显示文本。
 fn build_groups(config: &Config) -> Option<BuiltGroups> {
     let value = rpc_session_list(config)?;
-    let item = pick_session_item(&value)?;
+    let item = selected_session_item(config, &value)?;
     // 两个分支各自借本地 value 取出投影（clone 断开借用，统一走反序列化）
     let (stats_value, usage_value) = if config.auth_token.is_some() {
         // 新版：投影（sessionStats/tokenUsage）直接嵌在列表项里，
@@ -630,7 +678,10 @@ pub(crate) fn start_live_rate(app: AppHandle) {
                 cached_at = std::time::Instant::now() - SESSION_ID_TTL;
                 continue;
             }
-            if cached_at.elapsed() >= SESSION_ID_TTL {
+            if let Some(selected) = visible_session(&config) {
+                cached_sid = selected;
+                cached_at = std::time::Instant::now();
+            } else if cached_at.elapsed() >= SESSION_ID_TTL {
                 cached_sid = current_session_id(&config);
                 cached_at = std::time::Instant::now();
             }
@@ -695,10 +746,23 @@ fn live_rate_from_lines(text: &str, now_ms: i64) -> Option<f64> {
         *first_ms = Some(first_ms.map_or(ts, |f| f.min(ts)));
         *last_ms = Some(ts);
     }
-    for line in text.lines() {
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+    // dsh v2 将同一回答的流记录收进 message/attempt，时间仍取记录自身。
+    let records = text.lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .flat_map(|json| {
+            if matches!(json.get("type").and_then(|v| v.as_str()), Some("assistant/message" | "assistant/attempt")) {
+                if let Some(stream) = json.pointer("/data/stream").and_then(|v| v.as_array()) {
+                    return stream.iter().map(|record| {
+                        if record.get("type").and_then(|v| v.as_str()) == Some("chunk") {
+                            serde_json::json!({"type": "assistant/chunk", "time": record["time"], "data": {"chunk": record["chunk"]}})
+                        } else {
+                            serde_json::json!({"type": record["type"], "time0": record["time0"], "data": record})
+                        }
+                    }).collect::<Vec<_>>();
+                }
+            }
+            vec![json]
+        });
+    for json in records {
         let kind = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match kind {
             "assistant/chunk" => {
@@ -897,6 +961,22 @@ mod tests {
         // span = 2000-500 = 1500ms，6 token → 4 tok/s
         let tps = live_rate_from_lines(&text, now).unwrap();
         assert!((tps - 4.0).abs() < 0.2, "tps={tps}");
+    }
+
+    #[test]
+    fn live_rate_reads_v2_embedded_stream_with_its_own_timestamps() {
+        let old = serde_json::json!({"type":"text-chunks", "time0":1000,
+            "data":{"texts":["abcd","efgh","ijkl"],"dt":[1000,1000]}})
+        .to_string();
+        let new = serde_json::json!({"type":"assistant/message", "time":9000,
+            "data":{"stream":[{"type":"text-chunks", "time0":1000,
+                "texts":["abcd","efgh","ijkl"], "dt":[1000,1000]}]}})
+        .to_string();
+        assert_eq!(
+            live_rate_from_lines(&new, 3500),
+            live_rate_from_lines(&old, 3500)
+        );
+        assert!(live_rate_from_lines(&new, 3500).is_some());
     }
 
     #[test]

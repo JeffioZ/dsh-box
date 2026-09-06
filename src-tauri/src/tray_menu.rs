@@ -100,9 +100,6 @@ fn enabled_for(context: MenuContext, id: &str) -> bool {
         "restart" => context.managed_ready() && !context.updating,
         "plugins" => context.managed_ready() && !context.updating,
         "usage" => context.managed_ready(),
-        // 余额直接查询 DeepSeek API，不依赖 dsh 进程是否已启动；但外部服务的
-        // 凭据不归 DSHBox 管理，不能误用本地凭据展示另一套账户。
-        "balance" => !context.ownership.is_external(),
         _ => true,
     }
 }
@@ -111,8 +108,7 @@ fn disabled_reason(context: MenuContext, id: &str) -> Option<String> {
     if enabled_for(context, id) {
         return None;
     }
-    if context.ownership.is_external() && matches!(id, "restart" | "plugins" | "balance" | "usage")
-    {
+    if context.ownership.is_external() && matches!(id, "restart" | "plugins" | "usage") {
         return Some(
             crate::locale::text(
                 "请在外部服务的原环境中管理",
@@ -149,9 +145,8 @@ pub fn capability_signature(app: &AppHandle) -> u8 {
     let context = MenuContext::from_app(app);
     u8::from(enabled_for(context, "open_browser"))
         | (u8::from(enabled_for(context, "restart")) << 1)
-        | (u8::from(enabled_for(context, "balance")) << 2)
-        | (u8::from(enabled_for(context, "plugins")) << 3)
-        | (u8::from(enabled_for(context, "usage")) << 4)
+        | (u8::from(enabled_for(context, "plugins")) << 2)
+        | (u8::from(enabled_for(context, "usage")) << 3)
 }
 
 pub fn contextual_items(app: &AppHandle, tray_surface: bool) -> Vec<TrayMenuItem> {
@@ -169,10 +164,12 @@ pub fn contextual_items(app: &AppHandle, tray_surface: bool) -> Vec<TrayMenuItem
 }
 
 /// 托盘与标题栏共用的菜单模型。标题栏版本不含窗口内已有的动作
-/// （打开应用与余额入口）。
+/// （打开应用）。
 ///
-/// 分组：打开/访问 → 服务维护 → 管理与查询 → 关于/退出（危险动作
-/// 与常规动作分离）。托盘比标题栏多“打开”与“查询 API 余额…”。
+/// 分组：打开/访问 → 管理与查询 → 服务维护 → 关于/退出（危险动作
+/// 与常规动作分离）。文案与弹窗左侧导航同名（同词、同序），仅菜单按
+/// Windows 惯例为打开弹窗的命令补省略号；服务维护（更新/重启）为低频
+/// 动作，随导航排序置于后段。
 pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     let mut rows = Vec::new();
     // 打开/访问
@@ -189,35 +186,16 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         crate::locale::text("在浏览器中打开", "Open in browser"),
     ));
     rows.push(TrayMenuItem::sep());
-    // 服务维护
+    // 管理与查询（与弹窗导航同序：用量与余额 → 插件 → 设置）
     rows.push(TrayMenuItem::row_icon(
-        "restart",
-        "restart",
-        crate::locale::text("重启 dsh 服务", "Restart dsh service"),
+        "usage",
+        "chart",
+        crate::locale::text("用量与余额…", "Usage & balance…"),
     ));
-    rows.push(TrayMenuItem::row_icon(
-        "check_update",
-        "download",
-        crate::locale::text("检查更新…", "Check for updates…"),
-    ));
-    rows.push(TrayMenuItem::sep());
-    // 管理与查询
-    if tray_surface {
-        rows.push(TrayMenuItem::row_icon(
-            "usage",
-            "chart",
-            crate::locale::text("用量与余额…", "Usage & balance…"),
-        ));
-        rows.push(TrayMenuItem::row_icon(
-            "balance",
-            "wallet",
-            crate::locale::text("API 余额…", "API balance…"),
-        ));
-    }
     rows.push(TrayMenuItem::row_icon(
         "plugins",
         "puzzle",
-        crate::locale::text("管理插件…", "Manage plugins…"),
+        crate::locale::text("插件…", "Plugins…"),
     ));
     rows.push(TrayMenuItem::row_icon(
         "settings",
@@ -225,11 +203,23 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
         crate::locale::text("设置…", "Settings…"),
     ));
     rows.push(TrayMenuItem::sep());
+    // 服务维护
+    rows.push(TrayMenuItem::row_icon(
+        "check_update",
+        "download",
+        crate::locale::text("更新…", "Updates…"),
+    ));
+    rows.push(TrayMenuItem::row_icon(
+        "restart",
+        "restart",
+        crate::locale::text("重启 dsh 服务", "Restart dsh service"),
+    ));
+    rows.push(TrayMenuItem::sep());
     // 关于/退出
     rows.push(TrayMenuItem::row_icon(
         "about",
         "info",
-        crate::locale::text("关于 DSHBox", "About DSHBox"),
+        crate::locale::text("关于", "About"),
     ));
     rows.push(TrayMenuItem::row_icon(
         "quit",
@@ -693,13 +683,12 @@ mod tests {
                 "open",
                 "open_browser",
                 "",
-                "restart",
-                "check_update",
-                "",
                 "usage",
-                "balance",
                 "plugins",
                 "settings",
+                "",
+                "check_update",
+                "restart",
                 "",
                 "about",
                 "quit",
@@ -707,7 +696,7 @@ mod tests {
         );
     }
 
-    /// 标题栏主菜单：不含托盘专属项（打开应用、查询余额），分组同托盘。
+    /// 标题栏主菜单：不含托盘专属项（打开应用），分组同托盘。
     #[test]
     fn titlebar_menu_grouping_order() {
         let rows = items(false);
@@ -717,11 +706,12 @@ mod tests {
             [
                 "open_browser",
                 "",
-                "restart",
-                "check_update",
-                "",
+                "usage",
                 "plugins",
                 "settings",
+                "",
+                "check_update",
+                "restart",
                 "",
                 "about",
                 "quit",
@@ -740,7 +730,6 @@ mod tests {
         assert!(!enabled_for(starting, "restart"));
         assert!(!enabled_for(starting, "plugins"));
         assert!(!enabled_for(starting, "usage"));
-        assert!(enabled_for(starting, "balance"));
 
         let managed = MenuContext {
             phase: crate::app_state::BootPhase::Ready,
@@ -769,7 +758,6 @@ mod tests {
         assert!(!enabled_for(external, "restart"));
         assert!(!enabled_for(external, "plugins"));
         assert!(!enabled_for(external, "usage"));
-        assert!(!enabled_for(external, "balance"));
     }
 
     #[cfg(windows)]

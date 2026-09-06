@@ -27,6 +27,39 @@ const CREDENTIALS_POLL: Duration = Duration::from_secs(3);
 
 /// 账户快照缓存：None = 从未完成过全量刷新（get 命令回退同步查询）。
 static CACHE: Mutex<Option<CachedSnapshots>> = Mutex::new(None);
+static REFRESH_LOCK: Mutex<()> = Mutex::new(());
+static REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn cached_payload() -> Option<AccountsPayload> {
+    let cache = CACHE.lock().ok()?;
+    let cache = cache.as_ref()?;
+    Some(AccountsPayload {
+        accounts: cache.accounts.clone(),
+        subscriptions: cache.subscriptions.clone(),
+    })
+}
+
+/// 页面首次读取与后台轮共享同一请求，避免空缓存时重复查询整套账户。
+pub(crate) fn snapshots(app: &AppHandle) -> AccountsPayload {
+    if let Some(payload) = cached_payload() {
+        return payload;
+    }
+    let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if CACHE.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+        run_round_locked(app);
+    }
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    AccountsPayload {
+        accounts: cache
+            .as_ref()
+            .map(|c| c.accounts.clone())
+            .unwrap_or_default(),
+        subscriptions: cache
+            .as_ref()
+            .map(|c| c.subscriptions.clone())
+            .unwrap_or_default(),
+    }
+}
 
 #[derive(Clone)]
 struct CachedSnapshots {
@@ -69,7 +102,7 @@ fn credentials_changed(
     baseline: Option<std::time::SystemTime>,
     current: Option<std::time::SystemTime>,
 ) -> bool {
-    current.is_some() && baseline != current
+    baseline != current
 }
 
 /// 跟随 `$DSH_HOME/.credentials.yaml` 的 mtime：用户在 dsh 设置页保存
@@ -80,7 +113,7 @@ pub(crate) fn start_credentials_follow(app: AppHandle) {
     std::thread::spawn(move || {
         // 启动基线取当前文件状态：避免每次启动把既有文件误判为"变化"
         //（监测自身门控放行后本会立即刷一轮，启动期多触发是纯浪费）。
-        let mut baseline = credentials_mtime(&app.state::<AppState>().config());
+        let mut baseline = account_revision(&app.state::<AppState>().config());
         loop {
             std::thread::sleep(CREDENTIALS_POLL);
             match crate::background::service_gate(&app) {
@@ -88,30 +121,26 @@ pub(crate) fn start_credentials_follow(app: AppHandle) {
                 // 未就绪/外部模式：只跟随基线不触发；期间的变化由门控重开
                 // 时监测自身的立即轮兜底，避免重开瞬间的重复刷新。
                 crate::background::Gate::NotReady => {
-                    baseline = credentials_mtime(&app.state::<AppState>().config());
+                    baseline = account_revision(&app.state::<AppState>().config());
                     continue;
                 }
                 crate::background::Gate::Ready => {}
             }
             let config = app.state::<AppState>().config();
-            let current = credentials_mtime(&config);
-            if !credentials_changed(baseline, current) {
+            let current = account_revision(&config);
+            if !baseline
+                .iter()
+                .zip(current)
+                .any(|(before, after)| credentials_changed(*before, after))
+            {
                 continue;
             }
             baseline = current;
+            *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
             crate::logging::log("credentials: mtime 变化，触发账户刷新");
             request_account_refresh(app.clone());
         }
     });
-}
-
-/// 缓存的账户/订阅快照（None = 从未刷新过，调用方回退同步查询）。
-pub(crate) fn cached_accounts() -> Option<Vec<AccountSnapshot>> {
-    CACHE.lock().ok()?.as_ref().map(|c| c.accounts.clone())
-}
-
-pub(crate) fn cached_subscriptions() -> Option<Vec<SubscriptionSnapshot>> {
-    CACHE.lock().ok()?.as_ref().map(|c| c.subscriptions.clone())
 }
 
 /// 监测缓存中新鲜的 DeepSeek 官方路由快照（< ACCOUNT_REFRESH_MS），供状态栏
@@ -211,8 +240,35 @@ pub(crate) fn request_account_refresh(app: AppHandle) {
 
 /// 一轮刷新：查询 → 合并旧缓存 → 写缓存 → 广播。
 fn run_round(app: &AppHandle) {
+    let generation = REFRESH_GENERATION.load(std::sync::atomic::Ordering::Acquire);
+    let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if generation != REFRESH_GENERATION.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    run_round_locked(app);
+}
+
+fn run_round_locked(app: &AppHandle) {
+    if !matches!(
+        crate::background::service_gate(app),
+        crate::background::Gate::Ready
+    ) {
+        return;
+    }
     let config = app.state::<AppState>().config();
+    let revision = account_revision(&config);
     let payload = refresh_all(&config);
+    let current = app.state::<AppState>().config();
+    if !matches!(
+        crate::background::service_gate(app),
+        crate::background::Gate::Ready
+    ) || current.dsh_home() != config.dsh_home()
+        || current.port != config.port
+        || account_revision(&current) != revision
+    {
+        *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return;
+    }
     if let Ok(mut cache) = CACHE.lock() {
         *cache = Some(CachedSnapshots {
             accounts: payload.accounts.clone(),
@@ -220,12 +276,22 @@ fn run_round(app: &AppHandle) {
         });
     }
     crate::emit_signed(app, "usage-accounts-updated", &payload);
+    REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
     // 状态栏 chip 只监听 balance-updated（非 usage-accounts-updated），其
     // 周期任务 5 分钟才读一次缓存——任何触发源（周期轮/手动/凭据跟随）
     // 完成后顺带推一次余额，让"dsh 设置页刚填完 key"立即生效
     //（refresh_once 自带本地模式与可见性门控；query_balance 命中刚写入
     // 的新鲜缓存，零网络请求）。
     crate::balance::refresh_once(app.clone());
+}
+
+fn account_revision(config: &Config) -> [Option<std::time::SystemTime>; 2] {
+    [
+        credentials_mtime(config),
+        std::fs::metadata(config.dsh_home().join("settings.yaml"))
+            .ok()
+            .and_then(|m| m.modified().ok()),
+    ]
 }
 
 /// 全量刷新：逐路由查余额 + 全部订阅适配器，并与旧缓存做瞬错保旧合并。
@@ -309,6 +375,7 @@ fn merge_account(previous: Option<&AccountSnapshot>, current: AccountSnapshot) -
         Some(prev) if prev.status == "ok" && is_transient(current.status) => {
             let mut kept = prev.clone();
             kept.stale = true;
+            kept.error = current.error;
             kept
         }
         _ => current,
@@ -333,6 +400,7 @@ fn merge_subscription(
         Some(prev) if prev.status == "ok" && is_transient(current.status) => {
             let mut kept = prev.clone();
             kept.stale = true;
+            kept.error = current.error;
             kept
         }
         _ => current,
@@ -403,6 +471,7 @@ mod tests {
             adapter: "zai-token-plan",
             status: "ok",
             plan: "GLM Coding Plan".to_string(),
+            updated_at: Some(1),
             windows: vec![QuotaWindow {
                 kind: "session".to_string(),
                 used_percent: 20.0,
@@ -506,7 +575,7 @@ mod tests {
         // 持续不存在：不触发
         assert!(!credentials_changed(None, None));
         // 文件消失：不触发（主动清空由周期轮收敛，见函数注释）
-        assert!(!credentials_changed(Some(t0), None));
+        assert!(credentials_changed(Some(t0), None));
     }
 
     #[test]
@@ -560,8 +629,7 @@ mod tests {
         if let Ok(mut cache) = CACHE.lock() {
             *cache = None;
         }
-        assert!(cached_accounts().is_none());
-        assert!(cached_subscriptions().is_none());
+        assert!(CACHE.lock().unwrap().is_none());
         assert!(cached_deepseek().is_none());
         if let Ok(mut cache) = CACHE.lock() {
             *cache = Some(CachedSnapshots {
@@ -569,10 +637,13 @@ mod tests {
                 subscriptions: vec![ok_subscription("zai")],
             });
         }
-        let accounts = cached_accounts().unwrap();
+        let accounts = CACHE.lock().unwrap().as_ref().unwrap().accounts.clone();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "deepseek-official");
-        assert_eq!(cached_subscriptions().unwrap().len(), 1);
+        assert_eq!(
+            CACHE.lock().unwrap().as_ref().unwrap().subscriptions.len(),
+            1
+        );
         if let Ok(mut cache) = CACHE.lock() {
             *cache = None;
         }

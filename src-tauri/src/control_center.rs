@@ -571,31 +571,6 @@ pub fn focus_dialog_if_visible(app: &AppHandle) -> bool {
     }
 }
 
-// ---------- 余额 ----------
-
-/// 打开余额弹窗：立即出窗显示“查询中…”，查询在后台执行、结果写入状态，
-/// 页面轮询拉取（事件通道对该窗口不可靠）。
-pub fn open_balance(app: &AppHandle) {
-    if !crate::tray_menu::action_enabled(app, "balance") {
-        return;
-    }
-    show(
-        app,
-        crate::locale::text("API 余额", "API balance"),
-        "balance",
-        serde_json::json!(null),
-    );
-    let handle = app.clone();
-    let config = app.state::<AppState>().config();
-    // stale-while-revalidate：保留上次缓存立即渲染（打开不长时间转圈），
-    // 后台刷新完成后替换。首次打开无缓存时短暂显示“查询中…”，
-    // 查询 ≤10s 短超时内完成
-    std::thread::spawn(move || {
-        let payload = crate::balance::query_balance(&config);
-        handle.state::<AppState>().set_last_balance(Some(payload));
-    });
-}
-
 // ---------- 检查更新 ----------
 
 /// 打开"更新进行中"视图：作为 win32 提示框确认后的更新进度载体——

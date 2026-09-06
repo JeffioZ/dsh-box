@@ -75,13 +75,6 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         item("open")?.enabled,
         None::<&str>,
     )?;
-    let balance_item = MenuItem::with_id(
-        app,
-        "balance",
-        &item("balance")?.label,
-        item("balance")?.enabled,
-        None::<&str>,
-    )?;
     let usage_item = MenuItem::with_id(
         app,
         "usage",
@@ -129,21 +122,20 @@ fn native_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    // 顺序与 tray_menu::items(true) 保持一致：打开/访问 → 服务维护 →
-    // 管理与查询 → 关于/退出
+    // 顺序与 tray_menu::items(true) 保持一致：打开/访问 → 管理与查询 →
+    // 服务维护 → 关于/退出
     Menu::with_items(
         app,
         &[
             &open_item,
             &browser_item,
             &sep1,
-            &restart_item,
-            &check_item,
-            &sep2,
             &usage_item,
-            &balance_item,
             &plugins_item,
             &settings_item,
+            &sep2,
+            &check_item,
+            &restart_item,
             &sep3,
             &about_item,
             &quit_item,
@@ -197,7 +189,6 @@ pub(crate) fn run_action(app: &AppHandle, id: &str) {
     match id {
         "open" => show_main(app),
         "usage" => crate::control_center::open_usage(app),
-        "balance" => crate::control_center::open_balance(app),
         "open_browser" => open_browser(app),
         "restart" => restart_from_tray(app),
         "check_update" => crate::control_center::open_check(app),

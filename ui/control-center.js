@@ -28,12 +28,14 @@ function applyTruncationTips(root) {
 // —— 用量与余额（统一页：历史用量聚合 + 供应商账户/订阅） ——
 let usageSeq = 0;
 
-// 账户区只展示「有意义」的账户：已配凭据 + 有可用适配器的路由。
+// 账户区只展示「有意义」的账户：已配凭据的路由。
 // 避免把未配置的所有供应商都铺出来（屏效低、信息噪音大）。
 function meaningfulAccounts(accounts, subs) {
   const out = [];
   for (const a of (accounts || [])) {
-    // 余额快照：仅当有余额可显示或状态非 not-configured 时才展示。
+    // 空占位只隐藏「未配置凭据」一种。用户自己导入的自定义网关没有
+    // 公开余额接口（status=unsupported）也必须显示——凭据在、用量统计
+    // 也在计，隐藏会让刚添加的路由从账户区凭空消失。
     const hasBalance = a.balance && (a.balance.remaining !== null && a.balance.remaining !== undefined);
     if (a.status === 'not-configured' && !hasBalance) continue;
     out.push({ ...a });
@@ -41,7 +43,9 @@ function meaningfulAccounts(accounts, subs) {
   for (const s of (subs || [])) {
     // 订阅：未配置凭据的不展示。
     if (s.status === 'not-configured') continue;
-    out.push({ ...s });
+    const existing = out.find((a) => a.id && a.id === s.id);
+    if (existing) existing.subscription = { ...s };
+    else out.push({ ...s });
   }
   return out;
 }
@@ -57,8 +61,8 @@ async function exportUsage(kind, trigger) {
   };
   label.textContent = dshdT('usageExporting');
   try {
-    await invoke('usage_export', { format: kind });
-    dshdToast(dshdT('usageExportDone'), { kind: 'ok' });
+    const exported = await invoke('usage_export', { format: kind });
+    if (exported) dshdToast(dshdT('usageExportDone'), { kind: 'ok' });
   } catch (e) {
     dshdToast(dshdT('usageExportFailed'), { kind: 'err' });
   } finally {
@@ -257,6 +261,17 @@ function renderUsageReport(report, seq, prediction) {
   const summary = $('usage-summary');
   if (!wrap || !summary) return;
   const total = report.total || {};
+  let warning = $('usage-partial');
+  if (!warning) {
+    warning = document.createElement('div');
+    warning.id = 'usage-partial';
+    warning.className = 'usage-load err';
+    warning.setAttribute('role', 'status');
+    summary.parentElement.appendChild(warning);
+  }
+  const unavailable = (report.unavailable_sessions || []).length;
+  warning.hidden = !unavailable;
+  warning.textContent = unavailable ? dshdT('usagePartial', { count: unavailable }) : '';
   const todayInfo = todayEntry(report);
   const todayHit = todayInfo ? todayInfo.cache_hit_rate : null;
   const totalHit = report.total ? report.total.cache_hit_rate : null;
@@ -272,7 +287,7 @@ function renderUsageReport(report, seq, prediction) {
   // 预计今日：后台无预测（今日尚无用量）时不渲染该格，保持栅格语义诚实。
   // 该格带 id：usage-prediction-updated 事件（预警任务每 10 分钟一发）到达时
   // 就地更新，不整页重载，避免与并排「今日」数字出现可见的时差。
-  const p = prediction && prediction.prediction;
+  const p = !(report.unavailable_sessions || []).length && prediction && prediction.prediction;
   const projectedStat = p
     ? '<div class="usage-stat" id="usage-projected"><span class="usage-stat-l">' + dshdT('usageProjectedToday') + '</span><b data-trunc-tip data-tip-extra="' + esc(dshdT('usageProjectedTip')) + '">' + fmtTokens(p.projected_today_tokens || 0) + '</b></div>'
     : '';
@@ -313,7 +328,8 @@ async function ensureUsagePredictionListener() {
     usagePredictionUnlisten = await dshdListen('usage-prediction-updated', (e) => {
       if (openKind !== 'usage' || !e.payload) return;
       const cell = $('usage-projected');
-      const p = e.payload.prediction;
+      const partial = $('usage-partial');
+      const p = !(partial && !partial.hidden) && e.payload.prediction;
       if (!p) {
         if (cell) cell.remove();
         return;
@@ -704,10 +720,10 @@ function applyAccountsSnapshot(section, accounts, subs) {
 }
 
 function latestUpdatedAt(accounts, subs) {
-  let latest = 0;
-  for (const a of accounts || []) if (a.updated_at && a.updated_at > latest) latest = a.updated_at;
-  for (const s of subs || []) if (s.updated_at && s.updated_at > latest) latest = s.updated_at;
-  return latest || null;
+  const shown = [...(accounts || []), ...(subs || [])]
+    .filter((a) => !['not-configured', 'unsupported'].includes(a.status));
+  if (!shown.length || shown.some((a) => a.stale || a.status !== 'ok' || !a.updated_at)) return null;
+  return Math.min(...shown.map((a) => a.updated_at));
 }
 
 // —— 当前会话：加载账户区时并行拉取活动会话上下文（route_id/display_name/model，
@@ -775,7 +791,8 @@ function renderAccountCards(box, items) {
     // accent 由 CSS 按 data-provider/data-adapter 映射（未知供应商回退 --dshd-accent）
     card.dataset.provider = a.id || '';
     card.dataset.adapter = a.adapter || '';
-    const warn = warnLevelOf(a);
+    const warnings = [warnLevelOf(a), ...(a.subscription ? [warnLevelOf(a.subscription)] : [])];
+    const warn = warnings.includes('critical') ? 'critical' : warnings.includes('warning') ? 'warning' : 'none';
     if (warn !== 'none') card.dataset.warn = warn;
     const statusKey = ACCOUNT_STATUS_KEY[a.status] || 'accountUnavailable';
     const statusText = dshdT(statusKey);
@@ -788,14 +805,23 @@ function renderAccountCards(box, items) {
       // token 简写不适用于钱；unlimited 显示 ∞
       detail = '<b class="usage-acc-amount">' + cur(a.balance.currency || '') + (a.balance.unlimited ? '∞' : dshdBalanceValue(a.balance.remaining)) + '</b>'
         + balanceRowsHtml(a.balance);
-    } else if (a.windows && a.windows.length) {
-      detail = a.windows.map((w) => usageWindowHtml(w)).join('');
+    }
+    if (a.windows && a.windows.length) detail += a.windows.map(usageWindowHtml).join('');
+    if (a.plan) detail += '<span class="usage-acc-hint">' + esc(a.plan) + '</span>';
+    if (a.error) detail += '<span class="usage-acc-hint err">' + esc(a.error) + '</span>';
+    if (a.subscription) {
+      const s = a.subscription;
+      detail += '<div class="usage-acc-subscription"><span class="usage-acc-hint">' +
+        esc(s.plan || s.display_name || s.id) + ' · ' + esc(dshdT(ACCOUNT_STATUS_KEY[s.status] || 'accountUnavailable')) + '</span>' +
+        (s.windows || []).map(usageWindowHtml).join('') +
+        (s.error ? '<span class="usage-acc-hint err">' + esc(s.error) + '</span>' : '') +
+        (s.updated_at ? '<span class="usage-acc-hint">' + esc(dshdT(s.stale ? 'usageLastSuccessAt' : 'updatedAt', { time: fmtClockTime(s.updated_at) })) + '</span>' : '') + '</div>';
     }
     // 标记行：当前会话徽标（pill 同体系，徽标旁附模型名）、
     // stale（上次成功时间）与预警（图标+文字，不得只靠颜色传信息）
     let flags = '';
     if (a === sessionItem) {
-      flags += '<span class="usage-acc-session">' + esc(dshdT('usageCurrentSession')) + '</span>';
+      flags += '<span class="usage-acc-session">' + esc(dshdT(usageSessionContext && usageSessionContext.selected ? 'usageCurrentSession' : 'usageRecentSession')) + '</span>';
       if (usageSessionContext && usageSessionContext.model) {
         flags += '<span class="usage-acc-session-model" data-trunc-tip>' + esc(usageSessionContext.model) + '</span>';
       }
@@ -804,6 +830,8 @@ function renderAccountCards(box, items) {
       flags += '<span class="usage-acc-stale">' + CLOCK_ICON + esc(a.updated_at
         ? dshdT('usageLastSuccessAt', { time: fmtClockTime(a.updated_at) })
         : dshdT('usageStaleGeneric')) + '</span>';
+    } else if (a.updated_at && a.status === 'ok') {
+      flags += '<span class="usage-acc-stale">' + esc(dshdT('updatedAt', { time: fmtClockTime(a.updated_at) })) + '</span>';
     }
     if (warn !== 'none') {
       const crit = warn === 'critical';
@@ -1768,21 +1796,13 @@ function finishUsageRefresh(timedOut, silent) {
     if (!timedOut && !silent && openKind === 'usage') {
       dshdToast(dshdT('usageRefreshed'), { kind: 'ok' });
     }
-    // 30s 超时兜底触发：事件丢失/后台异常时不得静默收场，在「更新于」
-    // 槽位短暂提示失败并保留原快照（4s 后还原上次更新时间）
+    // 30s 是界面等待提示阈值，不能据此把仍在进行的后台查询判成失败。
     if (!timedOut) return;
     const upd = document.querySelector('.usage-upd');
     if (!upd) return;
-    const prev = upd.textContent;
     const timeoutText = dshdT('usageRefreshTimeout');
-    upd.classList.add('err');
+    upd.classList.remove('err');
     upd.textContent = timeoutText;
-    setTimeout(() => {
-      if (upd.classList.contains('err') && upd.textContent === timeoutText) {
-        upd.classList.remove('err');
-        upd.textContent = prev;
-      }
-    }, 4000);
   }, wait);
 }
 $('btn-refresh').addEventListener('click', () => {
@@ -1795,5 +1815,5 @@ $('btn-refresh').addEventListener('click', () => {
   renderUsagePage(true);
 });
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') close();
+  if (e.key === 'Escape' && !e.defaultPrevented) close();
 });

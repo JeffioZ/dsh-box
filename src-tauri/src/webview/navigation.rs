@@ -207,16 +207,25 @@ pub fn apply_hide_tools(app: &AppHandle) {
     }
 }
 
-/// 页面心跳注入：dsh 页面每 10s 上报一次存活标记。
+/// 页面心跳注入：dsh 页面定期上报存活标记与当前选中会话。
 /// 页面主线程挂起/崩溃时 setInterval 停摆，Rust 侧据此重载自愈（见 heartbeat.rs）。
 const HEARTBEAT_INJECT: &str = r#"
 if (!window.__dshdHeartbeat) {
   window.__dshdHeartbeat = true;
-  setInterval(function () {
+  var lastSelection = '', lastBeat = 0;
+  function reportPage() {
     try {
-      window.__TAURI__.core.invoke('page_heartbeat').catch(function () {});
+      var selected = dshSelectedSession();
+      var key = JSON.stringify(selected);
+      // 1s 检测、选择不变时至少间隔 10s 才上报：会话切换立即同步，
+      // 稳态心跳节奏不随检测频率上涨（IPC 量与 watchdog 判死口径不变）。
+      if (key === lastSelection && Date.now() - lastBeat < 10000) return;
+      lastSelection = key; lastBeat = Date.now();
+      window.__TAURI__.core.invoke('page_heartbeat', {sessionId: selected.id, selectionKnown: selected.known}).catch(function () {});
     } catch (e) {}
-  }, 10000);
+  }
+  reportPage();
+  setInterval(reportPage, 1000);
 }
 "#;
 

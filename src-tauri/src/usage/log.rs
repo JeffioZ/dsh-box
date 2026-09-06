@@ -28,7 +28,19 @@ pub(crate) fn read_full(path: &Path) -> Result<String, String> {
 fn read_full_limited(path: &Path, max_total: usize) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
-    file.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    (&mut file)
+        .take(MAX_TOTAL_DECOMPRESSED as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() > MAX_TOTAL_DECOMPRESSED {
+        return Err("会话日志超过读取上限".into());
+    }
+    if path.extension().is_some_and(|ext| ext == "jsonl") {
+        if raw.len() > max_total {
+            return Err("会话日志超过读取上限".into());
+        }
+        return String::from_utf8(raw).map_err(|_| "会话日志不是有效的 UTF-8".into());
+    }
     let mut out = String::new();
     let mut cursor = 0usize;
     while cursor + 4 <= raw.len() {
@@ -104,7 +116,20 @@ pub(crate) fn read_frames_from(path: &Path, offset: u64) -> Result<(String, u64)
     file.seek(std::io::SeekFrom::Start(offset))
         .map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
-    file.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    (&mut file)
+        .take(MAX_TOTAL_DECOMPRESSED as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() > MAX_TOTAL_DECOMPRESSED {
+        return Err("会话日志超过读取上限".into());
+    }
+    if path.extension().is_some_and(|ext| ext == "jsonl") {
+        let safe = raw.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        raw.truncate(safe);
+        return String::from_utf8(raw)
+            .map(|text| (text, offset + safe as u64))
+            .map_err(|_| "会话日志不是有效的 UTF-8".into());
+    }
     let mut out = String::new();
     let mut cursor = 0usize;
     let mut safe = 0usize;
@@ -139,6 +164,18 @@ pub(crate) fn read_frames_from(path: &Path, offset: u64) -> Result<(String, u64)
 pub(crate) fn starts_with_frame_magic(path: &Path, offset: u64) -> Result<bool, String> {
     use std::io::Seek as _;
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if path.extension().is_some_and(|ext| ext == "jsonl") {
+        if offset == 0 {
+            return Ok(true);
+        }
+        file.seek(std::io::SeekFrom::Start(offset - 1))
+            .map_err(|e| e.to_string())?;
+        let mut byte = [0];
+        return file
+            .read_exact(&mut byte)
+            .map(|()| byte[0] == b'\n')
+            .map_err(|e| e.to_string());
+    }
     file.seek(std::io::SeekFrom::Start(offset))
         .map_err(|e| e.to_string())?;
     let mut magic = [0u8; 4];
@@ -175,8 +212,18 @@ fn collect_session_logs(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
         if !path.is_dir() {
             continue;
         }
-        let log = path.join("session.jsonl.zstd");
-        if log.is_file() {
+        let log = std::fs::read_dir(&path)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| {
+                generation(&entry.file_name().to_string_lossy()).map(|v| (v, entry.path()))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+            .map(|(_, path)| path);
+        if let Some(log) = log {
             if let Some(id) = path.file_name().and_then(|n| n.to_str()) {
                 out.push((id.to_string(), log));
             }
@@ -185,6 +232,25 @@ fn collect_session_logs(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             collect_session_logs(&path, out);
         }
     }
+}
+
+fn generation(name: &str) -> Option<u32> {
+    let name = name.strip_suffix(".zstd").unwrap_or(name);
+    if name == "session.jsonl" {
+        return Some(0);
+    }
+    let version = name.strip_prefix("session.v")?.strip_suffix(".jsonl")?;
+    if version.starts_with('0') || !version.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    version.parse().ok()
+}
+
+pub(crate) fn supported_generation(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .and_then(generation)
+        .is_none_or(|version| version <= 2)
 }
 
 /// 按会话 id 定位其真实日志路径（递归枚举，支持嵌套分组目录）。
@@ -201,6 +267,29 @@ pub(crate) fn session_log_path(config: &Config, session_id: &str) -> Option<Path
 #[cfg(test)]
 mod tests {
     use super::{list_sessions, read_full, read_full_limited, session_log_path};
+
+    #[test]
+    fn plaintext_reads_only_complete_lines_and_selects_newest_generation() {
+        let root = temp_log("generations").parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(root.join("s")).unwrap();
+        let old = root.join("s/session.jsonl.zstd");
+        std::fs::write(&old, zstd::encode_all("old\n".as_bytes(), 3).unwrap()).unwrap();
+        let path = old.with_file_name("session.v2.jsonl");
+        std::fs::write(&path, "你好\npartial").unwrap();
+        assert_eq!(
+            super::read_frames_from(&path, 0).unwrap(),
+            ("你好\n".into(), 7)
+        );
+        let mut found = Vec::new();
+        super::collect_session_logs(&root, &mut found);
+        assert!(found.iter().any(|(_, p)| p == &path));
+        assert!(!found.iter().any(|(_, p)| p == &old));
+        assert!(!super::supported_generation(
+            &path.with_file_name("session.v3.jsonl")
+        ));
+        assert_eq!(super::generation("session.v02.jsonl"), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn temp_log(tag: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(

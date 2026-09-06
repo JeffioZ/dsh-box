@@ -84,8 +84,7 @@ pub fn set_deepseek_api_key(
             crate::logging::log("settings: DeepSeek API Key 已清除");
         }
     }
-    // 清掉余额弹窗的旧成功缓存，并让状态栏立即反映新凭据状态。
-    app.state::<AppState>().set_last_balance(None);
+    // 让状态栏立即反映新凭据状态。
     crate::balance::refresh_once(app.clone());
     let settings = settings_state(&app);
     crate::emit_signed(&app, "settings-changed", &settings);

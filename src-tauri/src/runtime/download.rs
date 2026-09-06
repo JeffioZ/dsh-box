@@ -47,13 +47,20 @@ pub(crate) struct StreamRequest<'a> {
 /// 流式下载到文件：GET → content-length 预检 → 64KB 分块写入（每块检查
 /// 取消与累计上限）→ flush + fsync。任何失败路径都会清理半截文件。
 pub(crate) fn stream_to_file(req: StreamRequest<'_>) -> Result<(), DownloadError> {
+    if req.cancelled.is_some_and(|check| check()) {
+        return Err(DownloadError::Cancelled);
+    }
     let mut request = super::download_client().get(req.url);
     if let Some(ua) = req.user_agent {
         request = request.header("User-Agent", ua);
     }
-    let resp = request
-        .call()
-        .map_err(|e| DownloadError::Transport(e.to_string()))?;
+    let resp = request.call().map_err(|e| {
+        if req.cancelled.is_some_and(|check| check()) {
+            DownloadError::Cancelled
+        } else {
+            DownloadError::Transport(e.to_string())
+        }
+    })?;
     let total: u64 = resp
         .headers()
         .get("content-length")
@@ -76,9 +83,13 @@ pub(crate) fn stream_to_file(req: StreamRequest<'_>) -> Result<(), DownloadError
             if req.cancelled.is_some_and(|check| check()) {
                 return Err(DownloadError::Cancelled);
             }
-            let n = reader
-                .read(&mut buf)
-                .map_err(|e| DownloadError::Body(e.to_string()))?;
+            let n = reader.read(&mut buf).map_err(|e| {
+                if req.cancelled.is_some_and(|check| check()) {
+                    DownloadError::Cancelled
+                } else {
+                    DownloadError::Body(e.to_string())
+                }
+            })?;
             if n == 0 {
                 break;
             }

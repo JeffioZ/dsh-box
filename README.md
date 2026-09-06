@@ -23,7 +23,9 @@ DSHBox（包名 `dsh-box`）是 [DeepSeek Harness](https://github.com/deepseek-a
 
 ## 快速开始
 
-先安装 Rust 1.85+、Node.js `^22.19.0` 或 `>=24.0.0`，以及对应平台的 [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)。Windows 构建：
+从 [Releases](https://github.com/JeffioZ/dsh-box/releases) 下载对应平台的成品，按下方“安装与首次启动”运行。首次启动会引导准备运行时和配置模型。
+
+从源码构建时，先安装 Rust 1.85+、Node.js `^22.19.0` 或 `>=24.0.0`，以及对应平台的 [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)。Windows 构建：
 
 ```powershell
 git clone https://github.com/JeffioZ/dsh-box.git
@@ -47,7 +49,7 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 | 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次内置插件可明确取消 |
 | 用量与余额 | 会话 token 按日/模型聚合、月历热图、最近 14 天与模型下钻；供应商余额与订阅额度卡片，后台周期监测、瞬错保旧与低余额预警 |
 | 模型配置 | 类型化校验并导入/导出 `llm-pi-ai` 自定义路由，凭据与设置分开保存 |
-| 便携模式 | Windows exe 同级放置 `portable.txt`，运行时与配置改存相邻 `data/` |
+| 便携模式 | Windows exe 同级放置 `portable.txt`，外壳配置与运行时改存相邻 `data/`；dsh 会话和凭据仍使用 `$DSH_HOME` |
 
 ## 平台
 
@@ -55,7 +57,7 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 |---|---|---|---|
 | Windows | x64 | Windows 10；WebView2 Runtime | 单个 `DSHBox.exe` |
 | macOS | arm64 / x64 | macOS 13.5+ | 未签名 dmg |
-| Linux | x64 / arm64 | Ubuntu 22.04、Debian 12 或等价 WebKitGTK 4.1 环境 | zip |
+| Linux | x64 / arm64 | WebKitGTK 4.1 及兼容发布产物的 glibc；最低发行版尚未实机验证 | zip |
 
 Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Linux 上 dsh 的 Landlock 需要内核 5.13+，不满足时由 dsh 自身降级。
 

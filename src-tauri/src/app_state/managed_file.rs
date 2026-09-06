@@ -8,6 +8,76 @@ use std::sync::Mutex;
 static MANAGED_FILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// 两份配置先全部变换、校验，再按引用依赖顺序写入；第二份失败时恢复第一份。
+/// 外部进程已改写的文件不能整份回滚，保留现场并明确报告恢复失败。
+pub(crate) fn update_text_pair(
+    first: &Path,
+    second: &Path,
+    transform: impl FnOnce(String, String) -> Result<(String, String), String>,
+) -> Result<(), String> {
+    fn read(path: &Path) -> Result<Option<String>, String> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    let _guard = MANAGED_FILE_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let before_first = read(first)?;
+    let before_second = read(second)?;
+    let (next_first, next_second) = transform(
+        before_first.clone().unwrap_or_default(),
+        before_second.clone().unwrap_or_default(),
+    )?;
+    if read(first)? != before_first || read(second)? != before_second {
+        return Err(crate::locale::text(
+            "配置已被其他进程修改，请重新预览后导入。",
+            "Another process changed the configuration; preview it again before importing.",
+        )
+        .into());
+    }
+    let changed_first = next_first != before_first.as_deref().unwrap_or_default();
+    if changed_first {
+        atomic_write_unlocked(first, &next_first)?;
+    }
+    let result = (|| {
+        if read(second)? != before_second {
+            return Err(crate::locale::text(
+                "模型配置在导入期间发生变化，已取消写入。",
+                "The model configuration changed during import; the write was cancelled.",
+            )
+            .to_string());
+        }
+        if next_second != before_second.as_deref().unwrap_or_default() {
+            atomic_write_unlocked(second, &next_second)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if changed_first {
+            let rollback = (|| {
+                if read(first)?.as_deref() != Some(next_first.as_str()) {
+                    return Err("concurrent change".to_string());
+                }
+                match before_first {
+                    Some(text) => atomic_write_unlocked(first, &text),
+                    None => std::fs::remove_file(first).map_err(|e| e.to_string()),
+                }
+            })();
+            if rollback.is_err() {
+                return Err(crate::locale::text(
+                    "模型配置写入失败，且凭据无法自动恢复。请核对凭据文件后重试。",
+                    "Model settings could not be saved and credentials could not be restored automatically. Check the credentials file before retrying.",
+                ).into());
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub(crate) fn atomic_write(path: &Path, text: &str) -> Result<(), String> {
     let _guard = MANAGED_FILE_WRITE_LOCK
         .lock()
@@ -183,65 +253,6 @@ fn fsync_parent_dir(path: &Path) {
 #[cfg(not(unix))]
 fn fsync_parent_dir(_path: &Path) {}
 
-/// 行级合并一个顶层段落里的字段；只改目标字段，其他 YAML 内容原样保留。
-pub(super) fn merge_section_field(text: &str, section: &str, field: &str, value: &str) -> String {
-    let section_header = format!("{section}:");
-    let new_line = format!("  {field}: {value}");
-    let mut out = String::new();
-    let mut in_section = false;
-    let mut saw_section = false;
-    let mut wrote = false;
-    for line in text.lines() {
-        // 容忍 UTF-8 BOM：文件首行的段头可能带 BOM（trim 不去 \u{feff}），
-        // 失配会追加重复段
-        let head = line.strip_prefix('\u{feff}').unwrap_or(line);
-        if !head.starts_with(' ') && head.trim_end() == section_header {
-            in_section = true;
-            saw_section = true;
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        if in_section {
-            if let Some(rest) = line.trim_start().strip_prefix(field) {
-                if rest.trim_start().starts_with(':') {
-                    if !wrote {
-                        out.push_str(&new_line);
-                        out.push('\n');
-                        wrote = true;
-                    }
-                    continue;
-                }
-            }
-            if !line.starts_with(' ') && !line.is_empty() {
-                if !wrote {
-                    out.push_str(&new_line);
-                    out.push('\n');
-                    wrote = true;
-                }
-                in_section = false;
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !wrote {
-        if saw_section {
-            out.push_str(&new_line);
-            out.push('\n');
-        } else {
-            if !out.is_empty() && !out.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(&section_header);
-            out.push('\n');
-            out.push_str(&new_line);
-            out.push('\n');
-        }
-    }
-    out
-}
-
 #[cfg(windows)]
 fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
     if !target.exists() {
@@ -276,6 +287,39 @@ fn replace_file(temp: &Path, target: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{retryable_io, update_text_file};
+
+    #[cfg(windows)]
+    #[test]
+    fn paired_import_restores_credentials_when_settings_cannot_be_replaced() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-pair-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("credentials.yaml");
+        let second = root.join("settings.yaml");
+        std::fs::write(&first, "original-key").unwrap();
+        std::fs::write(&second, "original-settings").unwrap();
+        let original_permissions = std::fs::metadata(&second).unwrap().permissions();
+        let mut permissions = original_permissions.clone();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&second, permissions).unwrap();
+        let result = super::update_text_pair(&first, &second, |_, _| {
+            Ok(("new-key".into(), "new-settings".into()))
+        });
+        std::fs::set_permissions(&second, original_permissions).unwrap();
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "original-key");
+        assert_eq!(
+            std::fs::read_to_string(&second).unwrap(),
+            "original-settings"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn retryable_io_classifies_conflict_kinds() {

@@ -29,7 +29,8 @@ mod parser;
 
 use parser::{normalize_section, parse_providers, valid_env_name};
 
-use crate::credentials::upsert as upsert_credential;
+#[cfg(test)]
+use crate::credentials::upsert_checked as upsert_credential;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -138,16 +139,17 @@ pub fn export_yaml(config: &Config) -> Result<Option<String>, String> {
     let text = std::fs::read_to_string(&settings_path).map_err(|e| {
         crate::locale::error("读取 settings.yaml 失败", "Failed to read settings.yaml", e)
     })?;
-    let section = extract_section_text(&text);
-    if section.trim().is_empty() {
+    let document = crate::yaml_fields::parse(&text)?;
+    let Some(section) = document.get(SECTION_KEY) else {
         return Ok(None);
-    }
-    let custom_only = filter_builtin_routes(&section);
+    };
+    let normalized = crate::yaml_fields::render(&serde_json::json!({SECTION_KEY: section}));
+    let custom_only = filter_builtin_routes(&normalized);
     if custom_only.trim().is_empty() {
         return Ok(None);
     }
     // 脱敏：分享文本绝不携带密钥样字段（与前端"不含 API Key"提示一致）
-    Ok(Some(parser::strip_secret_lines(&custom_only)))
+    parser::strip_secret_lines(&custom_only).map(Some)
 }
 
 /// 从 settings.yaml 文本中提取 llm-pi-ai 顶层段（纯逻辑，供单测）。
@@ -382,22 +384,21 @@ fn apply_inner(app: &AppHandle, payload: ImportApplyPayload) -> Result<(), Strin
         provided.push(name.clone());
     }
 
-    // 3) 先写凭据：若后续 settings 写入失败，最多留下未引用的凭据；反过来会让
-    // 已热发布的路由短暂引用不存在的 key，影响正在进行的模型请求。
+    // 两份内容都验证通过才写入；凭据先于引用发布，后续失败则恢复凭据。
     let credentials_path = config.dsh_home().join(".credentials.yaml");
-    if !payload.keys.is_empty() {
-        app_state::update_text_file(&credentials_path, |mut text| {
-            for (name, key) in &payload.keys {
-                text = upsert_credential(&text, name, key.trim());
-            }
-            Ok(text)
-        })?;
-    }
-
-    // 4) 整体替换或追加 llm-pi-ai 段；读—改—写在同一锁内完成。
     let settings_path = config.dsh_home().join("settings.yaml");
     let normalized = normalize_section(&payload.yaml)?;
-    app_state::update_text_file(&settings_path, |text| upsert_section(&text, &normalized))?;
+    app_state::update_text_pair(
+        &credentials_path,
+        &settings_path,
+        |mut credentials, settings| {
+            let settings = upsert_section(&settings, &normalized)?;
+            for (name, key) in &payload.keys {
+                credentials = crate::credentials::upsert_checked(&credentials, name, key.trim())?;
+            }
+            Ok((credentials, settings))
+        },
+    )?;
 
     crate::logging::log(&format!(
         "model-import: 已导入 {} 个提供方路由（写 settings.yaml + credentials.yaml）",
@@ -427,6 +428,15 @@ fn settings_has_section(text: &str) -> bool {
 /// 只替换同名顶层段，绝不触碰其他顶层段。原文件已含多个同名顶层段时返回
 /// 错误：重复键的 YAML 语义未定义，静默选边会让结果取决于解析器。
 fn upsert_section(text: &str, new_section: &str) -> Result<String, String> {
+    let mut expected = crate::yaml_fields::parse(text)?;
+    let replacement = crate::yaml_fields::parse(new_section)?;
+    expected[SECTION_KEY] = replacement.get(SECTION_KEY).cloned().ok_or_else(|| {
+        crate::locale::text(
+            "缺少模型配置段。",
+            "The model configuration section is missing.",
+        )
+        .to_string()
+    })?;
     let mut out = String::new();
     let mut replaced = false;
     let mut lines = text.lines().peekable();
@@ -481,12 +491,37 @@ fn upsert_section(text: &str, new_section: &str) -> Result<String, String> {
         )
         .into());
     }
+    if crate::yaml_fields::parse(&out)? != expected {
+        return Err(crate::locale::text(
+            "无法在保留其他配置的前提下合并模型配置，原文件未更改。",
+            "The model configuration cannot be merged without changing other settings; the original file was kept.",
+        ).into());
+    }
     Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_model_ids_and_scrubs_nested_multiline_secrets() {
+        for models in ["[{}]", "[null]", "[{id: ''}]", "[{id: x}, {id: x}]"] {
+            assert!(parse_providers(&format!(
+                "llm-pi-ai: {{providers: {{gw: {{models: {models}}}}}}}"
+            ))
+            .is_err());
+        }
+        let source = "llm-pi-ai:\n  providers:\n    gw:\n      models: [{id: x}]\n      headers: {Authorization: fake-secret, Accept: text}\n      apiKey: |\n        multiline-secret\n";
+        assert!(parse_providers(source).is_err());
+        let out = parser::strip_secret_lines(source).unwrap();
+        assert!(!out.contains("fake-secret") && !out.contains("multiline-secret"));
+        assert_eq!(
+            crate::yaml_fields::parse(&out).unwrap()[SECTION_KEY]["providers"]["gw"]["headers"]
+                ["Accept"],
+            "text"
+        );
+    }
 
     const SAMPLE: &str = "\
 llm-pi-ai:
@@ -550,32 +585,33 @@ llm-pi-ai:
       models:
         - id: x
 ";
-        let out = parser::strip_secret_lines(section);
+        let out = parser::strip_secret_lines(section).unwrap();
         assert!(!out.contains("sk-1") && !out.contains("sk-2") && !out.contains("Bearer"));
-        assert!(out.contains("displayName: Acme") && out.contains("id: x"));
+        let parsed: serde_json::Value = serde_saphyr::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["llm-pi-ai"]["providers"]["acme-gw"]["displayName"],
+            "Acme"
+        );
     }
 
     #[test]
     fn reject_non_model_config() {
         let err = parse_providers("locale:\n  preference: zh\n").unwrap_err();
-        assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
     fn reject_additional_top_level_section() {
         let text = "llm-pi-ai:\n  providers:\n    gw:\n      models:\n        - id: x\nlocale:\n  preference: en\n";
         let err = normalize_section(text).unwrap_err();
-        assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
     fn reject_duplicate_model_section() {
         let text = "llm-pi-ai:\n  providers:\n    one:\n      models:\n        - id: x\nllm-pi-ai:\n  providers:\n    two:\n      models:\n        - id: y\n";
         let err = parse_providers(text).unwrap_err();
-        assert!(
-            err.contains("重复") || err.contains("duplicate"),
-            "unexpected: {err}"
-        );
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
@@ -615,14 +651,14 @@ llm-pi-ai:
     #[test]
     fn reject_empty_providers() {
         let err = parse_providers("llm-pi-ai:\n  other: 1\n").unwrap_err();
-        assert!(err.contains("providers"), "unexpected: {err}");
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
     fn reject_provider_without_models() {
         let text = "llm-pi-ai:\n  providers:\n    gw:\n      apiKeyEnv: K\n";
         let err = parse_providers(text).unwrap_err();
-        assert!(err.contains("models"), "unexpected: {err}");
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
@@ -652,9 +688,12 @@ llm-pi-ai:
     fn credential_upsert_merges_by_name() {
         // 凭据以 v1 布局（version + refs）写入，与 dsh 读取格式一致
         let text = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: keep-me\n  CORP_GATEWAY_KEY: old-key\n";
-        let out = upsert_credential(text, "CORP_GATEWAY_KEY", "new-key");
+        let out = upsert_credential(text, "CORP_GATEWAY_KEY", "new-key").unwrap();
         assert!(out.starts_with("version: 1"));
-        assert!(out.contains("  CORP_GATEWAY_KEY: 'new-key'"));
+        assert_eq!(
+            crate::yaml_fields::parse(&out).unwrap()["refs"]["CORP_GATEWAY_KEY"],
+            "new-key"
+        );
         assert!(out.contains("  DEEPSEEK_API_KEY: keep-me"));
         assert!(!out.contains("old-key"));
     }
@@ -662,9 +701,12 @@ llm-pi-ai:
     #[test]
     fn credential_upsert_appends_when_missing() {
         let text = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: keep-me\n";
-        let out = upsert_credential(text, "CORP_GATEWAY_KEY", "k");
+        let out = upsert_credential(text, "CORP_GATEWAY_KEY", "k").unwrap();
         assert!(out.contains("  DEEPSEEK_API_KEY: keep-me"));
-        assert!(out.contains("  CORP_GATEWAY_KEY: 'k'"));
+        assert_eq!(
+            crate::yaml_fields::parse(&out).unwrap()["refs"]["CORP_GATEWAY_KEY"],
+            "k"
+        );
         assert!(out.starts_with("version: 1"));
     }
 
@@ -742,7 +784,7 @@ llm-pi-ai:
     #[test]
     fn normalize_rejects_invalid() {
         let err = normalize_section("locale:\n  preference: zh\n").unwrap_err();
-        assert!(err.contains("llm-pi-ai"), "unexpected: {err}");
+        assert!(err.contains("YAML"), "unexpected: {err}");
     }
 
     #[test]
