@@ -387,8 +387,14 @@ function copyImage(img) {
 // —— 菜单渲染（支持图标异步填充 + hover 子菜单）——
 // 图标首帧即占位（内联 SVG 数据 URL，零网络），真实图标加载完成后原地替换；
 // 提取失败则保留占位符，不会出现空白。app: 图标在注入时预取一次预热 Rust 缓存。
-var PH_FILE = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='16'%20viewBox='0%200%2016%2016'%3E%3Cpath%20d='M4.5%201.5h5L12%204v10.5h-7.5z'%20fill='none'%20stroke='%238b8b94'/%3E%3Cpath%20d='M9.5%201.5V4H12'%20fill='none'%20stroke='%238b8b94'/%3E%3C/svg%3E";
-var PH_APP = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='16'%20viewBox='0%200%2016%2016'%3E%3Crect%20x='1.5'%20y='1.5'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='%238b8b94'/%3E%3Crect%20x='9'%20y='1.5'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='%238b8b94'/%3E%3Crect%20x='1.5'%20y='9'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='%238b8b94'/%3E%3Crect%20x='9'%20y='9'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='%238b8b94'/%3E%3C/svg%3E";
+// 占位灰随 dsh 主题取档（data URI 内取不到 currentColor，注入时选值）：
+// 深色沿用中性灰 8b8b94，浅色取 text-dim 档 61666b，与菜单次要文字同灰。
+var PH_STROKE = (SEP_BORDER_TOKEN === '--dsw-alias-border-l1' ? '%238b8b94' : '%2361666b');
+function phSvg(body) {
+  return "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='16'%20viewBox='0%200%2016%2016'%3E" + body + "%3C/svg%3E";
+}
+var PH_FILE = phSvg("%3Cpath%20d='M4.5%201.5h5L12%204v10.5h-7.5z'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E%3Cpath%20d='M9.5%201.5V4H12'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E");
+var PH_APP = phSvg("%3Crect%20x='1.5'%20y='1.5'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E%3Crect%20x='9'%20y='1.5'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E%3Crect%20x='1.5'%20y='9'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E%3Crect%20x='9'%20y='9'%20width='5.5'%20height='5.5'%20rx='1'%20fill='none'%20stroke='" + PH_STROKE + "'/%3E");
 function placeholderFor(spec) {
   return spec && spec.slice(0, 5) === 'file:' ? PH_FILE : PH_APP;
 }

@@ -287,7 +287,8 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-day[data-lv]:not([data-lv="0"]) { color: rgba(255,255,255,0.95); }
 .usage-day.selected { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 /* 今天：日期数字加粗 + accent 色（不高亮整格，保持热力可读） */
-.usage-day.today > span:first-child { font-weight: 700; color: var(--dshd-accent); }
+.usage-day.today > span:first-child { font-weight: 600; color: var(--dshd-accent); }
+/* 白字压在按数据档着色的填色格上，须恒为白（dsh 无对应令牌） */
 .usage-day.today[data-lv]:not([data-lv="0"]) > span:first-child { color: #fff; }
 @media (prefers-color-scheme: light) {
   /* 浅色主题：lv1/2 格底色贴近白底，白字对比不足 4.5:1——低热度格改深色
@@ -359,7 +360,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   flex: none; width: 24px; height: 24px; border-radius: var(--dshd-r-sm);
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--usage-accent); color: #fff;
-  font-size: var(--dshd-fs-2xs); font-weight: 700; letter-spacing: .2px;
+  font-size: var(--dshd-fs-2xs); font-weight: 600; letter-spacing: .2px;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--usage-accent) 25%, transparent);
 }
 .usage-acc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dshd-fs-md); font-weight: 600; color: var(--dshd-text); }
