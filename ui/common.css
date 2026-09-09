@@ -78,7 +78,8 @@
   --dshd-danger-hover: rgba(242, 90, 90, 0.15);
   --dshd-danger-active: rgba(242, 90, 90, 0.22);
   /* 语义状态色 = dsh state-* 别名逐值：error 深色 red-400 / 浅色 red-600、
-     success green-500、warning 深色 amber-500 / 浅色 amber-600（warn-label） */
+     success green-500、warning 深色 amber-500；浅色 success/warning 基值
+     对比度不足，已按 AA 派生加深（推导见浅色块注释） */
   --dshd-error: #f25a5a;
   --dshd-error-text: #f25a5a;
   --dshd-success: #22c55e;
@@ -212,10 +213,15 @@
     --dshd-danger-active: rgba(236, 19, 19, 0.09);
     --dshd-error: #ec1313;
     --dshd-error-text: #ec1313;
-    --dshd-success: #22c55e;
-    --dshd-success-text: #22c55e;
-    --dshd-warning: #dd8629;
-    --dshd-warning-subtle: rgba(221, 134, 41, 0.13);
+    /* 上游底值 green-500/amber-600 在浅底文字仅 2.2/2.7:1，按 WCAG AA 同色相
+       加深派生：success 基础档（dot 等非文本）green-600 过 3:1 非文本线、
+       文档次 green-700 与 warning amber-700 均 4.9:1 过文字线；warning 文字
+       与 dot 共用一档，dot 同步达标；error 保持上游 red-600（贴线 4.4:1，
+       有边框/图标/title 冗余，对齐上游优先） */
+    --dshd-success: #16a34a;
+    --dshd-success-text: #15803d;
+    --dshd-warning: #b45309;
+    --dshd-warning-subtle: rgba(180, 83, 9, 0.13);
     --dshd-error-subtle: rgba(236, 19, 19, 0.05);
     --dshd-error-border: rgba(236, 19, 19, 0.30);
     --dshd-input-bg: rgba(38, 49, 72, 0.045);

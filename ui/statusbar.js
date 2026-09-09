@@ -176,24 +176,36 @@ function renderBalance() {
     WALLET_ICON +
     '<span class="' + dotClass + '" aria-hidden="true"></span>' +
     '<span id="balance-text">' + esc(state.text) + '</span>';
-  const hints = [];
-  if (state.kind === 'no_key') {
-    // 未配置 Key：引导点击去设置页（不点 Details 语义）
-    hints.push(dshdT('balanceNoKeyHint'));
-  } else if (state.kind === 'invalid_key') {
-    hints.push(dshdT('balanceInvalidKeyHint'));
+  const stale = !!(lastBalance && lastBalance.stale);
+  // 耗尽行仅在预警行缺失时补位：remaining≤0 且 total 可算时已由「余量告急」覆盖
+  const depleted = state.kind === 'ok' && state.low === 'none' && !stale
+    && !!lastBalance && !lastBalance.is_available;
+  let hints;
+  if (state.kind === 'no_key' || state.kind === 'invalid_key') {
+    // 未配置/无效 Key：引导点击去设置页（不点 Details 语义）
+    hints = [dshdT(state.kind === 'no_key' ? 'balanceNoKeyHint' : 'balanceInvalidKeyHint')];
   } else {
+    // 状态行在前、操作提示在后：悬停先看到"怎么了"再看到"点哪去"；
+    // 状态点语义不只靠颜色：悬停文字解释当前状态（不可用/阈值/过期/耗尽）
+    hints = [];
+    if (state.kind === 'unavailable') hints.push(dshdT('balanceUnavailable'));
+    if (state.low === 'critical') hints.push(dshdT('usageWarnCritical'));
+    else if (state.low === 'warning') hints.push(dshdT('usageWarnLow'));
+    if (stale) hints.push(dshdT('staleBalance'));
+    if (depleted) hints.push(dshdT('balanceDepleted'));
     hints.push(dshdT('balanceChipHint'));
   }
-  // 预警不只靠颜色：悬停文字给出阈值语义
-  if (state.low === 'critical') hints.push(dshdT('usageWarnCritical'));
-  else if (state.low === 'warning') hints.push(dshdT('usageWarnLow'));
-  if (lastBalance && lastBalance.stale) hints.push(dshdT('staleBalance'));
   chip.title = hints.join('\n');
   const credentialIssue = state.kind === 'no_key' || state.kind === 'invalid_key';
   chip.dataset.credentialIssue = credentialIssue ? '1' : '';
   const actionHint = state.kind === 'invalid_key' ? dshdT('balanceInvalidKeyHint') : dshdT('balanceNoKeyHint');
-  chip.setAttribute('aria-label', state.text + (credentialIssue ? ' — ' + actionHint : ' — ' + dshdT('balanceDetailsAria')));
+  // 读屏信息与视觉对齐：状态行插中间；'--' 态用状态词替代无意义的杠杠，
+  // 并滤掉与首段重复的状态行避免同一词读两遍
+  const ariaLead = state.kind === 'unavailable' && state.text === '--'
+    ? dshdT('balanceUnavailable') : state.text;
+  const ariaStatus = credentialIssue ? [] : hints.slice(0, -1).filter((line) => line !== ariaLead);
+  chip.setAttribute('aria-label',
+    [ariaLead].concat(ariaStatus, [credentialIssue ? actionHint : dshdT('balanceDetailsAria')]).join(' — '));
 }
 
 function updateEdgeSeparator() {
@@ -251,6 +263,32 @@ function applyNativeTips() {
 }
 
 // ---------- 其他 ----------
+
+// 数值文本与 12px 图标/状态点的垂直光学补偿：数字无下降部，其墨迹中心
+// 相对行盒中心的偏移 = (布局 ascent − 布局 descent − 数字墨迹高) / 2，
+// 只取决于字体度量且逐平台不同（Windows Segoe UI ≈0.7px、macOS SF Pro
+// 近似 0）——用 canvas 实测当前字体栈渲染 '0' 的度量来计算补偿，避免
+// 硬编码单一平台常数在其余平台反向过矫；度量不可用则不设变量，
+// CSS 回退 0px 维持原状（本次改动前就是 0 偏移）。
+function applyTextOpticalShift() {
+  try {
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return;
+    ctx.font = '500 12px ' + getComputedStyle(document.body).fontFamily;
+    // 赋值被拒时 canvas 静默回落 10px 默认字体，度量会基于错误字体
+    if (ctx.font.indexOf('12px') === -1) return;
+    const m = ctx.measureText('0');
+    const metrics = [m.fontBoundingBoxAscent, m.fontBoundingBoxDescent, m.actualBoundingBoxAscent];
+    if (!metrics.every(Number.isFinite)) return;
+    // 行盒中心到墨迹中心的偏移，限幅 ±1px 防异常字体度量
+    const offset = Math.max(-1, Math.min(1, (metrics[0] - metrics[1] - metrics[2]) / 2));
+    // 量化到 0.1px；不足 0.2px 视为已对齐，不引入无谓的亚像素偏移
+    const shift = Math.round(offset * 10) / 10;
+    if (Math.abs(shift) >= 0.2) {
+      document.documentElement.style.setProperty('--dshd-text-opt-shift', (-shift).toFixed(1) + 'px');
+    }
+  } catch (e) { /* 度量失败维持 0 回退 */ }
+}
 
 // 语言热切换：静态文案经 common.js 的 dshdSetLanguage 重渲染；
 // stats 文案由 Rust 侧下一次轮询刷新（≤5s），余额 chip 即时重渲染
@@ -311,6 +349,7 @@ function init() {
     renderBalance();
   }).catch(() => {});
   dshdApplyI18n();
+  applyTextOpticalShift();
   renderStats();
   renderBalance();
   // 初始化完成回报：Rust 侧加载自愈看门狗据此判断页面是否就绪

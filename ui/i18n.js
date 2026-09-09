@@ -92,6 +92,7 @@ const DSHD_MESSAGES = {
   balanceInvalidKey: ['API Key 无效', 'Invalid API key'],
   balanceInvalidKeyHint: ['DeepSeek API Key 无效。点击打开设置页更换。', 'The DeepSeek API key is invalid. Click to replace it in Settings.'],
   balanceUnavailable: ['余额不可用', 'Balance unavailable'],
+  balanceDepleted: ['余额已耗尽', 'Balance depleted'],
   balanceDetailsAria: ['API 余额详情', 'API balance details'],
   checkFailed: ['检查更新失败', 'Update check failed'],
   checkFailedRetry: ['检查失败，请稍后重试', 'The update check failed. Please try again later.'],

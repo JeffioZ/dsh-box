@@ -395,7 +395,7 @@ body.window-inactive .footer { opacity: .6; }
      ready 切换瞬间进度区整体向下跳一下 */
   line-height: 21px;
   font-weight: 600;
-  color: var(--dshd-success) !important;
+  color: var(--dshd-success-text) !important;
 }
 
 /* 占位隐藏：视觉收起但保留布局高度，避免 ready/阶段切换时进度区高度跳动 */

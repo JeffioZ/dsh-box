@@ -53,6 +53,12 @@ body.window-inactive .vsep { opacity: .55; }
   color: var(--dshd-text); font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+/* 数值文本与 12px 图标/状态点的垂直光学对齐：数字无下降部，墨迹中心
+   相对行盒中心的偏移 = (布局 ascent − 布局 descent − 数字墨迹高) / 2，
+   只取决于字体度量且逐平台不同（Windows Segoe UI ≈0.7px、macOS SF Pro
+   近似 0）——statusbar.js 启动时用 canvas 实测设 --dshd-text-opt-shift，
+   度量不可用则回退 0px 维持原状，与 .dot 的水平光学补偿同属盒模型微调 */
+.stats .g-t, .sb-chip #balance-text { position: relative; top: var(--dshd-text-opt-shift, 0px); }
 /* 缓存命中组：success 色点缀（文字本身承载语义，颜色非唯一信号） */
 .stats .g.cache .g-t { color: var(--dshd-success-text); }
 /* 组间竖分隔线：1px 高 10px，与 dsh 分隔线色一致 */
@@ -96,11 +102,6 @@ body.window-inactive .vsep { opacity: .55; }
 .sb-chip.low-warning #balance-text { color: var(--dshd-warning); }
 .sb-chip.low-critical #balance-text { color: var(--dshd-error-text); }
 
-/* 浅色主题覆盖 */
-@media (prefers-color-scheme: light) {
-  /* 底色随 --dshd-chrome-bg 令牌切换，无需浅色覆盖 */
-  .statusbar::before { background: rgba(0, 0, 0, .04); }
-}
 @media (prefers-reduced-motion: reduce) {
   .stats, .sb-chip { transition: none; }
 }
