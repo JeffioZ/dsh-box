@@ -98,7 +98,13 @@
       else menu.focusFirst();
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') refresh();
+      if (document.visibilityState === 'visible') {
+        // 极早期 set_focus 早于 WebView2 visibility 翻转的时序下焦点留在
+        // body，而键盘导航挂在 #list 上收不到按键——可见后补一次聚焦。
+        // 必须排在 refresh 完成之后：refresh 会 setItems 重建行（IPC 异步），
+        // 先聚焦会被重建打回 body，等于没修
+        refresh().finally(() => menu.focusFirst());
+      }
     });
     window.addEventListener('dshd-language-changed', refresh);
     refresh();

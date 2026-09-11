@@ -1,8 +1,9 @@
-//! 统一控制中心（兼容窗口标签 app-dialog）：
-//! 余额详情 / 检查更新（带进度）/ 关于。
+//! 统一自绘弹窗（窗口标签 app-dialog）：
+//! 用量与余额 / 插件 / 设置 / 检查更新（带进度）/ 关于，以及更新提示、
+//! 更新应用确认、轻量提示三个紧凑视图。
 //!
 //! 替代原生消息框：立即出窗显示进度，网络查询后台进行、结果经事件下发，
-//! 解决“点击检查更新后长时间没有响应”的问题。窗口启动时预创建、显示前同步
+//! 解决"点击检查更新后长时间没有响应"的问题。窗口启动时预创建、显示前同步
 //! 渲染本次内容（show 第一帧即正确内容），与托盘菜单/选择器同一套机制
 //! （不在事件回调里创建/销毁窗口）。
 
@@ -41,37 +42,37 @@ fn fit_card_height(content_height: f64) -> f64 {
     (content_height - 48.0).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT)
 }
 
-/// 弹窗卡片逻辑宽度：正常为 800px；窄窗口时把自绘阴影也完整收进主窗口。
-fn dialog_card_width(app: &AppHandle) -> f64 {
-    crate::main_window(app)
-        .and_then(|w| {
-            let size = w.inner_size().ok()?;
-            let scale = w.scale_factor().ok()?;
-            Some(size.width as f64 / scale)
-        })
-        .map(fit_card_width)
-        .unwrap_or(CARD_MAX_WIDTH)
+/// 状态栏高度（隐藏状态栏时为 0，与 sync_bounds 口径一致）。
+fn status_bar_height(app: &AppHandle) -> f64 {
+    if app.state::<AppState>().config().hide_statusbar {
+        0.0
+    } else {
+        crate::titlebar::STATUSBAR_HEIGHT
+    }
 }
 
-/// 弹窗卡片逻辑高度：dsh 设置弹窗规格 min(800px, dsh 本体视口高-48)。
-/// dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏与状态栏），
-/// 而非整个主窗口高度——直接取主窗口高度会偏大。
-fn dialog_card_height(app: &AppHandle) -> f64 {
-    crate::main_window(app)
-        .and_then(|w| {
-            let size = w.inner_size().ok()?;
-            let scale = w.scale_factor().ok()?;
-            let total = size.height as f64 / scale;
-            // 标题栏 + 状态栏（隐藏状态栏时为 0，与 sync_bounds 口径一致）
-            let status_h = if app.state::<AppState>().config().hide_statusbar {
-                0.0
-            } else {
-                crate::titlebar::STATUSBAR_HEIGHT
-            };
-            Some(total - crate::titlebar::TITLEBAR_HEIGHT - status_h)
-        })
-        .map(fit_card_height)
-        .unwrap_or(640.0)
+/// 主窗口内容区逻辑视口（宽, 内容高）。只含主窗口 getter，必须在 show 锁
+/// 之外调用——getter 经事件循环往返阻塞等主线程服务，持锁调用即 H1 互锁
+/// （见 show_with_update_token）。
+fn main_content_viewport(app: &AppHandle) -> Option<(f64, f64)> {
+    let w = crate::main_window(app)?;
+    let scale = w.scale_factor().ok()?;
+    let size = w.inner_size().ok()?;
+    Some((
+        size.width as f64 / scale,
+        size.height as f64 / scale - crate::titlebar::TITLEBAR_HEIGHT - status_bar_height(app),
+    ))
+}
+
+/// 由主窗口内容区视口推弹窗卡片尺寸（视口未知时用规格默认值兜底）。
+/// 弹窗卡片逻辑宽度正常为 800px，窄窗口时把自绘阴影也完整收进主窗口；
+/// 高度口径：dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏与
+/// 状态栏），而非整个主窗口高度——直接取主窗口高度会偏大。
+fn card_size_for(viewport: Option<(f64, f64)>) -> (f64, f64) {
+    match viewport {
+        Some((vw, vh)) => (fit_card_width(vw), fit_card_height(vh)),
+        None => (CARD_MAX_WIDTH, 640.0),
+    }
 }
 
 /// 紧凑弹窗（update-prompt / app-restart / notice）高度按文案长度自适应：
@@ -122,6 +123,15 @@ fn compact_height_hint(kind: &str, initial: &serde_json::Value) -> f64 {
 /// （更新应用确认）与 `notice`（轻量提示）是紧凑尺寸（宽 400，高按
 /// 文案自适应），其余 kind 用自适应大卡片。
 fn dialog_size(app: &AppHandle, kind: &str, compact_extra: f64) -> (f64, f64) {
+    dialog_size_with(
+        card_size_for(main_content_viewport(app)),
+        kind,
+        compact_extra,
+    )
+}
+
+/// [`dialog_size`] 的锁外快照版：cards 由调用方在取 show 锁前读取（H1）。
+fn dialog_size_with(cards: (f64, f64), kind: &str, compact_extra: f64) -> (f64, f64) {
     if matches!(kind, "update-prompt" | "app-restart" | "notice") {
         // 宽度：仅容纳最长英文文案一行（约 342px @12.5px）+ 左右 padding 40px；
         // 极长版本号由 overflow-wrap 折行兜底，不为罕见冗余预留大宽度。
@@ -135,8 +145,8 @@ fn dialog_size(app: &AppHandle, kind: &str, compact_extra: f64) -> (f64, f64) {
         );
     }
     (
-        dialog_card_width(app) + SHADOW_SIDES * 2.0,
-        dialog_card_height(app) + SHADOW_TOP + SHADOW_BOTTOM,
+        cards.0 + SHADOW_SIDES * 2.0,
+        cards.1 + SHADOW_TOP + SHADOW_BOTTOM,
     )
 }
 
@@ -183,29 +193,32 @@ fn main_is_presented(main: &tauri::Window) -> bool {
 #[derive(serde::Serialize, Clone)]
 pub struct AppDialogOpen {
     pub title: String,
-    /// stats / balance / check / plugins / settings / about
+    /// usage / plugins / settings / check / about / update-prompt / app-restart / notice
     pub kind: String,
     pub initial: serde_json::Value,
 }
 
-/// 启动时预创建（隐藏）：此后只定位/显示/隐藏。
+/// 启动时预创建（隐藏）：此后只定位/显示/隐藏。仅在主线程（启动路径）
+/// 调用——内部读取主窗口几何（getter）。
 pub fn precreate(app: &AppHandle) {
+    // 弹窗窗口 = 自适应卡片 + 自绘阴影余量；大视口仍严格对齐 dsh 的
+    // width 800 / height min(800px, 100vh-48px)。
+    // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
+    // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
+    let (dialog_w, dialog_h) = dialog_size(app, "default", 0.0);
+    let initial_pos = main_inner_logical_rect(app)
+        .map(|rect| centered_dialog_pos(rect, status_bar_height(app), dialog_w, dialog_h));
+    precreate_sized(app, (dialog_w, dialog_h), initial_pos);
+}
+
+/// 以给定尺寸/位置创建弹窗窗口。几何参数由调用方预先读取：show 锁内的
+/// 现场重建（可能来自后台线程）不得读主窗口 getter（H1），其几何随后由
+/// 同序列的 set_size/set_position 立即修正，且窗口保持隐藏至延迟 show。
+fn precreate_sized(app: &AppHandle, size: (f64, f64), initial_pos: Option<(f64, f64)>) {
     // 导航白名单与主窗口一致：弹窗内容只允许加载内置页面（IPC 另有来源
     // 校验兜底，此处堵住内容本身被导航到任意远程地址的口子）
     let navigation_app = app.clone();
-    // 弹窗窗口 = 自适应卡片 + 自绘阴影余量；大视口仍严格对齐 dsh 的
-    // width 800 / height min(800px, 100vh-48px)。
-    let (dialog_w, dialog_h) = dialog_size(app, "default", 0.0);
-    // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
-    // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
-    let initial_pos = main_inner_logical_rect(app).map(|rect| {
-        let status_h = if app.state::<AppState>().config().hide_statusbar {
-            0.0
-        } else {
-            crate::titlebar::STATUSBAR_HEIGHT
-        };
-        centered_dialog_pos(rect, status_h, dialog_w, dialog_h)
-    });
+    let (dialog_w, dialog_h) = size;
     // 基础链拆成可重复构造的闭包：owner 挂接与回退置顶两条路径各自需要
     // 一条完整的 builder 链。
     let base = || {
@@ -315,25 +328,33 @@ fn show_with_update_token(
     initial: serde_json::Value,
     update_prompt_token: Option<u64>,
 ) {
-    // 状态提交、尺寸/位置与隐藏窗口内容注入必须在同一持锁序列内完成；
-    // 否则一个刚被普通页面抢占的更新提示仍可能晚到并覆盖新页面。
-    let _show_guard = APP_DIALOG_SHOW_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let win = match app.get_webview_window(APP_DIALOG_WINDOW) {
-        Some(w) => w,
-        None => {
-            // 兜底：窗口被销毁或创建失败（如主窗口恢复前用户极早打开），
-            // 现场重建——创建参数即几何，无异步跳变
-            crate::logging::log("app-dialog: 窗口不存在，现场重建");
-            precreate(app);
-            let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) else {
-                crate::logging::log("app-dialog: 窗口重建失败");
-                return;
-            };
-            w
+    // —— H1：所有依赖主线程事件循环的窗口 getter（is_visible / inner_size /
+    // inner_position / cursor_position / monitor_from_point 等）必须在取 show
+    // 锁之前读取。Windows 上同步 IPC 命令在主线程执行且会取这把锁
+    // （app_dialog_close / app_dialog_open_*），而后台线程同样会走到这里
+    // （托盘重启失败的 open_notice、dev 预览）：持锁调用 getter 即形成
+    // “后台线程持锁等主线程 + 主线程等锁”的全应用互锁。几何快照允许毫秒
+    // 级陈旧（只影响居中位置），锁内只保留非阻塞的 setter 与状态提交。
+    let main = crate::main_window(app);
+    let mut main_presented = main.as_ref().is_some_and(main_is_presented);
+    // 模态前置：主窗口隐藏/最小化（仅托盘运行）时先拉起再读几何。拉起是
+    // 非阻塞 setter，不违反 H1；且必须先拉起再取 rect——否则隐藏态下
+    // main_presented=false 走“指针所在屏居中”分支，多显示器下弹窗会脱离
+    // owner 窗口（回到原位置的主窗口可能在另一块屏）。极小概率的
+    // “stale 提交 + 主窗口被拉起”可接受：提交失败意味着已有其他弹窗在
+    // 展示，彼时主窗口必然已呈现，两条件近乎互斥。
+    if !main_presented {
+        if let Some(w) = main.as_ref() {
+            let _ = w.show();
+            let _ = w.unminimize();
+            main_presented = true;
+            crate::logging::log("app-dialog: 主窗口未呈现，已拉起后再显示弹窗");
         }
-    };
+    }
+    // 最小化窗口在 Windows 上 inner_position 报 (-32000,-32000)：unminimize
+    // 是异步派发，极端时序下仍可能读到哨兵值，按哨兵过滤退回屏幕居中兜底
+    let main_rect = main_inner_logical_rect(app).filter(|&(_, y, _, _)| y > -20000.0);
+    let cards = card_size_for(main_content_viewport(app));
     // 统一注入版本信息：导航栏底部与“关于”页从任何入口切换过去都可用。
     let mut initial = if initial.is_object() {
         initial
@@ -373,46 +394,16 @@ fn show_with_update_token(
         kind: kind.to_string(),
         initial,
     };
-    // 存入状态供页面拉取（隐藏窗口收不到 emit，Rust eval 直呼页面刷新兜底）
-    let state = app.state::<AppState>();
-    let committed = if let Some(token) = update_prompt_token {
-        state.commit_update_prompt_show(token, payload.clone())
-    } else {
-        state.set_last_dialog(payload.clone());
-        true
-    };
-    if !committed {
-        crate::logging::log("app-dialog: 更新提示展示权已失效，取消旧展示");
-        return;
-    }
-    // 更新提示 token 过期的路径已在上方门控返回：以下窗口副作用（拉起主
-    // 窗口、尺寸/位置、代次）都只属于有效展示。模态前置：弹窗以主窗口为
-    // owner，主窗口隐藏/最小化（仅托盘运行）时先拉起主窗口，再统一走
-    // “内容区居中 + 禁用主窗口”的模态路径，弹窗不脱离主窗口悬浮。
-    let main = crate::main_window(app);
-    let mut main_presented = main.as_ref().is_some_and(main_is_presented);
-    if !main_presented {
-        if let Some(w) = main.as_ref() {
-            let _ = w.show();
-            let _ = w.unminimize();
-            main_presented = true;
-            crate::logging::log("app-dialog: 主窗口未呈现，已拉起后再显示弹窗");
-        }
-    }
-    let (ww, wh) = dialog_size(app, kind, compact_hint);
+    let (ww, wh) = dialog_size_with(cards, kind, compact_hint);
     let mut pending_size = tauri::Size::Logical(tauri::LogicalSize::new(ww, wh));
     let mut pending_pos: Option<tauri::Position> = None;
     let mut center_fallback = false;
     let mut target_pos: Option<(f64, f64)> = None;
     if main_presented {
         // 主窗口正常显示时相对主窗口内容区居中（inner 口径，与卡片尺寸同源）。
-        if let Some((mlx, mly, mlw, mlh)) = main_inner_logical_rect(app) {
-            let status_h = if app.state::<AppState>().config().hide_statusbar {
-                0.0
-            } else {
-                crate::titlebar::STATUSBAR_HEIGHT
-            };
-            let (dx, dy) = centered_dialog_pos((mlx, mly, mlw, mlh), status_h, ww, wh);
+        if let Some((mlx, mly, mlw, mlh)) = main_rect {
+            let (dx, dy) =
+                centered_dialog_pos((mlx, mly, mlw, mlh), status_bar_height(app), ww, wh);
             crate::logging::log(&format!(
                 "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
             ));
@@ -451,9 +442,61 @@ fn show_with_update_token(
             center_fallback = true;
         }
     }
+    // —— 状态提交、尺寸/位置与隐藏窗口内容注入必须在同一持锁序列内完成；
+    // 否则一个刚被普通页面抢占的更新提示仍可能晚到并覆盖新页面。——
+    let _show_guard = APP_DIALOG_SHOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let win = match app.get_webview_window(APP_DIALOG_WINDOW) {
+        Some(w) => w,
+        None => {
+            // 兜底：窗口被销毁或创建失败（如主窗口恢复前用户极早打开），
+            // 现场重建——重建不得读主窗口 getter（H1），几何由本序列随后
+            // 的 set_size/set_position 立即修正，窗口保持隐藏至延迟 show
+            crate::logging::log("app-dialog: 窗口不存在，现场重建");
+            precreate_sized(app, (ww, wh), None);
+            // build 从非主线程调用只是把 CreateWindow 消息入队，紧随的
+            // get 可能仍为 None：短暂重试几轮再放弃（放弃后更新提示的
+            // token 已占用，只能靠下一次普通 show 的 re-queue 找回）
+            let mut rebuilt = None;
+            for _ in 0..10 {
+                if let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) {
+                    rebuilt = Some(w);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let Some(win) = rebuilt else {
+                crate::logging::log("app-dialog: 窗口重建失败");
+                return;
+            };
+            win
+        }
+    };
+    // 存入状态供页面拉取（隐藏窗口收不到 emit，Rust eval 直呼页面刷新兜底）
+    let committed = if let Some(token) = update_prompt_token {
+        state.commit_update_prompt_show(token, payload.clone())
+    } else {
+        state.set_last_dialog(payload.clone());
+        true
+    };
+    if !committed {
+        crate::logging::log("app-dialog: 更新提示展示权已失效，取消旧展示");
+        return;
+    }
+    // 任何把视图切离 check 的成功提交都取消待确认的 UAC：确认 UI 已随页面
+    // 切换消失，pwsh 等待线程应立即以“已取消”退出并释放 lifecycle 锁，
+    // 而不是悬置到下一次任意弹窗关闭
+    if kind != "check" {
+        state.set_pwsh_pending(false);
+    }
+    // 更新提示 token 过期的路径已在上方门控返回：以下窗口副作用（尺寸/
+    // 位置、代次）都只属于有效展示。主窗口的模态前置拉起已在锁外完成
+    // （见函数开头）；弹窗以主窗口为 owner，统一走“内容区居中 + 禁用
+    // 主窗口”的模态路径，不脱离主窗口悬浮。
     // 通过提交门控后才产生副作用：代次 +1（若上次关闭的延迟隐藏尚未执行，
     // 令其失效，避免误藏本次弹窗），并应用尺寸/位置。
-    let dialog_gen = app.state::<AppState>().bump_dialog_gen();
+    let dialog_gen = state.bump_dialog_gen();
     let _ = win.set_size(pending_size);
     if let Some(pos) = pending_pos {
         let _ = win.set_position(pos);
@@ -485,19 +528,28 @@ fn show_with_update_token(
                     crate::logging::log(&format!(
                         "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
                         position.x as f64 / scale,
-                        position.y as f64 / scale
+                        position.y as f64 / scale,
                     ));
                 }
             }
-            let _ = win.show();
-            let _ = win.set_focus();
-            // 模态：只在弹窗真正显示的同一代次禁用主窗口；关闭/快速重开
-            // 让旧代次失效，不会留下主窗口被禁用的孤立状态。
-            if main_presented {
-                if let Some(main) = crate::main_window(&dispatch) {
-                    let _ = main.set_enabled(false);
-                    dispatch.state::<AppState>().set_main_disabled(true);
+            if win.show().is_ok() {
+                let _ = win.set_focus();
+                // WebView2：窗口级 set_focus 不把键盘焦点送进控制器——首次
+                // 打开按 Esc 无反应，需先点一下弹窗。补一次 webview 级聚焦
+                //（wry → MoveFocus(Programmatic)；UFCS 消 AsRef 歧义）
+                let _ = tauri::Webview::set_focus(win.as_ref());
+                // 模态：只在弹窗真正显示的同一代次禁用主窗口；关闭/快速重开
+                // 让旧代次失效，不会留下主窗口被禁用的孤立状态。
+                if main_presented {
+                    if let Some(main) = crate::main_window(&dispatch) {
+                        let _ = main.set_enabled(false);
+                        dispatch.state::<AppState>().set_main_disabled(true);
+                    }
                 }
+            } else {
+                // show 失败（窗口异常销毁等）：不留下"主窗口被禁用且无弹窗
+                // 可关"的孤立态，直接恢复主窗口
+                restore_main_after_dialog(&dispatch);
             }
         });
     });
@@ -510,41 +562,53 @@ fn show_with_update_token(
 /// 否则下次打开会先闪出上一弹窗的残影。
 pub fn close(app: &AppHandle) {
     let closed_kind = app.state::<AppState>().dialog_kind().unwrap_or_default();
-    // 代次 +1：令挂起的延迟隐藏失效（关闭后立刻重开不会被误藏）
-    let gen = app.state::<AppState>().bump_dialog_gen();
-    // 关闭弹窗视为取消待确认的 UAC 预告
-    app.state::<AppState>().set_pwsh_pending(false);
-    if let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) {
-        let _ = w.eval("window.__dshdReset && window.__dshdReset()");
-        let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
-        if let Some((next, token)) = pending {
-            // 连续提示在当前前台窗口内直接换页，不产生 hide/show 层级断档。
-            present_update_prompt(app, next, token);
-            return;
-        }
-        // 先恢复主窗口，让 WebView2 在弹窗仍占据前台时完成一帧合成；
-        // 下一帧再隐藏弹窗，避免露出主窗口后面的内容。
-        restore_main_after_dialog(app);
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            // 仅等一帧确保清空已提交；此前等待 50ms 会让空卡片明显停顿。
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            let h2 = handle.clone();
-            let _ = handle.run_on_main_thread(move || {
-                if h2.state::<AppState>().dialog_gen() == gen {
-                    if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
-                        let _ = w.hide();
-                    }
-                }
-            });
-        });
-    } else {
-        let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
-        if let Some((next, token)) = pending {
-            present_update_prompt(app, next, token);
+    // close 的副作用（eval 复位/状态收尾/延迟隐藏）必须与 show 的“提交+注入”
+    // 临界区同锁序列化：此前 close 不取锁，其副作用可切入 show 序列中间，
+    // 产生空白弹窗或“状态与可见性脱节”（提示静默丢失）。锁内已无主线程
+    // getter（H1 修复），主线程取锁不会与后台 show 互锁。
+    let pending = {
+        let _close_guard = APP_DIALOG_SHOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // 代次 +1：令挂起的延迟隐藏失效（关闭后立刻重开不会被误藏）
+        let gen = app.state::<AppState>().bump_dialog_gen();
+        // 关闭弹窗视为取消待确认的 UAC 预告
+        app.state::<AppState>().set_pwsh_pending(false);
+        let pending = if let Some(w) = app.get_webview_window(APP_DIALOG_WINDOW) {
+            let _ = w.eval("window.__dshdReset && window.__dshdReset()");
+            let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
+            if pending.is_none() {
+                // 先恢复主窗口，让 WebView2 在弹窗仍占据前台时完成一帧合成；
+                // 下一帧再隐藏弹窗，避免露出主窗口后面的内容。
+                restore_main_after_dialog(app);
+                let handle = app.clone();
+                std::thread::spawn(move || {
+                    // 仅等一帧确保清空已提交；此前等待 50ms 会让空卡片明显停顿。
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    let h2 = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if h2.state::<AppState>().dialog_gen() == gen {
+                            if let Some(w) = h2.get_webview_window(APP_DIALOG_WINDOW) {
+                                let _ = w.hide();
+                            }
+                        }
+                    });
+                });
+            }
+            pending
         } else {
-            restore_main_after_dialog(app);
-        }
+            let pending = app.state::<AppState>().finish_dialog_close(&closed_kind);
+            if pending.is_none() {
+                restore_main_after_dialog(app);
+            }
+            pending
+        };
+        pending
+    };
+    // 连续提示的换页展示在锁外发起（present → show 自身取锁；std Mutex
+    // 不可重入），同样在当前前台窗口内直接换页，不产生 hide/show 层级断档。
+    if let Some((next, token)) = pending {
+        present_update_prompt(app, next, token);
     }
 }
 
@@ -565,6 +629,8 @@ pub fn focus_dialog_if_visible(app: &AppHandle) -> bool {
     match app.get_webview_window(APP_DIALOG_WINDOW) {
         Some(w) if w.is_visible().unwrap_or(false) => {
             let _ = w.set_focus();
+            // 与 show 路径同因：WebView2 需 webview 级聚焦才有键盘输入
+            let _ = tauri::Webview::set_focus(w.as_ref());
             true
         }
         _ => false,
@@ -720,6 +786,13 @@ pub fn run_check(app: &AppHandle) {
 
 /// 弹窗内点击“更新/安装”：后台执行并写入结果状态。
 pub fn apply_update(app: &AppHandle, which: &str) {
+    // 更新已在执行时直接忽略后续请求（M3）：按钮禁用生效前到达的重复 IPC
+    // 可能以 "check" 来源进入（第一次请求已把视图切到进度页），没有
+    // update-prompt 的 token 门控，会重复启动更新并闪现“正在进行”假失败
+    if app.state::<AppState>().is_updating() {
+        crate::logging::log(&format!("app-dialog: 更新进行中，忽略重复请求：{which}"));
+        return;
+    }
     let handle = app.clone();
     let which = which.to_string();
     // 只消费用户正在确认的这一条提示；dsh 与应用更新各自排队，互不丢弃。
@@ -829,16 +902,19 @@ pub fn open_notice(app: &AppHandle, title: &str, message: String, severity: &str
         Some("update-prompt") | Some("app-restart")
     ) {
         crate::logging::log("app-dialog: 更新提示展示中，轻量提示回落原生框");
-        crate::native_dialog::show_message(
-            app,
-            message,
-            title,
-            if info {
-                tauri_plugin_dialog::MessageDialogKind::Info
-            } else {
-                tauri_plugin_dialog::MessageDialogKind::Warning
-            },
-        );
+        // blocking_show 阻塞调用线程直到用户点掉；托盘事件在主线程处理，
+        // 直接调用会冻结全部 UI——放后台线程执行（内部 getter 等主线程
+        // 服务，彼时主线程空闲，无互锁风险）
+        let title_owned = title.to_string();
+        let kind = if info {
+            tauri_plugin_dialog::MessageDialogKind::Info
+        } else {
+            tauri_plugin_dialog::MessageDialogKind::Warning
+        };
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            crate::native_dialog::show_message(&handle, message, &title_owned, kind);
+        });
         return;
     }
     show(
@@ -945,18 +1021,6 @@ pub fn open_plugins(app: &AppHandle) {
         crate::locale::text("管理插件", "Plugins"),
         "plugins",
         serde_json::json!({}),
-    );
-}
-
-pub fn open_stats(app: &AppHandle, group: Option<&str>) {
-    if !crate::tray_menu::managed_service_ready(app) {
-        return;
-    }
-    show(
-        app,
-        crate::locale::text("会话统计", "Session stats"),
-        "stats",
-        serde_json::json!({ "group": group }),
     );
 }
 

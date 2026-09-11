@@ -275,6 +275,7 @@ const DSHD_MESSAGES = {
   editCut: ['剪切', 'Cut'],
   editCopy: ['复制', 'Copy'],
   editPaste: ['粘贴', 'Paste'],
+  editPasteFailed: ['粘贴失败，请按 {key} 粘贴', 'Paste failed, press {key}'],
   editSelectAll: ['全选', 'Select all'],
   navRequiresReady: ['dsh 服务就绪后可用', 'Available when the dsh service is ready'],
   navManagedOnly: ['仅适用于 DSHBox 管理的本地服务', 'Available only for a local service managed by DSHBox'],

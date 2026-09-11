@@ -321,9 +321,12 @@ function renderUsageReport(report, seq, prediction) {
 
 // 预测推送事件：用量页打开期间常驻，切走/关闭时随账户监听一并卸载。
 // 只更新「预计今日」一格；无预测（今日尚无用量）时移除该格。
+// 在途守卫同 ensureUsageAccountsListener（防幽灵监听）
 let usagePredictionUnlisten = null;
+let usagePredictionEnsuring = false;
 async function ensureUsagePredictionListener() {
-  if (usagePredictionUnlisten) return;
+  if (usagePredictionUnlisten || usagePredictionEnsuring) return;
+  usagePredictionEnsuring = true;
   try {
     usagePredictionUnlisten = await dshdListen('usage-prediction-updated', (e) => {
       if (openKind !== 'usage' || !e.payload) return;
@@ -353,6 +356,8 @@ async function ensureUsagePredictionListener() {
     });
   } catch (err) {
     usagePredictionUnlisten = null;
+  } finally {
+    usagePredictionEnsuring = false;
   }
 }
 
@@ -744,10 +749,15 @@ function matchSessionAccount(items) {
   return null;
 }
 
-// 账户推送事件：用量页打开期间常驻，切走/关闭弹窗时卸载
+// 账户推送事件：用量页打开期间常驻，切走/关闭弹窗时卸载。
+// 在途守卫（ensuring）：dshdListen 是 IPC 往返，首个注册未完成时再次进入
+// ensure 会注册第二个监听且覆盖 unlisten 句柄——先注册者变成卸不掉的
+// 幽灵监听，跨弹窗开关累积
 let usageAccountsUnlisten = null;
+let usageAccountsEnsuring = false;
 async function ensureUsageAccountsListener() {
-  if (usageAccountsUnlisten) return;
+  if (usageAccountsUnlisten || usageAccountsEnsuring) return;
+  usageAccountsEnsuring = true;
   try {
     usageAccountsUnlisten = await dshdListen('usage-accounts-updated', (e) => {
       if (openKind !== 'usage' || !e.payload) return;
@@ -760,6 +770,8 @@ async function ensureUsageAccountsListener() {
     });
   } catch (err) {
     usageAccountsUnlisten = null;
+  } finally {
+    usageAccountsEnsuring = false;
   }
 }
 function dropUsageAccountsListener() {
@@ -802,8 +814,9 @@ function renderAccountCards(box, items) {
       detail = '<span class="usage-acc-hint">' + dshdT('accountNotConfiguredHint') + '</span>';
     } else if (a.balance && a.balance.remaining !== null && a.balance.remaining !== undefined) {
       // 金额与状态栏 chip 同一格式化（dshdCurrency + dshdBalanceValue），
-      // token 简写不适用于钱；unlimited 显示 ∞
-      detail = '<b class="usage-acc-amount">' + cur(a.balance.currency || '') + (a.balance.unlimited ? '∞' : dshdBalanceValue(a.balance.remaining)) + '</b>'
+      // token 简写不适用于钱；unlimited 显示 ∞。dshdBalanceValue 对非数字
+      // 原样返回，按防御性口径 esc（当前字段是 f64，无实际注入面）
+      detail = '<b class="usage-acc-amount">' + cur(a.balance.currency || '') + (a.balance.unlimited ? '∞' : esc(dshdBalanceValue(a.balance.remaining))) + '</b>'
         + balanceRowsHtml(a.balance);
     }
     if (a.windows && a.windows.length) detail += a.windows.map(usageWindowHtml).join('');
@@ -858,7 +871,7 @@ function balanceRowsHtml(balance) {
   ].filter((pair) => pair[1] !== null && pair[1] !== undefined);
   if (!rows.length) return '';
   return '<div class="usage-acc-rows">' + rows.map((pair) =>
-    '<div class="usage-acc-row"><span>' + dshdT(pair[0]) + '</span><span>' + cur(balance.currency || '') + dshdBalanceValue(pair[1]) + '</span></div>'
+    '<div class="usage-acc-row"><span>' + dshdT(pair[0]) + '</span><span>' + cur(balance.currency || '') + esc(dshdBalanceValue(pair[1])) + '</span></div>'
   ).join('') + '</div>';
 }
 
@@ -1527,13 +1540,17 @@ function playViewEnter() {
   void content.offsetWidth;
   content.classList.add('view-enter');
   // 入场结束移除动画类：will-change 随之类移除，不常驻合成层
-  // （子元素的 animationend 会冒泡，须校验目标与动画名）
-  content.addEventListener('animationend', function onEnd(e) {
-    if (e.target === content && e.animationName === 'view-enter') {
-      content.classList.remove('view-enter');
-      content.removeEventListener('animationend', onEnd);
-    }
-  });
+  // （子元素的 animationend 会冒泡，须校验目标与动画名）。快速连点导航
+  // 会打断动画——被打断只发 animationcancel 不发 end，两个事件都要能
+  // 摘监听，否则旧监听滞留到下次任一 view-enter 动画结束
+  const onDone = (e) => {
+    if (e.target !== content || e.animationName !== 'view-enter') return;
+    content.classList.remove('view-enter');
+    content.removeEventListener('animationend', onDone);
+    content.removeEventListener('animationcancel', onDone);
+  };
+  content.addEventListener('animationend', onDone);
+  content.addEventListener('animationcancel', onDone);
 }
 function navigateTo(kind) {
   if (!currentOpen || openKind === kind) return;
@@ -1541,6 +1558,9 @@ function navigateTo(kind) {
   if (!navCapability(item).enabled) return;
   // 离开用量页：卸载账户推送监听并复位刷新态（避免后台事件打靶到已切走的页）
   if (openKind === 'usage') dropUsageAccountsListener();
+  // 离开检查更新页：取消待确认的 UAC（与关闭弹窗同语义）——确认 UI 已随
+  // 页面切换消失，不取消会让 pwsh 更新线程悬置占住 lifecycle 锁
+  if (openKind === 'check') invoke('app_dialog_pwsh_cancel').catch(() => {});
   openKind = kind;
   currentOpen = { kind, title: '', initial: currentOpen.initial };
   document.body.classList.toggle('update-prompt-mode', kind === 'update-prompt' || kind === 'app-restart' || kind === 'notice');
@@ -1819,8 +1839,19 @@ function finishUsageRefresh(timedOut, silent) {
     const upd = document.querySelector('.usage-upd');
     if (!upd) return;
     const timeoutText = dshdT('usageRefreshTimeout');
-    upd.classList.remove('err');
+    const prevText = upd.textContent;
+    upd.classList.add('err');
     upd.textContent = timeoutText;
+    // 4s 后还原（CSS 注释承诺的口径）：期间到达的新快照会整行覆写并清
+    // err，这里仅在文案仍是超时提示时才还原，不与新快照争抢
+    setTimeout(() => {
+      if (openKind !== 'usage') return;
+      const cur = document.querySelector('.usage-upd');
+      if (cur && cur.textContent === timeoutText) {
+        cur.classList.remove('err');
+        cur.textContent = prevText;
+      }
+    }, 4000);
   }, wait);
 }
 $('btn-refresh').addEventListener('click', () => {

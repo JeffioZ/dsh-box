@@ -15,7 +15,11 @@ fn csv_cell(raw: &str) -> String {
     } else {
         raw.to_string()
     };
-    if guarded.contains(',') || guarded.contains('"') || guarded.contains('\n') {
+    if guarded.contains(',')
+        || guarded.contains('"')
+        || guarded.contains('\n')
+        || guarded.contains('\r')
+    {
         format!("\"{}\"", guarded.replace('"', "\"\""))
     } else {
         guarded
@@ -233,6 +237,8 @@ mod tests {
         assert_eq!(csv_cell("+1"), "'+1");
         assert_eq!(csv_cell("a,b"), "\"a,b\"");
         assert_eq!(csv_cell("say \"hi\""), "\"say \"\"hi\"\"\"");
+        // 孤立 \r（无配对 \n）同样破坏行结构，一并纳入引号包裹
+        assert_eq!(csv_cell("a\rb"), "\"a\rb\"");
         assert_eq!(csv_cell("plain"), "plain");
         // 日期与常见模型名不受公式防护影响（不以 =+-@ 开头）
         assert_eq!(csv_cell("2026-08-30"), "2026-08-30");

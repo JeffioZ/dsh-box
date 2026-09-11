@@ -259,7 +259,13 @@ function applyNativeTips() {
     group.title = truncated ? fullTip : groupTipText(group.dataset.key);
   });
   el.title = truncated ? fullTip : '';
-  el.setAttribute('aria-label', statsGroups.map((group) => group.text).join(' · ') || dshdT('statsRegion'));
+  // aria 与视觉同源：speeds 组追加实时 tok/s（与 renderStats 同一拼装
+  // 口径：实时优先、平均回退），读屏听到的与看到的一致
+  const tps = liveTps != null ? liveTps : avgTps;
+  const tpsText = tps != null ? formatTps(tps) : '';
+  el.setAttribute('aria-label', statsGroups.map((group) => (
+    group.key === 'speeds' && tpsText ? group.text + ' · ' + tpsText : group.text
+  )).join(' · ') || dshdT('statsRegion'));
 }
 
 // ---------- 其他 ----------

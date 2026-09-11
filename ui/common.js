@@ -228,7 +228,17 @@ function dshdEnsureTextContextMenu() {
       if (!item || item.enabled === false || !item.act) return;
       dshdTextContextMotion.afterPress(() => {
         dshdCloseTextContextMenu(true);
-        item.act();
+        const r = item.act();
+        // 粘贴动作返回 Promise：受限环境（execCommand 与剪贴板读取都被拒）
+        // 双失败时出快捷键引导，避免"点了没反应"
+        if (r && typeof r.then === 'function') {
+          r.then((ok) => {
+            if (!ok) {
+              const key = /Mac/i.test(navigator.userAgent) ? '⌘V' : 'Ctrl+V';
+              dshdToast(dshdT('editPasteFailed', { key }), { kind: 'info' });
+            }
+          }).catch(() => {});
+        }
       });
     },
     onEscape() { dshdCloseTextContextMenu(true); },

@@ -211,8 +211,11 @@ var TEXT_EXTS = ['txt','md','markdown','json','jsonc','js','mjs','cjs','ts','tsx
 var IMG_EXTS = ['png','jpg','jpeg','gif','webp','bmp','ico','avif','tif','tiff','heic'];
 var EXE_EXTS = ['exe','msi','com','bat','cmd','lnk','scr','appx','msix','pif','cpl'];
 function isTextLike(p) {
-  // 凭据文件不提供文本动作（yaml 在白名单内，特判避免经 content/菜单复制泄出）
-  var base = String(p).replace(/^.*[\/]/, '').toLowerCase();
+  // 凭据文件不提供文本动作（yaml 在白名单内，特判避免经 content/菜单复制泄出）。
+  // 末段提取按 / 与 \ 双分隔，与 Rust 端 Path::file_name() 语义对齐——
+  // 只按 / 切会让 Windows 反斜杠绝对路径整串成为 base，过滤被绕过
+  // （Rust 端仍有兜底拒绝，但菜单不该展示这个动作）
+  var base = String(p).replace(/^.*[\/\\]/, '').toLowerCase();
   if (base.indexOf('.credentials') === 0) { return false; }
   return TEXT_EXTS.indexOf(extOf(p)) >= 0;
 }
@@ -228,15 +231,18 @@ function req(action, path, app) {
       + (app ? '&app=' + encodeURIComponent(app) : '')).catch(function () {});
   } catch (e) {}
 }
-function copyToast(ok) {
+function cmToast(text, isError, ms) {
   var old = document.querySelector('.__dshd_cm_toast');
   if (old) old.remove();
   var el = document.createElement('div');
-  el.className = '__dshd_cm_toast' + (ok ? '' : ' __dshd_cm_error');
+  el.className = '__dshd_cm_toast' + (isError ? ' __dshd_cm_error' : '');
   el.setAttribute('role', 'status');
-  el.textContent = ok ? T('已复制', 'Copied') : T('复制失败', 'Copy failed');
+  el.textContent = text;
   document.body.appendChild(el);
-  setTimeout(function () { el.remove(); }, 1100);
+  setTimeout(function () { el.remove(); }, ms || 1100);
+}
+function copyToast(ok) {
+  cmToast(ok ? T('已复制', 'Copied') : T('复制失败', 'Copy failed'), !ok);
 }
 function fallbackWriteClip(t) {
   var el = document.createElement('textarea');
@@ -346,8 +352,11 @@ function resolvePathBase() {
   return pending;
 }
 function resolveAbsPath(rel) {
-  if (rel === '~' || rel.slice(0, 2) === '~/' || rel.slice(0, 2) === '~\\'
-      || (IS_WIN && /^\/[A-Za-z]\//.test(rel))) {
+  // 一切 ~ 前缀与 Windows 的 /盘符/ MSYS 形式都送 Rust 归一化：~someone/
+  // 这类 lookalike 不是本人主目录，Rust 端（file_actions normalize，有
+  // lookalike 测试）返回 None → fetch !ok → null，菜单原位保持相对路径
+  // 形态、仅剩可用动作；其余相对路径按会话工作区拼接
+  if (rel.charAt(0) === '~' || (IS_WIN && /^\/[A-Za-z]\//.test(rel))) {
     return dshdFetch('normalize', 'path=' + encodeURIComponent(rel))
       .then(function (r) { if (!r.ok) return null; return r.text(); })
       .catch(function () { return null; });
@@ -609,7 +618,18 @@ function show(x, y, list) {
     setTimeout(function () {
       busy = false;
       hide();
-      if (it.act) it.act();
+      if (!it.act) return;
+      var r = it.act();
+      // 粘贴动作返回 Promise：受限环境（execCommand 与剪贴板读取都被拒）
+      // 双失败时出快捷键引导，避免"点了没反应"
+      if (r && typeof r.then === 'function') {
+        r.then(function (ok) {
+          if (!ok) {
+            var key = IS_MAC ? '⌘V' : 'Ctrl+V';
+            cmToast(T('粘贴失败，请按 ' + key + ' 粘贴', 'Paste failed, press ' + key), true, 1800);
+          }
+        }).catch(function () {});
+      }
     }, PRESS_DELAY_MS);
   });
   placeMenu(x, y);
@@ -694,9 +714,9 @@ function onCtx(e) {
   var f = findPathTarget(t);
   if (f) {
     e.preventDefault();
-    var needsNormalize = f.path === '~' || f.path.slice(0, 2) === '~/'
-      || f.path.slice(0, 2) === '~\\' || (IS_WIN && /^\/[A-Za-z]\//.test(f.path));
-    if (isAbsPath(f.path) && !needsNormalize) {
+    // ~ 前缀与 MSYS 形态经 isAbsPath 恒为相对路径，统一走 resolveAbsPath
+    //（其内部决定送 Rust 归一化还是按工作区拼接）
+    if (isAbsPath(f.path)) {
       show(e.clientX, e.clientY, fileMenu(f, f.path));
     } else {
       // 相对路径先用可用动作即时出菜单；绝对路径解析完成后原位补齐图标、
@@ -754,7 +774,19 @@ window.addEventListener('wheel', cancelContext, true);
 window.addEventListener('touchmove', cancelContext, true);
 document.addEventListener('keydown', function (e) {
   if (!menuEl) return;
-  if (e.key === 'Escape') { e.preventDefault(); hide(); return; }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    // 子菜单展开时先收子菜单（原生菜单惯例，与 ArrowLeft 回父项对称），
+    // 再按一次才关整个菜单
+    if (subEl) {
+      var escParent = subParent;
+      closeSub();
+      if (escParent) escParent.focus();
+      return;
+    }
+    hide();
+    return;
+  }
   if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].indexOf(e.key) >= 0) {
     menuEl.classList.add('__dshd_cm_kbd');
   }
