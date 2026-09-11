@@ -1161,21 +1161,32 @@ function renderUpdateDone(p) {
   // 更新流程结束：此后按钮按结果复位
   updateRunning = false;
   renderNav(openKind);
-  // UAC“继续”期间页脚被替换为确认按钮：完成后恢复“关闭”
+  const body = $('body');
+  // UAC 预告块（文案 +“继续”）使命已随本次更新结束而完成：移除，
+  // 不让禁用态确认按钮残留在结果区下方
+  const pwshUac = body.querySelector('.pwsh-uac');
+  if (pwshUac) pwshUac.remove();
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
-  const body = $('body');
   const line = body.querySelector('.msg');
   const text = p.ok ? p.message : dshdT('notCompleted', { message: p.message });
-  // 冲突提示条的按钮与结果行按钮一起复位（失败可重试，成功置完成）
+  // 冲突提示条的按钮与结果行按钮一起复位（失败可重试，成功置完成）。
+  // 完成收尾的按钮打 dataset.done 标记，此后不再复活：连续更新多个
+  // 组件（或 done 后其他状态变化触发本函数重入）时，已完成组件的
+  // 按钮不能回到可点。成功只收尾本次被点的按钮（点击时文案已换为
+  // “处理中”）：同页其他组件（PowerShell/Node/npm 等）的按钮与本次
+  // 更新无关，必须复位可用——更新完成后不会自动重新检查（结果行不
+  // 重建），误禁会让用户只能关闭弹窗重开来继续更新其余组件
   document.querySelectorAll('.uprow .dshd-btn, #plugin-conflict .dshd-btn').forEach((button) => {
-    if (p.ok) {
+    if (button.dataset.done) return;
+    if (p.ok && button.textContent === dshdT('processing')) {
       button.disabled = true;
-      if (button.textContent === dshdT('processing')) button.textContent = dshdT('completed');
-    } else {
-      button.disabled = false;
-      button.textContent = button.dataset.label || dshdT('retry');
+      button.dataset.done = '1';
+      button.textContent = dshdT('completed');
+      return;
     }
+    button.disabled = false;
+    if (!p.ok) button.textContent = button.dataset.label || dshdT('retry');
   });
   const box = line || (() => {
     const div = document.createElement('div');
@@ -1735,10 +1746,16 @@ async function pollDialogState() {
       if (openKind === 'check' && s && s.pwsh_pending && !pwshPromptShown) {
         pwshPromptShown = true;
         const body = $('body');
+        // 文案与“继续”同置一个块：按钮与文案的间距由 .pwsh-uac 样式统一
+        // 给出，更新结束时 renderUpdateDone 整块移除
+        const wrap = document.createElement('div');
+        wrap.className = 'pwsh-uac';
         const div = document.createElement('div');
         div.className = 'msg';
+        // 预告需要用户响应：与进度行同为 status live region，读屏即时播报
+        div.setAttribute('role', 'status');
         div.textContent = dshdT('pwshUacNotice');
-        body.append(div);
+        wrap.append(div);
         // 底部操作区已随 dsh 布局重构移除（footer 区域删除），
         // "继续"按钮直接挂在正文后（原 #foot 引用已失效，会静默抛错
         // 导致确认按钮不渲染、UAC 更新流程卡死）
@@ -1750,7 +1767,8 @@ async function pollDialogState() {
           btn.disabled = true;
           invoke('app_dialog_pwsh_confirm').catch(() => { btn.disabled = false; });
         });
-        body.append(btn);
+        wrap.append(btn);
+        body.append(wrap);
       }
     } else if (openKind === 'plugins') {
       await refreshPluginApplyStatus();

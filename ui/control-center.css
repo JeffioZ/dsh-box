@@ -141,6 +141,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .msg { margin-top: 12px; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-variant-numeric: tabular-nums; }
 .msg.success { color: var(--dshd-success-text); }
 .msg.error { color: var(--dshd-error-text); }
+/* UAC 预告（pwsh 更新）：“继续”按钮与上方文案的纵向间隔沿用 .msg 的
+   12px 节奏（相邻可点目标 ≥8px 最低间隔规则）；整块在更新结束时移除 */
+.pwsh-uac .dshd-btn { margin-top: 12px; }
 .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
 .about .about-logo { display: block; }
 .about .nm { font-size: var(--dshd-fs-lg); font-weight: 600; }
