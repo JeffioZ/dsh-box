@@ -150,10 +150,6 @@ fn poll_once(config: &Config) -> StatsPayload {
     }
 }
 
-pub(crate) fn snapshot(config: &Config) -> StatsPayload {
-    poll_once(config)
-}
-
 /// 调 dsh 后端 unary RPC（同源 POST /api/<method>，client-request 信封），
 /// 成功返回 value；协议不匹配/服务未就绪一律 None。
 ///

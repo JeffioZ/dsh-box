@@ -13,45 +13,10 @@ pub fn app_dialog_open_settings(app: AppHandle, webview: tauri::Webview) -> Resu
 }
 
 #[tauri::command]
-pub fn app_dialog_open_stats(
-    app: AppHandle,
-    webview: tauri::Webview,
-    group: Option<String>,
-) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    crate::control_center::open_stats(&app, group.as_deref());
-    Ok(())
-}
-
-#[tauri::command]
 pub fn app_dialog_open_usage(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;
     crate::control_center::open_usage(&app);
     Ok(())
-}
-
-#[tauri::command]
-pub async fn session_stats_get(
-    app: AppHandle,
-    webview: tauri::Webview,
-) -> Result<crate::usage::StatsPayload, String> {
-    ensure_local_origin(&webview)?;
-    if !crate::tray_menu::managed_service_ready(&app) {
-        return Err(crate::locale::text(
-            "dsh 服务就绪后才能读取会话统计。",
-            "Session statistics are available when the dsh service is ready.",
-        )
-        .into());
-    }
-    let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || crate::usage::snapshot(&config))
-        .await
-        .map_err(|e| {
-            crate::locale::owned(
-                format!("会话统计任务异常结束：{e}"),
-                format!("The session statistics task ended unexpectedly: {e}"),
-            )
-        })
 }
 
 /// 订阅额度快照（阶段 3 的只读入口；缓存优先，空缓存回退同步查询）。
@@ -285,6 +250,15 @@ pub fn app_dialog_pwsh_confirm(app: AppHandle, webview: tauri::Webview) -> Resul
     let state = app.state::<AppState>();
     state.set_pwsh_confirmed(true);
     state.set_pwsh_pending(false);
+    Ok(())
+}
+
+/// 弹窗内导航切离"检查更新"时取消待确认的 UAC（对齐关闭弹窗的取消语义）：
+/// 确认 UI 已随页面切换消失，不取消会让 pwsh 更新线程悬置占住 lifecycle 锁。
+#[tauri::command]
+pub fn app_dialog_pwsh_cancel(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    ensure_local_origin(&webview)?;
+    app.state::<AppState>().set_pwsh_pending(false);
     Ok(())
 }
 

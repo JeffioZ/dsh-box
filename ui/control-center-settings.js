@@ -2,7 +2,21 @@
 
 // —— 设置（按桌面行为 / 界面 / 服务能力 / 凭据与模型分组） ——
 let settingsBusy = false;
+// 最近一次 applySettingState 的状态快照：radio 在忙碌期的同步弹回用它取
+// "已应用值"（否则只能等在途 invoke 的状态回填，期间显示错误选择）
+let settingsStateCache = null;
 const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'task_notifications', 'auto_update_plugins'];
+// radio 组名 → 状态键（dsh-channel 特例，其余同名）
+function revertRadiosToApplied(name) {
+  const state = settingsStateCache;
+  if (!state) return;
+  const key = name === 'dsh-channel' ? 'dsh_update_channel' : name;
+  const applied = state[key];
+  if (applied == null) return;
+  document.querySelectorAll('input[name="' + name + '"]').forEach((radio) => {
+    radio.checked = radio.value === applied;
+  });
+}
 function settingsRow(key, nameKey, descKey, className) {
   return (
     '<label class="srow' + (className ? ' ' + className : '') + '">' +
@@ -58,6 +72,10 @@ function dshChannelRow() {  return (
 }
 async function renderSettings() {
   const body = $('body');
+  // 语言热切换重渲染前迁移模型导入区状态：预览结果可由草稿重解析恢复
+  // （文案随新语言重建），但用户已输入的各 env Key 与手动高度只能显式
+  // 带回——不迁移的话切一次语言就全部丢失。须在首个 innerHTML 覆写前取。
+  const miSaved = miCapturePendingState();
   // 先拿到配置状态再一次性渲染，才能决定模型配置板块放在最前还是原位，
   // 避免「先渲染再挪动」造成闪烁。等候期间给出轻量占位。
   body.innerHTML = '<div class="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>';
@@ -145,7 +163,13 @@ async function renderSettings() {
   });
   body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
     el.addEventListener('change', async () => {
-      if (!el.checked || settingsBusy) return;
+      if (!el.checked) return;
+      if (settingsBusy) {
+        // 并发切换中：同步弹回已应用值（与开关行的弹回行为一致；等待中的
+        // invoke 返回后统一应用最新状态），原生 radio 已乐观切到新值
+        revertRadiosToApplied(el.name);
+        return;
+      }
       settingsBusy = true;
       try {
         const state = await invoke('set_dsh_channel', { channel: el.value });
@@ -162,7 +186,11 @@ async function renderSettings() {
   });
   body.querySelectorAll('input[name="close_behavior"], input[name="launch_behavior"]').forEach((el) => {
     el.addEventListener('change', async () => {
-      if (!el.checked || settingsBusy) return;
+      if (!el.checked) return;
+      if (settingsBusy) {
+        revertRadiosToApplied(el.name);
+        return;
+      }
       settingsBusy = true;
       try {
         const state = await invoke('set_window_behavior', { key: el.name, value: el.value });
@@ -194,6 +222,52 @@ async function renderSettings() {
   });
   initApiKeySettings();
   initModelImport();
+  restoreModelImportState(miSaved);
+}
+// —— 语言热切换的模型导入状态迁移（配合 renderSettings 入口捕获） ——
+function miCapturePendingState() {
+  const textarea = $('mi-textarea');
+  const box = $('mi-result');
+  const manualHeight =
+    miResizeMode === 'manual' && textarea && textarea.style.height ? textarea.style.height : null;
+  // 只有"待填 Key 的预览"才需要迁移；成功态/无 Key 预览重解析即可复原
+  let keys = null;
+  if (box && !box.hidden && box.querySelectorAll('input[data-ref]').length) {
+    keys = {};
+    box.querySelectorAll('input[data-ref]').forEach((input) => {
+      if (input.value) keys[input.dataset.ref] = input.value;
+    });
+  }
+  if (!keys && !manualHeight) return null;
+  return { keys, manualHeight };
+}
+async function restoreModelImportState(saved) {
+  if (!saved) return;
+  const textarea = $('mi-textarea');
+  if (!textarea) return;
+  if (saved.manualHeight) {
+    miResizeMode = 'manual';
+    textarea.style.height = saved.manualHeight;
+  }
+  if (!saved.keys || !miDraft.trim()) return;
+  // 捕获本次解析的 yaml 并与它（而非 miDraft）比较：等待期间用户若改动
+  // 草稿，miDraft 会同步成新值，拿它与当前值比较永远相等，过期守卫失效
+  const yaml = miDraft;
+  try {
+    const preview = await invoke('preview_model_import', { yaml });
+    if (openKind !== 'settings' || !textarea.isConnected || textarea.value !== yaml) return;
+    miRenderResult(preview, yaml);
+    const box = $('mi-result');
+    if (box) {
+      Object.entries(saved.keys).forEach(([ref, value]) => {
+        box.querySelectorAll('input[data-ref]').forEach((input) => {
+          if (input.dataset.ref === ref) input.value = value;
+        });
+      });
+    }
+  } catch {
+    // 重解析失败（草稿已失效等）：维持初始空态即可，不打扰
+  }
 }
 // —— 每日用量提醒阈值：change（失焦/回车）即保存；空值 = 关闭 ——
 function usageLimitFeedback(message, isError) {
@@ -224,12 +298,18 @@ function initUsageLimit() {
     if (!raw) {
       // 清空 = 关闭提醒
       usageLimitFeedback('', false);
+      // 与开关/radio 同一串行口径：忙碌期丢弃本次 change，避免与在途
+      // invoke 的状态回填乱序（输入值仍在框内，下次改动会再触发）
+      if (settingsBusy) return;
+      settingsBusy = true;
       try {
         const state = await invoke('set_usage_token_limit', { limitM: null });
         applySettingState(state);
       } catch (e) {
         showSettingError(dshdT('settingsFailed', { message: String(e) }));
         invoke('settings_get').then(applySettingState).catch(() => {});
+      } finally {
+        settingsBusy = false;
       }
       return;
     }
@@ -240,6 +320,8 @@ function initUsageLimit() {
       return;
     }
     usageLimitFeedback('', false);
+    if (settingsBusy) return;
+    settingsBusy = true;
     try {
       const state = await invoke('set_usage_token_limit', { limitM: value });
       applySettingState(state);
@@ -247,6 +329,8 @@ function initUsageLimit() {
     } catch (e) {
       showSettingError(dshdT('settingsFailed', { message: String(e) }));
       invoke('settings_get').then(applySettingState).catch(() => {});
+    } finally {
+      settingsBusy = false;
     }
   });
 }
@@ -333,7 +417,12 @@ function miTextareaAutosize() {
   const el = $('mi-textarea');
   if (!el || miResizeMode !== 'auto') return;
   el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
+  // scrollHeight 不含边框，border-box 下直接赋值会让内容区少 2px、内容
+  // 超过默认高度时常驻一根滚动条；补回上下边框宽度，与手动拖拽/键盘路径
+  //（getBoundingClientRect，含边框）基准一致，双击重置不再跳 2px
+  const cs = getComputedStyle(el);
+  const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  el.style.height = el.scrollHeight + border + 'px';
 }
 // 重置回自适应模式。
 function miTextareaReset() {
@@ -366,25 +455,25 @@ function initModelImport() {
     // 初始同步一次，让 aria-valuemax 反映真实上限（60vh），而非占位的 480。
     syncAria(textarea.getBoundingClientRect().height);
     let dragState = null;
-    resizeBar.addEventListener('mousedown', (ev) => {
+    // 指针捕获：拖出 WebView 窗口后 pointerup 仍派发到 resize-bar，不会
+    // 悬挂拖拽态（此前 mousemove/mouseup 挂 document，鼠标在窗外释放即
+    // 丢失，回到页内不按键移动还会继续改高度）
+    resizeBar.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0) return;
       ev.preventDefault(); // 避免选中文本/拖拽触发原生行为
+      try { resizeBar.setPointerCapture(ev.pointerId); } catch { /* 捕获失败时退化为旧行为 */ }
       dragState = { startY: ev.clientY, startH: textarea.getBoundingClientRect().height };
-      const onMove = (e) => {
-        if (!dragState) return;
-        miResizeMode = 'manual';
-        const h = clampH(dragState.startH + (e.clientY - dragState.startY));
-        textarea.style.height = h + 'px';
-        syncAria(h);
-      };
-      const onUp = () => {
-        dragState = null;
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
     });
+    resizeBar.addEventListener('pointermove', (e) => {
+      if (!dragState) return;
+      miResizeMode = 'manual';
+      const h = clampH(dragState.startH + (e.clientY - dragState.startY));
+      textarea.style.height = h + 'px';
+      syncAria(h);
+    });
+    const endDrag = () => { dragState = null; };
+    resizeBar.addEventListener('pointerup', endDrag);
+    resizeBar.addEventListener('pointercancel', endDrag);
     // 双击重置回自适应。
     resizeBar.addEventListener('dblclick', () => {
       miTextareaReset();
@@ -432,6 +521,10 @@ function initModelImport() {
     const sequence = ++previewSequence;
     const current = () => textarea.isConnected && sequence === previewSequence && textarea.value === yaml;
     if (!yaml.trim()) {
+      // 空输入：同步收起上一轮结果框（旧预览/成功态），避免与新反馈同屏
+      //（hidden 在下方统一执行，本分支提前 return 不经过它）
+      $('mi-result').hidden = true;
+      miPreviewRefs = [];
       miFeedback(dshdT('modelImportEmpty'), false);
       return;
     }
@@ -619,6 +712,7 @@ function miRenderResult(preview, previewYaml) {
 }
 function applySettingState(state) {
   const body = $('body');
+  settingsStateCache = state;
   const external = Boolean(state.external_service);
   const externalNote = $('settings-external-note');
   if (externalNote) externalNote.hidden = !external;

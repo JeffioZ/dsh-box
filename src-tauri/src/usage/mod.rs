@@ -27,8 +27,7 @@ pub(crate) use balance::Balance;
 #[cfg(windows)]
 pub(crate) use live::session_is_listed;
 pub(crate) use live::{
-    refresh_once, session_activity, set_visible_session, snapshot, start_live_rate, start_periodic,
-    StatsPayload,
+    refresh_once, session_activity, set_visible_session, start_live_rate, start_periodic,
 };
 pub(crate) use log::session_log_path;
 pub(crate) use monitor::{

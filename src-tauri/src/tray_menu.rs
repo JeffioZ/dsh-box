@@ -240,8 +240,11 @@ const SHADOW_BOTTOM: f64 = crate::window::OVERLAY_SHADOW_BOTTOM;
 #[cfg(windows)]
 const MENU_CARD_WIDTH: f64 = 220.0;
 
-/// 菜单卡片尺寸：完整 1px 描边、上下各 4px 内边距、行高 40、分隔线 9；宽 220
-/// 与标题栏主菜单完全一致，容纳最长条目（含图标/内边距约 180px）。
+/// 菜单卡片尺寸：完整 1px 描边、上下各 4px 内边距、行高 40、分隔线 13
+/// （对齐 .dshd-menu-surface .dshd-sep 覆盖档实际占位：margin 6px×2 +
+/// 1px border，见 ui/common.css；按基础档 9 计算会让卡片高度偏矮，底部
+/// 条目下缘落进外点关闭的判定区，点击落空）；宽 220 与标题栏主菜单完全
+/// 一致，容纳最长条目（含图标/内边距约 180px）。
 /// 注意：Windows 自绘托盘菜单宽度与 ui/titlebar.html 的 .main-menu-panel
 /// （220px）保持一致，改动需同步两处。
 #[cfg(windows)]
@@ -250,7 +253,7 @@ fn menu_card_size() -> (f64, f64) {
     let height = 10.0
         + rows
             .iter()
-            .map(|r| if r.sep { 9.0 } else { 40.0 })
+            .map(|r| if r.sep { 13.0 } else { 40.0 })
             .sum::<f64>();
     (MENU_CARD_WIDTH, height)
 }
@@ -568,6 +571,9 @@ fn present_prepared_menu(
     ));
     watch_outside_click(app.clone(), TRAY_MENU_WINDOW, card_rect);
     let _ = win.set_focus();
+    // 与 app-dialog 同因：WebView2 需 webview 级聚焦才有键盘输入
+    //（菜单键盘导航挂在 #list 上）；UFCS 消 AsRef 歧义
+    let _ = tauri::Webview::set_focus(win.as_ref());
 }
 
 /// 播放退场动效后隐藏。代次校验确保快速重开可中断旧动效，最终状态不依赖
