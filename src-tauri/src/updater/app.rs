@@ -2,6 +2,8 @@
 
 #[cfg(windows)]
 use super::check::check_app_update;
+#[cfg(any(windows, test))]
+use super::check::VersionInfo;
 use super::*;
 #[cfg(windows)]
 use std::io::Read;
@@ -153,7 +155,44 @@ pub(super) fn parse_app_release_asset(
     Ok((asset_url.to_string(), sha256.to_ascii_lowercase()))
 }
 
-/// 更新应用本体 exe：已预下载则直接应用，否则先下载再应用。
+/// `update_app_exe` 应用前的目标解析决策（纯逻辑，便于单测）：
+/// - 检查正常且预下载可用（版本吻合 + 文件校验通过）→ 复用，不联网；
+/// - 检查正常但预下载缺失/过期/损坏 → 联网取该版本元数据后下载；
+/// - 检查失败（None 或 latest_error）→ 预下载仍可用时离线复用；
+/// - 其余（无更新，或检查失败且无预下载）→ 拒绝。
+#[cfg(any(windows, test))]
+enum AppApplyPlan {
+    Reuse,
+    Fetch(String),
+    Reject,
+}
+
+#[cfg(any(windows, test))]
+fn plan_app_apply(
+    check: Option<&VersionInfo>,
+    ready: Option<&(String, String)>,
+    ready_file_ok: bool,
+) -> AppApplyPlan {
+    let ready_usable = ready.is_some() && ready_file_ok;
+    let Some(info) = check.filter(|info| info.latest_error.is_none()) else {
+        // 检查失败（离线等）：已通过 SHA-256 校验的预下载包仍可应用
+        return if ready_usable {
+            AppApplyPlan::Reuse
+        } else {
+            AppApplyPlan::Reject
+        };
+    };
+    if !info.update_available {
+        return AppApplyPlan::Reject;
+    }
+    match ready {
+        Some((version, _)) if *version == info.latest && ready_file_ok => AppApplyPlan::Reuse,
+        _ => AppApplyPlan::Fetch(info.latest.clone()),
+    }
+}
+
+/// 更新应用本体 exe：已预下载且校验通过则直接应用（检查失败/离线时同样
+/// 可用，见 plan_app_apply），否则先取元数据下载再应用。
 /// 仅 Windows 支持（单文件分发场景）；macOS/Linux 提示从官网下载。
 pub(super) fn update_app_exe(
     app: &AppHandle,
@@ -175,36 +214,42 @@ pub(super) fn update_app_exe(
             crate::locale::error("创建更新目录失败", "Failed to create the update folder", e)
         })?;
         let target = dir.join("DSHBox.exe");
-        let info = check_app_update()
-            .filter(|info| info.update_available)
-            .ok_or_else(|| {
-                crate::locale::text(
-                    "暂时无法确认可用的应用更新。",
-                    "Could not confirm an app update right now.",
-                )
-                .to_string()
-            })?;
-        let ready = app.state::<AppState>().app_update_ready();
-        let expected = if let Some((version, sha256)) = ready {
-            if version == info.latest && verify_downloaded_exe(&target, &sha256).is_ok() {
+        let state = app.state::<AppState>();
+        let ready = state.app_update_ready();
+        let ready_file_ok = ready
+            .as_ref()
+            .is_some_and(|(_, sha256)| verify_downloaded_exe(&target, sha256).is_ok());
+        let plan = plan_app_apply(check_app_update().as_ref(), ready.as_ref(), ready_file_ok);
+        let expected = match plan {
+            // 复用预下载（检查确认，或检查失败时的离线兜底）：决策时刚校验
+            // 过文件，apply_downloaded_exe 应用前还会复验；此路径不联网
+            AppApplyPlan::Reuse => {
+                let (version, sha256) = ready.expect("Reuse 仅在预下载可用时产生");
                 AppReleaseAsset {
                     version,
                     url: String::new(),
                     sha256,
                 }
-            } else {
-                app.state::<AppState>().set_app_update_ready(None);
-                fetch_app_release_asset(&info.latest)?
             }
-        } else {
-            fetch_app_release_asset(&info.latest)?
+            AppApplyPlan::Fetch(latest) => {
+                // 预下载缺失/过期/损坏：作废旧状态后取元数据，需要时重新下载
+                state.set_app_update_ready(None);
+                let asset = fetch_app_release_asset(&latest)?;
+                if verify_downloaded_exe(&target, &asset.sha256).is_err() {
+                    let _ = std::fs::remove_file(&target);
+                    download_app_exe(app, &target, &asset, true)?;
+                }
+                asset
+            }
+            AppApplyPlan::Reject => {
+                return Err(crate::locale::text(
+                    "暂时无法确认可用的应用更新。",
+                    "Could not confirm an app update right now.",
+                )
+                .into());
+            }
         };
-        if verify_downloaded_exe(&target, &expected.sha256).is_err() {
-            let _ = std::fs::remove_file(&target);
-            download_app_exe(app, &target, &expected, true)?;
-        }
-        app.state::<AppState>()
-            .set_app_update_ready(Some((expected.version.clone(), expected.sha256.clone())));
+        state.set_app_update_ready(Some((expected.version.clone(), expected.sha256.clone())));
         apply_downloaded_exe(app, &target, &expected)
     }
 }
@@ -399,7 +444,7 @@ pub(super) fn windows_replace_script(
            if (-not $process.HasExited -and (Test-Path -LiteralPath $old)) {{ Remove-Item -LiteralPath $old -Force }}\n\
          }} catch {{\n\
            if ((-not (Test-Path -LiteralPath $dst)) -and (Test-Path -LiteralPath $old)) {{ Copy-Item -LiteralPath $old -Destination $dst -Force }}\n\
-           # 失败留痕：下次启动由 cleanup 读取并转发（此前静默 exit 1，只能靠版本不匹配间接推断）\n\
+           # 失败留痕：下次启动读取后记入应用日志并删除（见 drain_replace_error）\n\
            $_ | Out-File -LiteralPath (Join-Path (Split-Path -Parent $src) 'replace-error.log') -Encoding utf8\n\
            exit 1\n\
          }} finally {{\n\
@@ -424,8 +469,8 @@ fn apply_downloaded_exe(
     // 退出并重启的确认已前移到自绘弹窗（更新提示/检查更新页确认弹窗），
     // 此处不再弹原生 msgbox 二次打扰。
 
-    // 2) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
-    // File.Replace 原子替换；断电发生在提交前时旧 exe 始终保持可启动。
+    // 2) 安装目录可写探测：受限目录（如 Program Files）下脚本替换必然
+    // 失败，退出前拦截并给出可操作的错误，避免“应用关闭后不再回来”
     let exe = std::env::current_exe().map_err(|e| {
         crate::locale::error(
             "无法定位当前程序路径",
@@ -433,6 +478,17 @@ fn apply_downloaded_exe(
             e,
         )
     })?;
+    let probe = exe.with_file_name(".dshbox-update-probe");
+    if let Err(e) = std::fs::write(&probe, b"").and_then(|_| std::fs::remove_file(&probe)) {
+        return Err(crate::locale::error(
+            "安装目录不可写，已取消更新（应用未退出）。请将程序移到用户可写目录，或以管理员身份运行后重试",
+            "The installation folder is not writable, so the update was cancelled (the app did not exit). Move the app to a user-writable folder, or run it as administrator and retry",
+            &e,
+        ));
+    }
+
+    // 3) 写替换脚本。新版先复制到当前 exe 同目录并复验摘要，再通过
+    // File.Replace 原子替换；断电发生在提交前时旧 exe 始终保持可启动。
     let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
     let script = dir.join("replace.ps1");
     let script_text = windows_replace_script(target, &exe, &release.sha256);
@@ -446,8 +502,15 @@ fn apply_downloaded_exe(
         )
     })?;
 
-    // 3) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出
-    let mut replace_cmd = std::process::Command::new("powershell");
+    // 4) 启动替换脚本（隐藏、独立于本进程），保存窗口状态后退出。
+    // 按名称解析时应用目录优先于 System32（CreateProcess 搜索顺序），
+    // 用绝对路径消除安装目录内同名 exe 的劫持面
+    let powershell = std::env::var_os("SYSTEMROOT")
+        .map(|root| {
+            std::path::PathBuf::from(root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe")
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("powershell"));
+    let mut replace_cmd = std::process::Command::new(powershell);
     replace_cmd
         .args([
             "-NoProfile",
@@ -479,8 +542,9 @@ fn apply_downloaded_exe(
     // 周期任务在替换脚本接管前停止活动。
     app.state::<crate::app_state::AppState>().set_quitting(true);
     crate::window::save_window_state_now(app);
-    // 与 quit_sequence 同口径：先取得生命周期锁再停服，避免退出竞态
-    crate::dsh::shutdown_for_quit(app);
+    // 生命周期锁已由调用链（updater::apply）持有：直调 shutdown 停服即可；
+    // 走 shutdown_for_quit 会对自身持有的非重入锁空转打满 2s 期限
+    crate::dsh::shutdown(app);
     app.exit(0);
     Ok(())
 }
@@ -491,6 +555,20 @@ fn apply_downloaded_exe(
 #[cfg(any(windows, test))]
 const PENDING_APPLY_MARKER: &str = "pending-apply";
 
+/// 读取并删除上一轮替换脚本的失败留痕（exe-update/replace-error.log，
+/// PowerShell Out-File 的 UTF-8 带 BOM）。无留痕返回 None；读到即删，
+/// 同一失败不会被重复记录。
+#[cfg(any(windows, test))]
+fn drain_replace_error(dir: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(dir.join("replace-error.log"))
+        .ok()?
+        .trim_start_matches('\u{FEFF}')
+        .trim()
+        .to_string();
+    let _ = std::fs::remove_file(dir.join("replace-error.log"));
+    Some(content)
+}
+
 /// 启动时回收上一轮已成功的应用更新残留（仅 Windows 有该替换流程）：
 /// exe-update/ 暂存目录（新 exe 副本与 replace.ps1）整体删除；安装目录的
 /// .old 备份在确认当前运行版本==目标版本后删除。标记缺失或版本不匹配
@@ -499,6 +577,13 @@ const PENDING_APPLY_MARKER: &str = "pending-apply";
 #[cfg(windows)]
 pub(crate) fn cleanup_applied_app_update(config: &crate::app_state::Config) {
     let dir = config.root.join("exe-update");
+    // 失败留痕先落日志再谈回收：替换失败时标记版本与运行版本必然不匹配，
+    // 只依赖标记分支的话这份错误永远读不到
+    if let Some(error) = drain_replace_error(&dir) {
+        crate::logging::log(&format!(
+            "updater: 上一轮应用替换脚本失败（旧版已恢复或保留待重试）：\n{error}"
+        ));
+    }
     let exe_old = std::env::current_exe().ok().map(|exe| {
         let mut old = exe.into_os_string();
         old.push(".old");
@@ -578,7 +663,11 @@ pub fn prefetch_app_update(app: &AppHandle) {
                     .join("exe-update")
                     .join("DSHBox.exe");
                 if ready_version == info.latest && verify_downloaded_exe(&target, &sha256).is_ok() {
-                    return; // 已下载且摘要仍匹配
+                    // 已下载且摘要仍匹配：仍走一次提示——notify_update_available
+                    // 按已持久化的版本号去重，只有上次通知发送失败（去重键未
+                    // 落盘）才会借此重试，不会重复打扰
+                    prompt_apply_prefetched(&handle, &ready_version);
+                    return;
                 }
                 handle.state::<AppState>().set_app_update_ready(None);
                 let _ = std::fs::remove_file(&target);
@@ -613,9 +702,10 @@ pub fn prefetch_app_update(app: &AppHandle) {
     }
 }
 
-/// 提示用户应用已下载的更新（自绘弹窗：重启并更新 / 稍后 / 查看更新内容）。
-/// 「重启并更新」由弹窗前端走 app_dialog_update("app")：update_app_exe 会复用
-/// 已预下载且摘要吻合的安装包，不重复下载。
+/// 提示用户应用更新已预下载（系统通知，同一版本仅提醒一次——去重键仅在
+/// 通知发送成功后落盘）。安装入口：通知引导用户打开检查更新页，走
+/// app_dialog_update("app") → update_app_exe，会复用已预下载且摘要吻合的
+/// 安装包，不重复下载。
 #[cfg(windows)]
 fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
     super::check::notify_update_available(app, "DSHBox", version);
@@ -623,7 +713,22 @@ fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_applied_update_in, PENDING_APPLY_MARKER};
+    use super::{
+        cleanup_applied_update_in, drain_replace_error, plan_app_apply, AppApplyPlan,
+        PENDING_APPLY_MARKER,
+    };
+    use crate::updater::check::VersionInfo;
+
+    fn app_info(latest: &str, available: bool, failed: bool) -> VersionInfo {
+        VersionInfo {
+            installed: "1.0.0".into(),
+            latest: latest.into(),
+            update_available: available,
+            latest_error: failed.then(|| "查询失败".into()),
+            downgrade_available: false,
+            other_channel: None,
+        }
+    }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -675,5 +780,74 @@ mod tests {
         // 标记随目录删除，再次运行不再动作
         assert!(!cleanup_applied_update_in(&dir, "1.2.3", Some(&old)));
         std::fs::remove_dir_all(old.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn replace_error_log_is_drained_once() {
+        let dir = temp_dir("replace-error");
+        std::fs::write(dir.join("replace-error.log"), "\u{FEFF}替换失败 boom\r\n").unwrap();
+        assert_eq!(drain_replace_error(&dir).as_deref(), Some("替换失败 boom"));
+        assert_eq!(drain_replace_error(&dir), None);
+        assert!(!dir.join("replace-error.log").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_reuses_verified_prefetch_confirmed_or_offline() {
+        let confirmed = app_info("1.1.0", true, false);
+        let ready = ("1.1.0".to_string(), "ab".repeat(32));
+        assert!(matches!(
+            plan_app_apply(Some(&confirmed), Some(&ready), true),
+            AppApplyPlan::Reuse
+        ));
+        // 检查失败（离线）：已验证的预下载包仍可应用
+        let failed = app_info("", false, true);
+        assert!(matches!(
+            plan_app_apply(Some(&failed), Some(&ready), true),
+            AppApplyPlan::Reuse
+        ));
+        assert!(matches!(
+            plan_app_apply(None, Some(&ready), true),
+            AppApplyPlan::Reuse
+        ));
+    }
+
+    #[test]
+    fn plan_fetches_when_prefetch_missing_stale_or_corrupt() {
+        let confirmed = app_info("1.1.0", true, false);
+        assert!(matches!(
+            plan_app_apply(Some(&confirmed), None, false),
+            AppApplyPlan::Fetch(v) if v == "1.1.0"
+        ));
+        let stale = ("1.0.9".to_string(), "cd".repeat(32));
+        assert!(matches!(
+            plan_app_apply(Some(&confirmed), Some(&stale), true),
+            AppApplyPlan::Fetch(v) if v == "1.1.0"
+        ));
+        let corrupt = ("1.1.0".to_string(), "ef".repeat(32));
+        assert!(matches!(
+            plan_app_apply(Some(&confirmed), Some(&corrupt), false),
+            AppApplyPlan::Fetch(v) if v == "1.1.0"
+        ));
+    }
+
+    #[test]
+    fn plan_rejects_no_update_or_offline_without_prefetch() {
+        let no_update = app_info("1.0.0", false, false);
+        let ready = ("1.1.0".to_string(), "ab".repeat(32));
+        // 检查成功但无更新（release 已撤/已被超越）：预下载再可用也拒绝
+        assert!(matches!(
+            plan_app_apply(Some(&no_update), Some(&ready), true),
+            AppApplyPlan::Reject
+        ));
+        let failed = app_info("", false, true);
+        assert!(matches!(
+            plan_app_apply(Some(&failed), None, false),
+            AppApplyPlan::Reject
+        ));
+        assert!(matches!(
+            plan_app_apply(None, None, false),
+            AppApplyPlan::Reject
+        ));
     }
 }
