@@ -209,6 +209,10 @@ pub fn apply_hide_tools(app: &AppHandle) {
 
 /// 页面心跳注入：dsh 页面定期上报存活标记与当前选中会话。
 /// 页面主线程挂起/崩溃时 setInterval 停摆，Rust 侧据此重载自愈（见 heartbeat.rs）。
+/// 上报走 dshd:// 自定义协议（dshdFetch，令牌经 X-DSHd-Token 头）：dsh 页
+/// 是远程来源，window.__TAURI__.core.invoke 会被 IPC 层拒绝、永远送不到。
+/// 依赖 MENU_INJECT（context-menu.js）先注入的 dshdFetch/dshSelectedSession，
+/// 只在下方组合脚本的 {menu} 之后使用。
 const HEARTBEAT_INJECT: &str = r#"
 if (!window.__dshdHeartbeat) {
   window.__dshdHeartbeat = true;
@@ -218,10 +222,11 @@ if (!window.__dshdHeartbeat) {
       var selected = dshSelectedSession();
       var key = JSON.stringify(selected);
       // 1s 检测、选择不变时至少间隔 10s 才上报：会话切换立即同步，
-      // 稳态心跳节奏不随检测频率上涨（IPC 量与 watchdog 判死口径不变）。
+      // 稳态心跳节奏不随检测频率上涨（协议请求量与看门狗判死口径不变）。
       if (key === lastSelection && Date.now() - lastBeat < 10000) return;
       lastSelection = key; lastBeat = Date.now();
-      window.__TAURI__.core.invoke('page_heartbeat', {sessionId: selected.id, selectionKnown: selected.known}).catch(function () {});
+      dshdFetch('heartbeat', 'known=' + (selected.known ? 1 : 0)
+        + (selected.id ? '&sid=' + encodeURIComponent(selected.id) : '')).catch(function () {});
     } catch (e) {}
   }
   reportPage();

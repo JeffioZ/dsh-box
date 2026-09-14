@@ -11,6 +11,8 @@ const TOKEN_HEADER: &str = "x-dshd-token";
 /// 处理注入脚本发来的 dshd:// 请求 —— dsh 页面 JS → Rust 的唯一通道
 /// （页面无法使用 IPC：commands 会拒绝其来源；自定义协议由 WebView 网络层拦截，
 /// 处理时再次校验主 WebView、当前 dsh 来源和进程级随机令牌）。
+/// 除文件动作外还承载页面心跳（heartbeat：会话选中上报与看门狗判死，
+/// 见 heartbeat.rs）。
 ///
 /// 权限与页面既有能力对齐：dsh 页面本就可以通过自己的后端“默认程序打开”任意
 /// 本地文件，这里只是补充 定位/另存为/指定应用打开/复制内容/图标提取；
@@ -83,6 +85,18 @@ pub(crate) fn handle_dshd_scheme(
     }
 
     match (action.as_str(), path.as_deref()) {
+        // 页面心跳：会话选中上报 + 页面存活标记（看门狗判死依据）。dsh 页
+        // 是远程来源，Tauri IPC 对其一律拒绝——此前心跳经
+        // window.__TAURI__.core.invoke 上报从未送达（前端 catch 静默吞掉），
+        // 状态栏会话选择长期依赖 updatedAt 兜底。来源与令牌已在上方校验。
+        ("heartbeat", _) => {
+            let known = query("known").as_deref() == Some("1");
+            let sid = query("sid")
+                .filter(|s| !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control));
+            crate::usage::set_visible_session(config.port, known, sid);
+            crate::heartbeat::beat(ctx.app_handle());
+            respond(200, "text/plain; charset=utf-8", b"ok".to_vec())
+        }
         // 探测（前端问 VS Code 是否可用）
         ("probe", _) => {
             let body = match query("what").as_deref() {

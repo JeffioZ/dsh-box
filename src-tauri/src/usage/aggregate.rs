@@ -962,6 +962,57 @@ mod tests {
     }
 
     #[test]
+    fn v3_session_log_folds_through_the_same_paths() {
+        // Session Log V3（dsh ≥0.1.5）物理编码与 V2 相同；差异是语义层的：
+        // header 行（type=session，无 seq）应被 Event::parse 跳过；新事件
+        // 类型（system/message 等）不被消费直接略过；assistant/message 的
+        // usage/message.source 与 request/header 的 header.config 路径不变。
+        let mut state = FoldState::default();
+        let lines = [
+            r#"{"type":"session","version":3,"id":"session-x","createdAt":1,"cwd":"D:\\p","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}"#.to_string(),
+            event(
+                1,
+                DAY1,
+                "system/message",
+                serde_json::json!({"turn": 0, "step": 0,
+                    "message": {"id": "m", "role": "system", "source": {"kind": "plugin", "plugin": "p"}, "content": []}}),
+            ),
+            event(
+                2,
+                DAY1,
+                "request/header",
+                serde_json::json!({"header": {"config": {"provider": "ibrain", "model": "claude-for-deepseek-v4-pro"}}}),
+            ),
+            serde_json::json!({"seq": 3, "time": DAY1, "type": "assistant/message", "data": {
+                "turn": 1, "step": 1,
+                "message": {"source": {"kind": "model", "provider": "ibrain", "model": "claude-for-deepseek-v4-pro"}},
+                "stream": [{"type": "chunk", "chunk": {"type": "text-delta", "text": "hi"}}],
+                "usage": {"inputTokens": 11662, "outputTokens": 344}
+            }}).to_string(),
+        ];
+        let events: Vec<Event> = lines.iter().filter_map(|l| Event::parse(l)).collect();
+        // header 行无 seq → None 被过滤；system/message 不产生样本
+        assert_eq!(events.len(), 3);
+        apply_delta(&mut state, &events);
+        let entry = state.days.get(&day_key(DAY1)).unwrap();
+        assert_eq!(entry.totals.input, 11662);
+        assert_eq!(entry.totals.output, 344);
+        assert_eq!(
+            entry
+                .models
+                .get("ibrain/claude-for-deepseek-v4-pro")
+                .unwrap()
+                .buckets
+                .total(),
+            11662 + 344
+        );
+        assert_eq!(
+            state.current_route.as_ref().unwrap().model,
+            "claude-for-deepseek-v4-pro"
+        );
+    }
+
+    #[test]
     fn render_sorts_days_and_filters_zero_model_rows() {
         let mut state = FoldState::default();
         let lines = [

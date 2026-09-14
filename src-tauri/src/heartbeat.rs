@@ -33,36 +33,10 @@ pub fn start_page_watch(app: AppHandle) {
     });
 }
 
-/// 记录一次页面心跳（页面注入脚本调用）。
+/// 记录一次页面心跳（dshd:// 协议的 heartbeat 动作调用；dsh 页远程来源
+/// 无法使用 Tauri IPC，见 webview/protocol.rs）。
 pub fn beat(app: &AppHandle) {
     app.state::<AppState>().set_heartbeat();
-}
-
-/// 页面心跳命令：仅允许 dsh 页面调用（命令本身无副作用，只更新存活标记）。
-#[tauri::command]
-pub fn page_heartbeat(
-    webview: tauri::Webview,
-    session_id: Option<String>,
-    selection_known: Option<bool>,
-) -> Result<(), String> {
-    let url = webview.url().map_err(|e| e.to_string())?;
-    let config = webview.app_handle().state::<AppState>().config();
-    if !crate::is_dsh_url(&url, &config) {
-        return Err(crate::locale::text(
-            "仅允许 dsh 页面调用此操作。",
-            "This action can only be invoked from the dsh page.",
-        )
-        .into());
-    }
-    if session_id
-        .as_ref()
-        .is_some_and(|id| id.len() > 512 || id.chars().any(char::is_control))
-    {
-        return Err("Invalid session ID".into());
-    }
-    crate::usage::set_visible_session(config.port, selection_known.unwrap_or(false), session_id);
-    beat(webview.app_handle());
-    Ok(())
 }
 
 fn poll_once(app: &AppHandle) -> Result<(), String> {

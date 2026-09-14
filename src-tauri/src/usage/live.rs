@@ -333,13 +333,25 @@ fn rpc_session_list(config: &Config) -> Option<serde_json::Value> {
 /// 从 `session/list`（或旧版 `session.list`）响应 value 中选当前会话：
 /// running 优先、其次 updatedAt 最新（与注入脚本 resolveAbsPath 的选取
 /// 逻辑一致——dsh 页面当前打开的正是该会话）。
+///
+/// 空白会话（`sessionListMetadata.blank`，dsh 首启/新开页自动创建、从未
+/// 有用户活动）的 updatedAt 会反超真实会话——dsh 0.1.5 升级首启后正是它
+/// 劫持了兜底选择，状态栏统计恒空。因此同级内非空白绝对优先；全部空白
+/// 时保持旧行为（选谁都无统计）。running 仍是最高优先：正在运行的空白
+/// 会话就是用户正在交互的当前会话。
 fn pick_session_item(value: &serde_json::Value) -> Option<&serde_json::Value> {
     let items = value.get("items")?.as_array()?;
-    let mut best: Option<(&serde_json::Value, bool, f64)> = None;
+    let blank = |item: &serde_json::Value| {
+        item.pointer("/projections/values/sessionListMetadata/blank")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    let mut best: Option<(&serde_json::Value, bool, bool, f64)> = None;
     for item in items {
         if item.get("sessionId").and_then(|v| v.as_str()).is_none() {
             continue;
         }
+        let item_blank = blank(item);
         let running = item
             .get("running")
             .and_then(|v| v.as_bool())
@@ -350,15 +362,19 @@ fn pick_session_item(value: &serde_json::Value) -> Option<&serde_json::Value> {
             .unwrap_or(0.0);
         let replace = match best {
             None => true,
-            Some((_, best_running, best_updated)) => {
-                (running && !best_running) || (running == best_running && updated > best_updated)
+            Some((_, best_running, best_blank, best_updated)) => {
+                (running && !best_running)
+                    || (running == best_running && item_blank != best_blank && !item_blank)
+                    || (running == best_running
+                        && item_blank == best_blank
+                        && updated > best_updated)
             }
         };
         if replace {
-            best = Some((item, running, updated));
+            best = Some((item, running, item_blank, updated));
         }
     }
-    best.map(|(item, _, _)| item)
+    best.map(|(item, _, _, _)| item)
 }
 
 fn current_session(config: &Config) -> Option<(String, bool)> {
@@ -840,6 +856,56 @@ fn unix_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_session_item_skips_blank_fresh_sessions_in_fallback() {
+        // dsh 0.1.5 首启自动创建的空白会话（blank:true、updatedAt 最新）会
+        // 劫持兜底选择；同级内非空白绝对优先，running 仍最高。
+        let value = serde_json::json!({"items": [
+            {"sessionId": "blank-new", "running": false, "updatedAt": 300.0,
+             "projections": {"values": {"sessionListMetadata": {"blank": true}}}},
+            {"sessionId": "real-mid", "running": false, "updatedAt": 200.0,
+             "projections": {"values": {"sessionStats": {"turns": 2, "steps": 5}}}},
+            {"sessionId": "real-old", "running": false, "updatedAt": 100.0,
+             "projections": {"values": {"sessionStats": {"turns": 1, "steps": 1}}}}
+        ]});
+        assert_eq!(
+            pick_session_item(&value).unwrap().get("sessionId").unwrap(),
+            "real-mid"
+        );
+        // running 的空白会话（用户正在新会话里交互）仍胜出
+        let value = serde_json::json!({"items": [
+            {"sessionId": "blank-running", "running": true, "updatedAt": 300.0,
+             "projections": {"values": {"sessionListMetadata": {"blank": true}}}},
+            {"sessionId": "real-old", "running": false, "updatedAt": 100.0,
+             "projections": {"values": {"sessionStats": {"turns": 1, "steps": 1}}}}
+        ]});
+        assert_eq!(
+            pick_session_item(&value).unwrap().get("sessionId").unwrap(),
+            "blank-running"
+        );
+        // 全部空白：保持旧行为（updatedAt 最新者胜出）
+        let value = serde_json::json!({"items": [
+            {"sessionId": "blank-a", "running": false, "updatedAt": 100.0,
+             "projections": {"values": {"sessionListMetadata": {"blank": true}}}},
+            {"sessionId": "blank-b", "running": false, "updatedAt": 200.0,
+             "projections": {"values": {"sessionListMetadata": {"blank": true}}}}
+        ]});
+        assert_eq!(
+            pick_session_item(&value).unwrap().get("sessionId").unwrap(),
+            "blank-b"
+        );
+        // 无 projections 的老会话（旧代次日志）按非空白参与，不受影响
+        let value = serde_json::json!({"items": [
+            {"sessionId": "no-proj", "running": false, "updatedAt": 50.0},
+            {"sessionId": "blank-new", "running": false, "updatedAt": 300.0,
+             "projections": {"values": {"sessionListMetadata": {"blank": true}}}}
+        ]});
+        assert_eq!(
+            pick_session_item(&value).unwrap().get("sessionId").unwrap(),
+            "no-proj"
+        );
+    }
 
     #[test]
     fn extracts_dsh_auth_cookie_from_token_exchange() {

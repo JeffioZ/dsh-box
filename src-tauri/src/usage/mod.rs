@@ -386,11 +386,12 @@ mod tests {
         std::fs::create_dir_all(&good).unwrap();
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::write(good.join("session.v2.jsonl"), usage_line(1, 1, 100, 20)).unwrap();
-        std::fs::write(bad.join("session.v3.jsonl"), usage_line(1, 1, 5, 5)).unwrap();
+        // v4 为未知代次（v3 已支持），模拟「日志格式较新」的会话
+        std::fs::write(bad.join("session.v4.jsonl"), usage_line(1, 1, 5, 5)).unwrap();
         let partial = report(&config).unwrap();
         assert_eq!(partial.total.tokens, 120);
         assert_eq!(partial.unavailable_sessions, ["bad"]);
-        std::fs::rename(bad.join("session.v3.jsonl"), bad.join("session.v2.jsonl")).unwrap();
+        std::fs::rename(bad.join("session.v4.jsonl"), bad.join("session.v3.jsonl")).unwrap();
         let complete = report(&config).unwrap();
         assert_eq!(complete.total.tokens, 130);
         assert!(complete.unavailable_sessions.is_empty());

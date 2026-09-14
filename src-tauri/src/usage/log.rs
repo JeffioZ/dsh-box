@@ -246,11 +246,21 @@ fn generation(name: &str) -> Option<u32> {
     version.parse().ok()
 }
 
+/// 支持的最高会话日志代次。dsh 0.1.5 起 Session Log V3（上游
+/// `SESSION_FORMAT_VERSION = 3`，packages/session/session-format-v2-to-v3）：
+/// 物理编码完全沿用 V2（事件信封 `{type,seq,time,data}`、独立 zstd 帧序列、
+/// 首帧 header 行），语义层变化——system 提示词移入 `system/message`
+/// surface 事件、surfaceOp replace 端点 `start/end` → `startSeq/endSeq`、
+/// PTC 工具事件与 `source.plugin` 改名——都不在聚合读取路径上
+/// （usage / message.source / header.config / turn / step 不变）。更新代次
+/// （v4+）仍按未知代次拒绝统计，不猜格式。
+const MAX_SUPPORTED_GENERATION: u32 = 3;
+
 pub(crate) fn supported_generation(path: &Path) -> bool {
     path.file_name()
         .and_then(|s| s.to_str())
         .and_then(generation)
-        .is_none_or(|version| version <= 2)
+        .is_none_or(|version| version <= MAX_SUPPORTED_GENERATION)
 }
 
 /// 按会话 id 定位其真实日志路径（递归枚举，支持嵌套分组目录）。
@@ -284,8 +294,12 @@ mod tests {
         super::collect_session_logs(&root, &mut found);
         assert!(found.iter().any(|(_, p)| p == &path));
         assert!(!found.iter().any(|(_, p)| p == &old));
-        assert!(!super::supported_generation(
+        // Session Log V3（dsh ≥0.1.5）已支持；下一代（v4）仍拒绝
+        assert!(super::supported_generation(
             &path.with_file_name("session.v3.jsonl")
+        ));
+        assert!(!super::supported_generation(
+            &path.with_file_name("session.v4.jsonl")
         ));
         assert_eq!(super::generation("session.v02.jsonl"), None);
         let _ = std::fs::remove_dir_all(root);
