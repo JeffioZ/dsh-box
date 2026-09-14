@@ -70,7 +70,7 @@ flate2 = "1"
 tauri-plugin-notification = "2"
 # 仅解码方向读 dsh 会话日志；关默认 feature 裁掉 C 侧 legacy 旧格式（v0.1+）解码器
 # 与字典构建器。zstd→zstd-safe→zstd-sys 三层依赖均 default-features = false，顶层即总开关。
-zstd = { version = "0.13.3", default-features = false }
+zstd = { version = "0.14.0", default-features = false }
 
 # TLS 后端按平台选择：Windows/macOS 走系统原生实现（schannel / Security.framework），
 # 体积更小且证书使用系统信任库（企业代理/自定义 CA 场景更友好）；
