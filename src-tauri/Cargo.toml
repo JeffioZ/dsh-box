@@ -58,7 +58,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_Graphics_Dwm",
 ] }
 # 复用 Tauri 已使用的轻量库：平台数据目录、进程级协议令牌、下载校验与 SemVer。
-dirs = "6"
+dirs = "7"
 getrandom = "0.4.3"
 sha2 = "0.11.0"
 semver = "1"
