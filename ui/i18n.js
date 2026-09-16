@@ -94,6 +94,7 @@ const DSHD_MESSAGES = {
   balanceUnavailable: ['余额不可用', 'Balance unavailable'],
   balanceDepleted: ['余额已耗尽', 'Balance depleted'],
   balanceDetailsAria: ['API 余额详情', 'API balance details'],
+  buildTime: ['构建时间 {time}', 'Build time {time}'],
   checkFailed: ['检查更新失败', 'Update check failed'],
   checkFailedRetry: ['检查失败，请稍后重试', 'The update check failed. Please try again later.'],
   checkingUpdates: ['正在检查更新…', 'Checking for updates…'],

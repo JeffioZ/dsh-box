@@ -369,6 +369,11 @@ fn show_with_update_token(
         "app_version".into(),
         serde_json::json!(env!("CARGO_PKG_VERSION")),
     );
+    // 构建时间（关于页纯展示）：独立字段，绝不并入 app_version——版本
+    // 比较与 CI version-check 都以语义化版本串为准（见 updater/check.rs）。
+    if let Some(built) = crate::versions::build_time_rfc3339() {
+        obj.insert("build_time".into(), serde_json::json!(built));
+    }
     let config = app.state::<AppState>().config();
     let dsh_version = crate::runtime::installed_dsh_version(&config)
         .unwrap_or_else(|| crate::locale::text("未知", "Unknown").into());

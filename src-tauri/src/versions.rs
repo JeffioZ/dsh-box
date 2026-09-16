@@ -1,4 +1,5 @@
 //! 版本领域：semver 风格比较、Node 版本解析与最低版本判定（纯逻辑，无平台依赖）。
+//! 另含构建时刻元数据（build.rs 注入，纯展示、不参与任何版本比较）。
 
 /// dsh 要求的最低 Node：^22.19.0 || >=24.0.0
 pub const NODE_MIN_MAJOR: u32 = 24;
@@ -31,6 +32,46 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
         (Ok(a), Ok(b)) => a.cmp_precedence(&b),
         _ => a.cmp(b),
     }
+}
+
+/// build.rs 注入的构建时刻（Unix 秒）。正常构建必然存在；缺失（如改动
+/// 引入前的旧缓存产物）时调用方跳过展示，不影响任何功能。
+pub fn build_epoch() -> Option<u64> {
+    option_env!("DSHBOX_BUILD_EPOCH").and_then(|raw| raw.parse().ok())
+}
+
+/// 构建时刻的 RFC3339 UTC 串（如 `2026-09-16T06:12:35Z`）。前端用
+/// `new Date()` 解析后按应用语言本地化展示；固定 UTC 保证跨时区构建
+/// （本地 build.ps1 / CI）语义一致。
+pub fn build_time_rfc3339() -> Option<String> {
+    Some(format_rfc3339_utc(build_epoch()?))
+}
+
+fn format_rfc3339_utc(epoch: u64) -> String {
+    let days = epoch / 86_400;
+    let secs_of_day = epoch % 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs_of_day / 3600,
+        secs_of_day / 60 % 60,
+        secs_of_day % 60
+    )
+}
+
+/// 天数 → 公历年月日（Howard Hinnant 的 civil_from_days 移位算法，
+/// 覆盖 1970 起的全部日期，无需历法库依赖）。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[cfg(test)]
@@ -87,5 +128,14 @@ mod tests {
         assert!(node_satisfies(22, 19));
         assert!(!node_satisfies(22, 18));
         assert!(!node_satisfies(23, 99));
+    }
+
+    #[test]
+    fn build_time_formats_known_epochs() {
+        assert_eq!(format_rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        // 闰日边界：2024-02-29T12:00:00Z
+        assert_eq!(format_rfc3339_utc(1_709_208_000), "2024-02-29T12:00:00Z");
+        // 2026-09-16T06:30:05Z
+        assert_eq!(format_rfc3339_utc(1_789_540_205), "2026-09-16T06:30:05Z");
     }
 }

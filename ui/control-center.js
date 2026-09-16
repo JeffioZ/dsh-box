@@ -1239,6 +1239,19 @@ function renderUpdateDone(p) {
 // 不维护内联 SVG 副本，避免品牌资源漂移）
 const ABOUT_LOGO =
   '<img class="about-logo" src="assets/app-icon.svg" alt="" width="48" height="48">';
+// 构建时间行（ver-row 内第三项，同档弱化样式）。后端字段缺失或不可解析
+// 时不渲染占位——旧缓存产物/异常载荷不显示残缺行。
+function aboutBuildTimeSpan(buildTime) {
+  if (!buildTime) return '';
+  const date = new Date(buildTime);
+  if (isNaN(date.getTime())) return '';
+  // 展示跟随应用语言（与 dshdT 同源）；精确到分钟，秒级数字只是噪声
+  const text = date.toLocaleString(DSHD_LANGUAGE, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+  return '<span>' + dshdT('buildTime', { time: esc(text) }) + '</span>';
+}
 function renderAbout(initial) {
   $('body').innerHTML =
     '<div class="about">' +
@@ -1248,6 +1261,7 @@ function renderAbout(initial) {
     '<div class="ver-row">' +
     '<span>' + dshdT('appVersion', { version: esc(initial.app_version) }) + '</span>' +
     '<span>dsh ' + esc(initial.dsh_version || '—') + '</span>' +
+    aboutBuildTimeSpan(initial.build_time) +
     '</div>' +
     '<button type="button" class="dshd-btn" id="about-check">' + dshdT('checkUpdates') + '</button>' +
     '<div class="cp">© ' + new Date().getFullYear() + ' JeffioZ</div>' +

@@ -9,6 +9,15 @@ fn main() {
     // 补上目录级跟踪，改 UI 文件后 release 构建自动重新嵌入资源
     println!("cargo:rerun-if-changed=../ui");
     println!("cargo:rerun-if-changed=app.manifest.xml");
+    // 构建时刻（Unix 秒）注入，关于页纯展示（见 versions.rs）。必须跟踪
+    // src/：cargo 在存在 rerun-if-changed 声明后只按声明路径重跑脚本，
+    // 纯 Rust 改动若不跟踪会复用上一次的旧时间戳。
+    println!("cargo:rerun-if-changed=src");
+    let build_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=DSHBOX_BUILD_EPOCH={build_epoch}");
     // 自定义 Windows 应用清单：默认清单缺 dpiAwareness，高 DPI 屏（150%+）
     // 下窗口尺寸被系统虚拟化（逻辑像素按 96 DPI 解释），弹窗/主窗口偏小
     let mut windows = tauri_build::WindowsAttributes::new();
