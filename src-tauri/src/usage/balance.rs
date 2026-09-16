@@ -2,7 +2,10 @@
 //!
 //! 参考 dsh-usage-stats 的适配器契约（适配器名单、endpoint 相对路径与响应
 //! 字段映射），以 Rust 独立实现。这些属于公开 API 事实（endpoint 路径 +
-//! JSON 字段名），不复制其代码结构。
+//! JSON 字段名），不复制其代码结构。适配器解析次序对齐上游
+//! `resolveProviderIdentity`：路由 id 规范名 → baseURL 主机名规则 →
+//! Sub2API 面板指纹探测（对身份未知且已配凭据的中转无凭据 GET
+//! `/api/v1/settings/public`，真面板返回 `{code:0,data:{affiliate_enabled:bool}}`）。
 //!
 //! 安全边界（与上游对齐，自托管网关放行见 guard 语义）：
 //! - 仅 GET；https 放行任意主机，http 仅回环/私有地址（`net_guard` 单一口径）；
@@ -10,6 +13,8 @@
 //! - 响应体上限 1 MiB、超时连接/响应分段限制；
 //! - 凭据只在请求时解析、绝不落盘。
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::app_state::Config;
@@ -73,9 +78,10 @@ pub enum BalanceScheme {
     Sub2Api,
 }
 
-/// 按路由 id 解析余额适配器。返回 None 表示该路由无公开余额接口。
-/// New API / Sub2API 面板由用户把路由 id 命名为 `new-api` / `sub2api`
-/// （或 passion 网关）；上游的主机名探测与面板指纹自动识别未移植。
+/// 按路由 id 解析余额适配器（规范名命中，对齐上游 canonical-id）。
+/// New API / Sub2API 自托管面板可显式命名为 `new-api` / `sub2api`
+/// （或 passion 网关）直接命中，免于探测。返回 None 表示 id 未命中，
+/// 交给 `scheme_of_route` 的主机名规则与面板指纹探测续判。
 fn scheme_of(route_id: &str) -> Option<BalanceScheme> {
     match route_id {
         "deepseek-official" | "deepseek" => Some(BalanceScheme::DeepSeek),
@@ -86,6 +92,34 @@ fn scheme_of(route_id: &str) -> Option<BalanceScheme> {
         "new-api" | "newapi" => Some(BalanceScheme::NewApi),
         "sub2api" | "passion" => Some(BalanceScheme::Sub2Api),
         _ => None,
+    }
+}
+
+/// 路由身份解析入口：id 规范名优先（用户显式命名最高，与上游
+/// canonical-id 优先级一致），未命中再按 baseURL 主机名规则（上游
+/// hostRule 的可移植子集；`ollama.com`→Ollama 走订阅通道，不在此列）。
+/// 仍未命中返回 None，由 `probe_sub2api_panel` 做面板指纹探测。
+fn scheme_of_route(route: &ProviderRoute) -> Option<BalanceScheme> {
+    if let Some(scheme) = scheme_of(&route.id) {
+        return Some(scheme);
+    }
+    let base = route.base_url.as_deref()?;
+    let url = url::Url::parse(base).ok()?;
+    let host = url.host_str()?;
+    scheme_of_host(host)
+}
+
+/// baseURL 主机名 → 适配器（上游 hostRule：DeepSeek / OrcaRouter 精确
+/// 主机，passionapi.com 含子域）。主机名尾点与大小写归一后匹配。
+fn scheme_of_host(host: &str) -> Option<BalanceScheme> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    match host.as_str() {
+        "api.deepseek.com" => Some(BalanceScheme::DeepSeek),
+        "api.orcarouter.ai" => Some(BalanceScheme::OrcaRouter),
+        "passionapi.com" => Some(BalanceScheme::Sub2Api),
+        _ => host
+            .ends_with(".passionapi.com")
+            .then_some(BalanceScheme::Sub2Api),
     }
 }
 
@@ -279,10 +313,65 @@ fn guard_url(base: &str, path: &str) -> Result<String, &'static str> {
     crate::net_guard::guard_full_url(url.as_str())
 }
 
+/// Sub2API 面板指纹探测缓存（键：凭据引用 + 接口地址）。上游同款口径：
+/// 进程内每个配置只探一次，结论（含网络失败）不再重试，重启后重探。
+fn sub2api_probe_cache() -> &'static Mutex<HashMap<String, bool>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Sub2API 面板指纹探测（上游 probeSub2ApiPanel）：对身份未知但已配置
+/// 凭据的中转，无凭据 GET `<base>/api/v1/settings/public`——真 Sub2API
+/// 面板返回 `{code:0,data:{affiliate_enabled:bool}}`，New-API 与 passion
+/// 网关均无此路由，构成只读指纹。URL 沿用余额查询的 net_guard 口径
+/// （https 任意主机 / http 仅私网）。未配凭据不探测也不缓存（凭据后来
+/// 配上时下次再探）；探测后的结论按配置缓存，命中后不再发请求。
+fn probe_sub2api_panel(config: &Config, route: &ProviderRoute) -> bool {
+    let (Some(base), Some(key_env)) = (route.base_url.as_deref(), route.api_key_env.as_deref())
+    else {
+        return false;
+    };
+    let cache_key = format!("{key_env}\u{1}{base}");
+    if let Some(hit) = sub2api_probe_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&cache_key)
+    {
+        return *hit;
+    }
+    if resolve_credential(config, key_env).is_none() {
+        return false;
+    }
+    let detected = match crate::net_guard::guard_https_or_lan_http(base, "/api/v1/settings/public")
+    {
+        Ok(target) => match fetch_json_headers(&target, &[]) {
+            Ok(body) => is_sub2api_panel_body(&body),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
+    sub2api_probe_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(cache_key, detected);
+    detected
+}
+
+/// 指纹判定（纯逻辑）：信封 `code == 0` 且 `data.affiliate_enabled` 为
+/// 布尔——false 也算面板（只验证形状，不看开关值）。
+fn is_sub2api_panel_body(body: &serde_json::Value) -> bool {
+    body.get("code").and_then(serde_json::Value::as_i64) == Some(0)
+        && body
+            .pointer("/data/affiliate_enabled")
+            .is_some_and(serde_json::Value::is_boolean)
+}
+
 /// 查询一个路由的余额（同步、阻塞线程调用）。无 key / 无适配器时给出
 /// 明确的不可用快照而非 error。
 pub fn query_route(config: &Config, route: &ProviderRoute) -> AccountSnapshot {
-    let adapter = scheme_of(&route.id);
+    // 身份解析：id 规范名 → 主机名规则 → Sub2API 面板指纹探测。
+    let adapter = scheme_of_route(route)
+        .or_else(|| probe_sub2api_panel(config, route).then_some(BalanceScheme::Sub2Api));
     // 多请求/自托管面板适配器走专属流程（余额/窗口二选一输出）。
     match adapter {
         Some(BalanceScheme::OrcaRouter) => return query_orcarouter(config, route),
@@ -1127,6 +1216,82 @@ mod tests {
         assert_eq!(scheme_of("moonshotai"), Some(BalanceScheme::Moonshot));
         assert_eq!(scheme_of("zai"), Some(BalanceScheme::Zai));
         assert_eq!(scheme_of("opencode-go"), None);
+    }
+
+    #[test]
+    fn host_rules_match_upstream_hostrule() {
+        assert_eq!(
+            scheme_of_host("api.deepseek.com"),
+            Some(BalanceScheme::DeepSeek)
+        );
+        assert_eq!(
+            scheme_of_host("api.orcarouter.ai"),
+            Some(BalanceScheme::OrcaRouter)
+        );
+        assert_eq!(
+            scheme_of_host("passionapi.com"),
+            Some(BalanceScheme::Sub2Api)
+        );
+        assert_eq!(
+            scheme_of_host("a.b.passionapi.com"),
+            Some(BalanceScheme::Sub2Api)
+        );
+        // 前缀重合不算子域；大小写与尾点归一后再匹配。
+        assert_eq!(scheme_of_host("evilpassionapi.com"), None);
+        assert_eq!(scheme_of_host("example.com"), None);
+        assert_eq!(
+            scheme_of_host("PASSIONAPI.COM."),
+            Some(BalanceScheme::Sub2Api)
+        );
+    }
+
+    #[test]
+    fn scheme_of_route_prefers_id_then_host() {
+        let route = |id: &str, base: Option<&str>| ProviderRoute {
+            id: id.into(),
+            display_name: id.into(),
+            api_key_env: Some("RELAY_KEY".into()),
+            base_url: base.map(Into::into),
+        };
+        // 主机名兜底：id 未命中但 baseURL 指向已知面板主机。
+        assert_eq!(
+            scheme_of_route(&route("my-relay", Some("https://api.orcarouter.ai/v1"))),
+            Some(BalanceScheme::OrcaRouter)
+        );
+        // id 规范名优先于主机名（用户显式命名最高）。
+        assert_eq!(
+            scheme_of_route(&route(
+                "deepseek-official",
+                Some("https://api.orcarouter.ai")
+            )),
+            Some(BalanceScheme::DeepSeek)
+        );
+        // 无 baseURL / 无法解析 / 均未命中 → None（交给面板探测）。
+        assert_eq!(scheme_of_route(&route("my-relay", None)), None);
+        assert_eq!(scheme_of_route(&route("my-relay", Some("not a url"))), None);
+        assert_eq!(
+            scheme_of_route(&route("my-relay", Some("https://relay.example.com"))),
+            None
+        );
+    }
+
+    #[test]
+    fn sub2api_panel_fingerprint_shape() {
+        // affiliate_enabled 为 false 也是面板：只验证形状，不看开关值。
+        let panel = serde_json::json!({"code": 0, "data": {"affiliate_enabled": false}});
+        assert!(is_sub2api_panel_body(&panel));
+        assert!(!is_sub2api_panel_body(
+            &serde_json::json!({"code": 0, "data": {}})
+        ));
+        assert!(!is_sub2api_panel_body(
+            &serde_json::json!({"code": 1, "data": {"affiliate_enabled": true}})
+        ));
+        assert!(!is_sub2api_panel_body(
+            &serde_json::json!({"data": {"affiliate_enabled": true}})
+        ));
+        assert!(!is_sub2api_panel_body(
+            &serde_json::json!({"code": 0, "data": {"affiliate_enabled": "yes"}})
+        ));
     }
 
     #[test]
