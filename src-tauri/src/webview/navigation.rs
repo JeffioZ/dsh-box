@@ -84,6 +84,17 @@ if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').match
 /// DPI 均自适应。经 navigate 后的 eval 注入（initialization_script 对外部 URL 导航不可靠）。
 const EDIT_CONTEXT_INJECT: &str = include_str!("../../../ui/edit-context.js");
 const MENU_INJECT: &str = include_str!("../../resources/injections/context-menu.js");
+/// 引导期续接遮罩（见文件头注释）：图标占位在编译期替换为与启动页同源的
+/// ui/assets/app-icon.svg 内联内容——注入目标是 dsh 远程文档，取不到本地资源。
+fn boot_continue_inject() -> &'static str {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        include_str!("../../resources/injections/boot-continue.js").replace(
+            "__DSHD_ICON__",
+            include_str!("../../../ui/assets/app-icon.svg"),
+        )
+    })
+}
 
 /// 隐藏工具调用开关开启时注入的样式脚本（navigate 注入与托盘切换共用）。
 const HIDE_TOOLS_APPLY: &str = "var __h=document.getElementById('__dshd_hide_tools');if(!__h){var s=document.createElement('style');\
@@ -282,7 +293,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
            fix(); \
            const el = document.querySelector('head > title'); \
            if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-           {edit_context} {menu} {heartbeat} {hide_tools} {hide_stats} \
+           {boot_continue} {edit_context} {menu} {heartbeat} {hide_tools} {hide_stats} \
            window.__dshdInit = 'ready'; \
          }} catch (error) {{ \
            delete window.__dshdInit; \
@@ -291,6 +302,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
            delete window.__dshdProtocolToken; \
          }} \
          }})();",
+        boot_continue = boot_continue_inject(),
         edit_context = EDIT_CONTEXT_INJECT,
         menu = MENU_INJECT,
         heartbeat = HEARTBEAT_INJECT,
