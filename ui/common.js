@@ -137,6 +137,28 @@ const DSHD_ICON_PATHS = {
   select: '<path d="M5 3a2 2 0 0 0-2 2"></path><path d="M19 3a2 2 0 0 1 2 2"></path><path d="M21 19a2 2 0 0 1-2 2"></path><path d="M5 21a2 2 0 0 1-2-2"></path><path d="M9 3h1"></path><path d="M9 21h1"></path><path d="M14 3h1"></path><path d="M14 21h1"></path><path d="M3 9v1"></path><path d="M21 9v1"></path><path d="M3 14v1"></path><path d="M21 14v1"></path>',
   undo: '<path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path>',
   redo: '<path d="m15 14 5-5-5-5"></path><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path>',
+  // —— 页面级条目（此前散落在各页内联，收敛回注册表）——
+  // 状态栏统计组：counts=lucide message-square，speeds=lucide zap，
+  // cache=lucide database
+  counts: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>',
+  speeds: '<path d="M13 2 4 14h6l-1 8 9-12h-6z"></path>',
+  cache: '<path d="M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z"></path><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path>',
+  // 用量日历翻页：lucide chevron-left/right；调用方经 attrs 透传
+  // stroke-width 2（比常规 1.8 重一档，维持原有视觉）
+  chevronLeft: '<path d="m15 6-6 6 6 6"></path>',
+  chevronRight: '<path d="m9 6 6 6-6 6"></path>',
+  // 插件主页外链：lucide external-link
+  externalLink: '<path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"></path><path d="m21 3-9 9"></path><path d="M15 3h6v6"></path>',
+  // 余额耗尽级警示：lucide octagon-alert（与 warning 的三角警示区分级别）
+  alertOctagon: '<path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path>',
+  // 账户未配置空态：lucide server
+  server: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><path d="M6 6h.01M6 18h.01"></path>',
+  // toast 关闭叉：lucide x（调用方透传 14px 尺寸与描边属性）
+  x: '<path d="m6 6 12 12M18 6 6 18"></path>',
+  // 状态栏 tokens 组：lucide arrow-left-right
+  tokens: '<path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path>',
+  // 余额 chip 钱包（调用方透传 class="c-ic"）：lucide wallet 形态的简化版
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path>',
   // —— 直接换 d 的图标条目（运行时 setAttribute 切换，非 dshdIcon 标签形态）——
   // 注意：这些是裸 d 字符串，与上方给 dshdIcon 用的完整标签条目不可混用，
   // 键名故意的区分开
@@ -490,7 +512,7 @@ function dshdToast(text, opts) {
     close.type = 'button';
     close.className = 'dshd-toast-close';
     close.setAttribute('aria-label', dshdT('toastClose'));
-    close.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    close.innerHTML = dshdIcon('x', 'width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"');
     close.addEventListener('click', () => dshdToastDismiss(toast));
     toast.append(close);
   }

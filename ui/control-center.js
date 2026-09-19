@@ -438,8 +438,9 @@ function providerMark(item) {
   return (letters.slice(0, 2) || '?').toUpperCase();
 }
 
-const WARN_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>';
-const CRIT_ICON = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>';
+// warning 用注册表条目（同 lucide triangle-alert，几何等价的另一代 path 拼写）
+const WARN_ICON = dshdIcon('warning', 'focusable="false" aria-hidden="true"');
+const CRIT_ICON = dshdIcon('alertOctagon', 'focusable="false" aria-hidden="true"');
 const CLOCK_ICON = dshdIcon('clock', 'focusable="false" aria-hidden="true"');
 
 // —— 最近 14 天：本地日历窗口，只列有用量的日期（无用量省略、未来日不计）——
@@ -559,8 +560,8 @@ function renderHeatmap(wrap, report) {
   draw();
 }
 
-const CHEV_LEFT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>';
-const CHEV_RIGHT = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+const CHEV_LEFT = dshdIcon('chevronLeft', 'focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"');
+const CHEV_RIGHT = dshdIcon('chevronRight', 'focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"');
 
 function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
   const [year, month0] = monthKey.split('-').map(Number);
@@ -619,7 +620,7 @@ function usageRenderDayDetail(detail, dayKey, dayMap) {
   if (!entry || !(entry.models && entry.models.length)) {
     detail.hidden = false;
     detail.innerHTML = '<span class="usage-empty empty-state">' +
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>' +
+      dshdIcon('info', 'aria-hidden="true"') +
       dshdT('usageEmpty') + '</span>';
     return;
   }
@@ -788,7 +789,7 @@ function renderAccountCards(box, items) {
   box.textContent = '';
   if (!items.length) {
     box.innerHTML = '<span class="usage-empty empty-state" role="status">' +
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><path d="M6 6h.01M6 18h.01"></path></svg>' +
+      dshdIcon('server', 'aria-hidden="true"') +
       dshdT('accountNotConfiguredHint') + '</span>';
     return;
   }
@@ -1452,7 +1453,7 @@ const NAV_TITLE_KEY = {
   settings: 'settingsTitle', about: 'about',
 };
 const NAV_ICONS = {
-  chart: '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></svg>',
+  chart: dshdIcon('chart', 'focusable="false" aria-hidden="true"'),
   download: dshdIcon('download', 'focusable="false" aria-hidden="true"'),
   puzzle: dshdIcon('puzzle', 'focusable="false" aria-hidden="true"'),
   gear: dshdIcon('gear', 'focusable="false" aria-hidden="true"'),
