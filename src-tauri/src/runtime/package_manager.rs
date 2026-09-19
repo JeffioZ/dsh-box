@@ -206,6 +206,15 @@ pub(super) fn run_pnpm_add(
         "--reporter=append-only".into(),
         "--registry".into(),
         add.registry.into(),
+        // hoisted（npm 式扁平真实文件布局）：pnpm 默认的 junction 链接树在
+        // Windows 上解析开销实测拖慢服务启动 ~1.2s（3.36s→2.15s，对齐官方
+        // 桌面版打包树的提速来源）。插件装在 profile 树（dsh 自管），不受
+        // 本体树布局影响。存量安装经下次 dsh 更新自然重建为新布局。
+        "--node-linker=hoisted".into(),
+        // 显式跳过依赖构建脚本：原生依赖（node-pty/koffi 等）自带 prebuild
+        // 或运行时按需加载，现有树本就无构建产物；不声明则 pnpm≥10 以
+        // ERR_PNPM_IGNORED_BUILDS 退出码 1 结束（安装实际已完成）。
+        "--ignore-scripts".into(),
     ];
     run_node_tool(
         app,
