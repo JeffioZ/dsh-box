@@ -25,6 +25,10 @@ let lastBalance = null;
 let currentSettings = null; // 设置状态（hide_balance 控制余额 chip 显隐）
 let serviceMode = 'none';
 let serviceReady = false;
+// 本次运行内服务是否曾就绪：初始启动（从未就绪）时统计区整个隐藏——
+// 整个窗口已是 loading 界面，状态栏再显示「等待服务就绪」属冗余自解释；
+// 占位只在「曾就绪后失去」（看门狗重启等会话中途场景）才有解释价值
+let serviceEverReady = false;
 
 const esc = dshdEsc;
 
@@ -38,9 +42,10 @@ function renderStats() {
     // 悬停 title 统一清空：占位文案常显自解释，数据态由 applyNativeTips
     // 接管（不清会残留上一数据态的旧统计 tooltip）
     el.title = '';
-    if (serviceMode === 'managed' && !serviceReady) {
-      // 托管服务未就绪（启动 / 看门狗恢复期）：常显弱化占位并保持可点；
-      // 就绪后下一轮轮询自动替换为真实统计
+    if (serviceMode === 'managed' && !serviceReady && serviceEverReady) {
+      // 曾就绪后失去（启动/看门狗恢复期）：常显弱化占位并保持可点；
+      // 就绪后下一轮轮询自动替换为真实统计。初始启动（从未就绪）走下方
+      // 隐藏分支——整窗已是 loading，状态栏不重复解释
       el.style.display = '';
       el.innerHTML =
         '<span class="g"><span class="g-t pending">' + esc(dshdT('navRequiresReady')) + '</span></span>';
@@ -168,7 +173,9 @@ function balanceChipState() {
 
 function renderBalance() {
   const chip = $('balance-chip');
-  const hide = currentSettings && currentSettings.hide_balance;
+  // 首个余额结果到达前整体隐藏：loading 期整窗已自解释，空数据态
+  // （-- + 红点）只是噪声；结果到达即显示（含 no_key 等引导态）
+  const hide = (currentSettings && currentSettings.hide_balance) || !lastBalance;
   if (hide) {
     chip.style.display = 'none';
     updateEdgeSeparator();
@@ -229,7 +236,7 @@ function renderBalance() {
 function updateEdgeSeparator() {
   const sep = $('edge-sep');
   if (!sep) return;
-  const balanceVisible = !(currentSettings && currentSettings.hide_balance);
+  const balanceVisible = !(currentSettings && currentSettings.hide_balance) && !!lastBalance;
   const statsVisible = serviceReady && serviceMode === 'managed' && statsGroups.length > 0;
   sep.style.display = statsVisible && balanceVisible ? '' : 'none';
 }
@@ -358,6 +365,7 @@ function init() {
     serviceMode = payload.service_mode || 'none';
     serviceReady = payload.phase === 'ready'
       && (serviceMode === 'managed' || serviceMode === 'external');
+    if (serviceMode === 'managed' && serviceReady) serviceEverReady = true;
     if (serviceMode !== 'managed') statsGroups = [];
     renderStats();
     renderBalance();
@@ -386,6 +394,7 @@ function init() {
     serviceMode = payload.service_mode || 'none';
     serviceReady = payload.phase === 'ready'
       && (serviceMode === 'managed' || serviceMode === 'external');
+    if (serviceMode === 'managed' && serviceReady) serviceEverReady = true;
     renderStats();
     renderBalance();
     if (serviceMode !== 'external' && serviceMode !== 'external-disconnected') {
