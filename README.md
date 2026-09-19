@@ -48,7 +48,6 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 | 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
 | 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次内置插件可明确取消 |
 | 用量与余额 | 会话 token 按日/模型聚合、月历热图、最近 14 天与模型下钻；供应商余额与订阅额度卡片，后台周期监测、瞬错保旧与低余额预警 |
-| 模型配置 | 类型化校验并导入/导出 `llm-pi-ai` 自定义路由，凭据与设置分开保存 |
 | 便携模式 | Windows exe 同级放置 `portable.txt`，外壳配置与运行时改存相邻 `data/`；dsh 会话和凭据仍使用 `$DSH_HOME` |
 
 ## 平台
@@ -69,14 +68,14 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 - macOS：把应用拖入 Applications。若 Gatekeeper 拦截，按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许。
 - Linux：解压后运行 `DSHBox`；请先安装发行版要求的 WebKitGTK 4.1 依赖。
 
-首次启动会准备运行时（安装过程可随时取消，不会退出应用），然后显示首次配置页。配置页所有项都可保持默认或直接跳过——DeepSeek API Key 也可留空，之后均可在设置中修改：
+首次启动会准备运行时（安装过程可随时取消，不会退出应用），然后显示首次配置页。配置页所有项都可保持默认或直接跳过——DeepSeek API Key 也可留空，之后在 dsh 自己的设置中填写：
 
 1. API Key 写入 dsh 的 `$DSH_HOME/.credentials.yaml`，不会再复制到 DSHBox 的 `config.json`。
 2. 语言与主题写入 dsh 的 `settings.yaml`，与官方 CLI/Web 界面共享。
 3. 开机自启动使用各平台系统机制。
 4. “安装内置插件”默认勾选，但可取消；未勾选时不会自动安装。
 
-之后可在“设置 → 服务管理 → DeepSeek API Key”中替换或清除密钥；若环境变量已提供密钥，该区域只读并显示由外部管理。
+之后如需替换或清除密钥，请在 dsh 官方界面（Web 设置或 CLI）中操作；DSHBox 的设置弹窗不收取 API Key。
 
 ## 配置与数据
 
@@ -203,7 +202,6 @@ desktop/
 │     ├─ dsh.rs                    # dsh 服务启动、外部接入与看门狗
 │     ├─ updater/                  # 检查、平台更新与事务恢复
 │     ├─ plugins/                  # CLI 执行、维护策略与手动操作
-│     ├─ model_config/             # 模型路由解析、导入与导出
 │     ├─ usage/                    # 用量与余额聚合、缓存与状态栏统计
 │     ├─ tray.rs / tray_menu.rs    # 系统托盘与托盘菜单窗口
 │     ├─ webview/                  # 导航边界、自定义协议与注入

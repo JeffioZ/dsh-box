@@ -2,10 +2,10 @@
 //!
 //! 与 dsh 官方凭据服务（`@deepseek-ai/dsh-credentials-local`）同一格式：
 //! 顶层 `version: 1`，apiKeyEnv 凭据统一放在 `refs:` 段（`records:` 段用于
-//! OAuth 等记录，本工具不触碰）。只有如此，设置弹窗 / 模型导入里填的 key
-//! 才会被 dsh 真正读取——扁平顶层布局是 dsh 的 pre-release 旧格式，其解析
-//! 直接抛错（MISSING_CREDENTIAL）。本仓库从未发布过写扁平布局的正式版，
-//! 因此只按 v1 布局读写，不做旧格式迁移。
+//! OAuth 等记录，本工具不触碰）。只有如此，首次引导里填的 key 才会被 dsh
+//! 真正读取——扁平顶层布局是 dsh 的 pre-release 旧格式，其解析直接抛错
+//!（MISSING_CREDENTIAL）。本仓库从未发布过写扁平布局的正式版，因此只按
+//! v1 布局读写，不做旧格式迁移。
 //!
 //! 凭据文件不经过通用 YAML 序列化，避免重排或改写用户的其他条目；所有写入仍
 //! 由 `app_state::update_text_file` 串行并原子替换。
@@ -74,26 +74,6 @@ pub(crate) fn upsert_checked(text: &str, name: &str, value: &str) -> Result<Stri
     }
     crate::yaml_fields::parse(&next)?;
     Ok(next)
-}
-
-pub(crate) fn remove_saved(config: &Config, name: &str) -> Result<(), String> {
-    let path = config.dsh_home().join(".credentials.yaml");
-    crate::app_state::update_text_file(&path, |text| {
-        let doc = crate::yaml_fields::parse(&text)?;
-        let matches: Vec<String> = doc
-            .get("refs")
-            .and_then(|v| v.as_object())
-            .into_iter()
-            .flat_map(|m| m.keys())
-            .filter(|k| k.as_str() == name)
-            .cloned()
-            .collect();
-        let mut next = text;
-        for key in matches {
-            next = crate::yaml_fields::remove(&next, "refs", &key)?;
-        }
-        Ok(next)
-    })
 }
 
 #[cfg(test)]
@@ -203,23 +183,6 @@ mod tests {
             );
             if source.contains("KEEP") {
                 assert_eq!(super::value_from_text(&out, "KEEP").as_deref(), Some("old"));
-            }
-        }
-    }
-    #[test]
-    fn removal_handles_flow_and_block_without_changing_neighbors() {
-        for source in [
-            "refs: {KEY: old, KEEP: yes}\nother: keep\n",
-            "refs: {KEEP: yes, KEY: old}\nother: keep\n",
-            "refs:\n    KEY: old\n    KEEP: yes\nother: keep\n",
-            "refs:\n  KEY: old\n",
-        ] {
-            let out = crate::yaml_fields::remove(source, "refs", "KEY").unwrap();
-            assert!(crate::yaml_fields::parse(&out).unwrap()["refs"]
-                .get("KEY")
-                .is_none());
-            if source.contains("other:") {
-                assert!(out.contains("other: keep"));
             }
         }
     }

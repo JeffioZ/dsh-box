@@ -4,14 +4,6 @@ use super::*;
 
 // ---------- 统一自绘弹窗（dialog 窗口调用；内容预渲染+轮询为主，事件兜底） ----------
 
-/// 打开设置页（统一弹窗）。
-#[tauri::command]
-pub fn app_dialog_open_settings(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
-    ensure_local_origin(&webview)?;
-    crate::control_center::open_settings(&app);
-    Ok(())
-}
-
 #[tauri::command]
 pub fn app_dialog_open_usage(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
     ensure_local_origin(&webview)?;

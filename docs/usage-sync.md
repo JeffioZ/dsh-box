@@ -5,7 +5,7 @@
 ## 同步锚点
 
 - 上游仓库：`https://github.com/Ychris12138/dsh-usage-stats.git`
-- 当前锚定版本：**v0.3.3（commit `9bbb6d5`，2026-09-12）**。适配器与余额层（`balance.rs` / `subscriptions.rs`）、定价与成本账（`pricing.rs` / `aggregate.rs` 成本累加）按 v0.3.1 移植；v0.3.3 的供应商身份判定链（`resolveProviderIdentity`：canonical-id → 主机名规则 → Sub2API 面板指纹探测）已移植进 `balance.rs`（`scheme_of_route` / `scheme_of_host` / `probe_sub2api_panel`）；聚合 token 语义（`lib/usage.js`）自 f513669 起上游无变化，视同已对齐。
+- 当前锚定版本：**v0.3.3（commit `9bbb6d5`，2026-09-12）**。适配器与余额层（`balance.rs` / `subscriptions.rs`）、定价与成本账（`pricing.rs` / `aggregate.rs` 成本累加）按 v0.3.1 移植；供应商身份判定链（`resolveProviderIdentity`：canonical-id → 主机名规则 → Sub2API 面板指纹探测，v0.3.1 引入）已移植进 `balance.rs`（`scheme_of_route` / `scheme_of_host` / `probe_sub2api_panel`）；聚合 token 语义（`lib/usage.js`）自 f513669 起上游无变化，视同已对齐。v0.3.2→v0.3.3 复核（2026-09-20）：仅改 `lib/index.js`（插件面 persistence API 适配，#103，与文件直读架构正交）与 `lib/accounts.js`（声明式余额 remaining 推导，#104，该功能未移植不适用），无需带入。
 - 关注信号：新 tag、`lib/usage.js` 的语义与注释变更、适配器清单变更（`lib/accounts.js` / `lib/subscriptions.js` / `lib/balance.js`）、**`lib/pricing.js` 的价格目录变更**（官方调价；移植时同步递增 `usage/cache.rs` 版本号强制重折成本账）
 
 ## 文件映射

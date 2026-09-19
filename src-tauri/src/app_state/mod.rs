@@ -5,7 +5,7 @@ mod managed_file;
 mod store;
 
 pub use config::Config;
-pub(crate) use managed_file::{atomic_write, update_text_file, update_text_pair};
+pub(crate) use managed_file::{atomic_write, update_text_file};
 pub(crate) use store::{load_state_value, remove_state_value, save_config_value, save_state_value};
 
 use serde::{Deserialize, Serialize};

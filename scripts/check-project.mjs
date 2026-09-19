@@ -190,18 +190,11 @@ for (const file of ['ui/index.html', 'ui/control-center.html']) {
   }
 }
 const modelUi = read('ui/control-center-settings.js');
-const runtimeHeading = modelUi.indexOf('settings-runtime-heading');
-const apiKeyField = modelUi.indexOf('settings-api-key', runtimeHeading);
-const runtimeSectionEnd = modelUi.indexOf("'</section>'", apiKeyField);
-if (runtimeHeading < 0 || apiKeyField < runtimeHeading || runtimeSectionEnd < apiKeyField
-    || modelUi.includes('settings-api-heading') || modelUi.includes('api-key-box')) {
-  fail('设置页的 DeepSeek API 必须归入“服务管理”，不能保留单独的浅层板块');
-}
-const renderStart = modelUi.indexOf('function miRenderResult(');
-const applyAction = modelUi.indexOf("applyBtn.textContent = dshdT('modelImportApply')", renderStart);
-const renderEnd = modelUi.indexOf('box.hidden = false', renderStart);
-if (renderStart < 0 || applyAction < renderStart || renderEnd < applyAction) {
-  fail('模型导入预览必须在有无 API Key 两种情况下都渲染应用按钮');
+// 已移除能力的防回归契约：设置弹窗不收取 API Key，也不保留模型导入入口
+for (const banned of ['settings-api-key', 'set_deepseek_api_key', 'preview_model_import', 'apply_model_import', 'export_model_config']) {
+  if (modelUi.includes(banned)) {
+    fail(`设置页不得重新引入已移除的密钥/模型导入能力: ${banned}`);
+  }
 }
 try {
   new vm.Script([
@@ -261,7 +254,6 @@ const controlCss = read('ui/control-center.css');
 const titlebarHtml = read('ui/titlebar.html');
 for (const [name, rule] of [
   ['共享按钮', sharedCss.match(/^\.dshd-btn\s*\{([^}]*)\}/m)?.[1] || ''],
-  ['模型配置按钮', controlCss.match(/^\.mi-btn\s*\{([^}]*)\}/m)?.[1] || ''],
   ['标题栏按钮', titlebarHtml.match(/^\.tb-btn\s*\{([^}]*)\}/m)?.[1] || ''],
 ]) {
   for (const contract of ['display: inline-flex', 'align-items: center', 'justify-content: center']) {
@@ -396,10 +388,9 @@ if (!statusbar.includes('!payload.error_kind && lastBalance && lastBalance.ok'))
 }
 const settingsCommands = read('src-tauri/src/commands/settings.rs');
 const commandRegistry = read('src-tauri/src/commands/mod.rs');
-if (!modelUi.includes("invoke('set_deepseek_api_key'")
-    || !settingsCommands.includes('pub fn set_deepseek_api_key(')
-    || !commandRegistry.includes('settings::set_deepseek_api_key,')) {
-  fail('DeepSeek API Key 设置入口的前后端命令契约不完整');
+if (settingsCommands.includes('pub fn set_deepseek_api_key(')
+    || commandRegistry.includes('settings::set_deepseek_api_key,')) {
+  fail('设置弹窗不得重新引入 DeepSeek API Key 写入命令（密钥入口只剩首次引导与 dsh 官方界面）');
 }
 
 const editContextScript = read('ui/edit-context.js');

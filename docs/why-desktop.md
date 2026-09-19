@@ -18,7 +18,7 @@ DSHBox 的职责是产品入口和运行时适配。上游源码保持独立，�
 外壳与 dsh 之间只存在三条受控通道，任何新功能先判断走哪条，走不通就不做：
 
 1. **注入**：向 dsh 页面注入 JS/CSS（右键菜单、主题首帧预设、页面状态观察）。
-2. **数据**：读写 `$DSH_HOME`（只读会话日志；行级合并写 `settings.yaml` 的 `locale` / `ui-theme` / `llm-pi-ai` 段与 `.credentials.yaml` 的对应凭据）。
+2. **数据**：读写 `$DSH_HOME`（只读会话日志；行级合并写 `settings.yaml` 的 `locale` / `ui-theme` 段与 `.credentials.yaml` 的 `DEEPSEEK_API_KEY`，后者仅首次引导写入）。
 3. **CLI**：调用 `dsh` CLI（`dsh web`、`dsh plugin ...`）。
 
 以下能力超出项目边界：fork 上游源码、patch dsh 包、修改会话格式、向 dsh 内核注册自定义 service。它们会让桌面端脱离官方升级轨道。

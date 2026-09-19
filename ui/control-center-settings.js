@@ -1,6 +1,6 @@
-// 控制中心：用户设置与模型配置导入/导出。
+// 控制中心：用户设置。
 
-// —— 设置（按桌面行为 / 界面 / 服务能力 / 凭据与模型分组） ——
+// —— 设置（按桌面行为 / 界面 / 服务能力分组） ——
 let settingsBusy = false;
 // 最近一次 applySettingState 的状态快照：radio 在忙碌期的同步弹回用它取
 // "已应用值"（否则只能等在途 invoke 的状态回填，期间显示错误选择）
@@ -72,12 +72,8 @@ function dshChannelRow() {  return (
 }
 async function renderSettings() {
   const body = $('body');
-  // 语言热切换重渲染前迁移模型导入区状态：预览结果可由草稿重解析恢复
-  // （文案随新语言重建），但用户已输入的各 env Key 与手动高度只能显式
-  // 带回——不迁移的话切一次语言就全部丢失。须在首个 innerHTML 覆写前取。
-  const miSaved = miCapturePendingState();
-  // 先拿到配置状态再一次性渲染，才能决定模型配置板块放在最前还是原位，
-  // 避免「先渲染再挪动」造成闪烁。等候期间给出轻量占位。
+  // 先拿到配置状态再一次性渲染，避免「先渲染再回填」造成闪烁。
+  // 等候期间给出轻量占位。
   body.innerHTML = '<div class="usage-load" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>';
   let settings = null;
   try {
@@ -88,8 +84,6 @@ async function renderSettings() {
   // await 期间用户可能已切走 tab：settings_get 返回后若已不在设置页，
   // 直接放弃本轮渲染，避免覆盖当前页（对齐其他页面的 openKind 守卫）。
   if (openKind !== 'settings') return;
-  // 无任何模型配置（无 DeepSeek Key 也无自定义路由）时模型配置板块置顶引导。
-  const modelFirst = !!(settings && !settings.api_key_set && !settings.model_config_set);
   const desktopSec =
     '<section class="psection settings-section" aria-labelledby="settings-desktop-heading">' +
     '<h3 id="settings-desktop-heading">' + dshdT('settingsDesktopTitle') + '</h3>' +
@@ -112,52 +106,12 @@ async function renderSettings() {
     '<h3 id="settings-runtime-heading">' + dshdT('settingsRuntimeTitle') + '</h3>' +
     '<div id="settings-external-note" class="settings-scope-note" role="status" hidden>' +
     '<span>' + dshdT('settingsExternalServiceNote') + '</span>' +
-    '<button type="button" id="settings-use-local" class="mi-btn">' + dshdT('useLocalService') + '</button>' +
-    '</div>' +
-    '<div class="mi-card settings-service-card">' +
-    '<div class="mi-card-head">' +
-    '<label class="mi-card-name" for="settings-api-key">' + dshdT('deepSeekApiKey') + '</label>' +
-    '<span id="settings-api-key-help" class="mi-card-desc">' + dshdT('settingsApiKeyDesc') + '</span>' +
-    '</div>' +
-    '<div class="dshd-password-field api-key-input-row">' +
-    '<input id="settings-api-key" class="dshd-input mi-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." aria-describedby="settings-api-key-help settings-api-key-feedback" />' +
-    '<button type="button" id="settings-api-key-toggle" class="dshd-x dshd-password-action" aria-controls="settings-api-key" aria-pressed="false" hidden></button>' +
-    '</div>' +
-    '<div class="mi-actions">' +
-    '<button type="button" id="settings-api-key-save" class="mi-btn primary">' + dshdT('settingsApiKeySave') + '</button>' +
-    '<button type="button" id="settings-api-key-clear" class="mi-btn">' + dshdT('settingsApiKeyClear') + '</button>' +
-    '<span id="settings-api-key-feedback" class="mi-feedback api-key-feedback" role="status" aria-live="polite"></span>' +
-    '</div>' +
+    '<button type="button" id="settings-use-local" class="dshd-btn small">' + dshdT('useLocalService') + '</button>' +
     '</div>' +
     dshChannelRow() +
     settingsRow('auto_update_plugins', 'settingsAutoUpdatePlugins', 'settingsAutoUpdatePluginsDesc') +
     '</section>';
-  // 模型配置导入/导出：无任何模型配置时置顶，否则留在末尾。
-  const modelsSec =
-    '<section class="psection settings-section mi-box" aria-labelledby="settings-model-heading">' +
-    '<h3 id="settings-model-heading">' + dshdT('modelImportTitle') + '</h3>' +
-    '<div class="mi-card">' +
-    '<div class="mi-card-head">' +
-    '<label class="mi-card-name" for="mi-textarea">' + dshdT('modelImportPaste') + '</label>' +
-    '<span class="mi-card-desc">' + dshdT('modelImportHint') + '</span>' +
-    '</div>' +
-    '<div class="mi-textarea-wrap">' +
-    '<textarea id="mi-textarea" class="dshd-input dshd-textarea mi-textarea" rows="5" spellcheck="false" placeholder="' + esc(dshdT('modelImportPlaceholder')) + '"></textarea>' +
-    '<div id="mi-resize-bar" class="mi-resize-bar" role="slider" aria-orientation="vertical" aria-valuemin="72" aria-valuemax="480" aria-valuenow="72" tabindex="0" title="' + esc(dshdT('modelResizeTip')) + '" aria-label="' + esc(dshdT('modelResizeAria')) + '"></div>' +
-    '</div>' +
-    '<div class="mi-actions">' +
-    '<button type="button" id="mi-preview" class="mi-btn primary">' + dshdT('modelImportPreview') + '</button>' +
-    '<button type="button" id="mi-export" class="mi-btn">' + dshdT('modelExport') + '</button>' +
-    '<span id="mi-feedback" class="mi-feedback" role="status" aria-live="polite"></span>' +
-    '</div>' +
-    '<div id="mi-result" class="mi-result" hidden role="status" aria-live="polite"></div>' +
-    '</div>' +
-    '</section>';
-  body.innerHTML =
-    (modelFirst ? modelsSec : desktopSec) +
-    (modelFirst ? desktopSec : interfaceSec) +
-    (modelFirst ? interfaceSec : runtimeSec) +
-    (modelFirst ? runtimeSec : modelsSec);
+  body.innerHTML = desktopSec + interfaceSec + runtimeSec;
   body.querySelectorAll('.sswitch').forEach((el) => {
     el.addEventListener('change', onSettingToggle);
   });
@@ -220,54 +174,6 @@ async function renderSettings() {
       button.removeAttribute('aria-busy');
     }
   });
-  initApiKeySettings();
-  initModelImport();
-  restoreModelImportState(miSaved);
-}
-// —— 语言热切换的模型导入状态迁移（配合 renderSettings 入口捕获） ——
-function miCapturePendingState() {
-  const textarea = $('mi-textarea');
-  const box = $('mi-result');
-  const manualHeight =
-    miResizeMode === 'manual' && textarea && textarea.style.height ? textarea.style.height : null;
-  // 只有"待填 Key 的预览"才需要迁移；成功态/无 Key 预览重解析即可复原
-  let keys = null;
-  if (box && !box.hidden && box.querySelectorAll('input[data-ref]').length) {
-    keys = {};
-    box.querySelectorAll('input[data-ref]').forEach((input) => {
-      if (input.value) keys[input.dataset.ref] = input.value;
-    });
-  }
-  if (!keys && !manualHeight) return null;
-  return { keys, manualHeight };
-}
-async function restoreModelImportState(saved) {
-  if (!saved) return;
-  const textarea = $('mi-textarea');
-  if (!textarea) return;
-  if (saved.manualHeight) {
-    miResizeMode = 'manual';
-    textarea.style.height = saved.manualHeight;
-  }
-  if (!saved.keys || !miDraft.trim()) return;
-  // 捕获本次解析的 yaml 并与它（而非 miDraft）比较：等待期间用户若改动
-  // 草稿，miDraft 会同步成新值，拿它与当前值比较永远相等，过期守卫失效
-  const yaml = miDraft;
-  try {
-    const preview = await invoke('preview_model_import', { yaml });
-    if (openKind !== 'settings' || !textarea.isConnected || textarea.value !== yaml) return;
-    miRenderResult(preview, yaml);
-    const box = $('mi-result');
-    if (box) {
-      Object.entries(saved.keys).forEach(([ref, value]) => {
-        box.querySelectorAll('input[data-ref]').forEach((input) => {
-          if (input.dataset.ref === ref) input.value = value;
-        });
-      });
-    }
-  } catch {
-    // 重解析失败（草稿已失效等）：维持初始空态即可，不打扰
-  }
 }
 // —— 每日用量提醒阈值：change（失焦/回车）即保存；空值 = 关闭 ——
 function usageLimitFeedback(message, isError) {
@@ -334,382 +240,6 @@ function initUsageLimit() {
     }
   });
 }
-function apiKeyFeedback(message, ok) {
-  const el = $('settings-api-key-feedback');
-  if (!el) return;
-  el.textContent = message || '';
-  el.className = 'mi-feedback api-key-feedback' + (ok ? ' ok' : message ? ' err' : '');
-}
-function setApiKeyBusy(busy) {
-  ['settings-api-key', 'settings-api-key-toggle', 'settings-api-key-save', 'settings-api-key-clear'].forEach((id) => {
-    const el = $(id);
-    if (el) el.disabled = busy || el.dataset.locked === '1';
-  });
-}
-function initApiKeySettings() {
-  const input = $('settings-api-key');
-  const toggle = $('settings-api-key-toggle');
-  const save = $('settings-api-key-save');
-  const clear = $('settings-api-key-clear');
-  if (!input || !toggle || !save || !clear) return;
-  dshdBindPasswordToggle(input, toggle);
-  input.addEventListener('input', () => {
-    input.removeAttribute('aria-invalid');
-    apiKeyFeedback('', false);
-  });
-  save.addEventListener('click', async () => {
-    const value = input.value.trim();
-    if (!value) {
-      input.setAttribute('aria-invalid', 'true');
-      apiKeyFeedback(dshdT('settingsApiKeyEmpty'), false);
-      input.focus();
-      return;
-    }
-    setApiKeyBusy(true);
-    apiKeyFeedback(dshdT('settingsApiKeySaving'), true);
-    try {
-      const state = await invoke('set_deepseek_api_key', { apiKey: value });
-      input.value = '';
-      input.type = 'password';
-      if (toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
-      applySettingState(state);
-      apiKeyFeedback(dshdT('settingsApiKeySaved'), true);
-    } catch (e) {
-      apiKeyFeedback(dshdT('settingsFailed', { message: String(e) }), false);
-    } finally {
-      setApiKeyBusy(false);
-    }
-  });
-  clear.addEventListener('click', async () => {
-    setApiKeyBusy(true);
-    apiKeyFeedback(dshdT('settingsApiKeyClearing'), true);
-    try {
-      const state = await invoke('set_deepseek_api_key', { apiKey: null });
-      input.value = '';
-      input.type = 'password';
-      if (toggle.__dshdPasswordSync) toggle.__dshdPasswordSync();
-      applySettingState(state);
-      apiKeyFeedback(dshdT('settingsApiKeyCleared'), true);
-    } catch (e) {
-      apiKeyFeedback(dshdT('settingsFailed', { message: String(e) }), false);
-    } finally {
-      setApiKeyBusy(false);
-    }
-  });
-}
-// —— 模型配置导入（设置页）——
-let miPreviewRefs = [];
-let miDraft = '';
-function miFeedback(message, ok) {
-  const el = $('mi-feedback');
-  if (!el) return;
-  el.textContent = message || '';
-  el.className = 'mi-feedback' + (ok ? ' ok' : ' err');
-}
-function miClearFeedback() { const el = $('mi-feedback'); if (el) el.textContent = ''; }
-// 高度模式：'auto' 默认自适应（内容多自动长到 60vh 上限出滚动条），
-// 'manual' 用户拖拽/键盘调过的固定高度（不再被 autosize 覆盖）。
-let miResizeMode = 'auto';
-// 高度随内容自适应：内容增长时把高度撑到 scrollHeight，超过 CSS 的
-// max-height(60vh) 后由 overflow-y 出滚动条。供 input 事件与程序赋值
-// （粘贴/清空）后调用；manual 态下不干预。
-function miTextareaAutosize() {
-  const el = $('mi-textarea');
-  if (!el || miResizeMode !== 'auto') return;
-  el.style.height = 'auto';
-  // scrollHeight 不含边框，border-box 下直接赋值会让内容区少 2px、内容
-  // 超过默认高度时常驻一根滚动条；补回上下边框宽度，与手动拖拽/键盘路径
-  //（getBoundingClientRect，含边框）基准一致，双击重置不再跳 2px
-  const cs = getComputedStyle(el);
-  const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
-  el.style.height = el.scrollHeight + border + 'px';
-}
-// 重置回自适应模式。
-function miTextareaReset() {
-  miResizeMode = 'auto';
-  miTextareaAutosize();
-}
-function initModelImport() {
-  const textarea = $('mi-textarea');
-  const previewBtn = $('mi-preview');
-  const resizeBar = $('mi-resize-bar');
-  if (!textarea || !previewBtn) return;
-  textarea.value = miDraft;
-  miResizeMode = 'auto';
-  textarea.addEventListener('input', miTextareaAutosize);
-  miTextareaAutosize();
-  // —— 拖拽调整高度（不依赖原生 resizer，避免手柄随滚动条抖动/深浅色问题）——
-  if (resizeBar) {
-    const MIN_H = 72; // 与 .dshd-textarea min-height 对齐
-    const maxH = () => {
-      // 读取 computed max-height(60vh) 转 px；取不到时退回一个合理上限。
-      const px = parseFloat(getComputedStyle(textarea).maxHeight);
-      return Number.isFinite(px) && px > 0 ? px : 480;
-    };
-    const clampH = (h) => Math.max(MIN_H, Math.min(maxH(), h));
-    // 同步 slider 的 aria-valuenow/max（无障碍），随拖拽/键盘/重置更新。
-    const syncAria = (h) => {
-      resizeBar.setAttribute('aria-valuenow', String(Math.round(h)));
-      resizeBar.setAttribute('aria-valuemax', String(Math.round(maxH())));
-    };
-    // 初始同步一次，让 aria-valuemax 反映真实上限（60vh），而非占位的 480。
-    syncAria(textarea.getBoundingClientRect().height);
-    let dragState = null;
-    // 指针捕获：拖出 WebView 窗口后 pointerup 仍派发到 resize-bar，不会
-    // 悬挂拖拽态（此前 mousemove/mouseup 挂 document，鼠标在窗外释放即
-    // 丢失，回到页内不按键移动还会继续改高度）
-    resizeBar.addEventListener('pointerdown', (ev) => {
-      if (ev.button !== 0) return;
-      ev.preventDefault(); // 避免选中文本/拖拽触发原生行为
-      try { resizeBar.setPointerCapture(ev.pointerId); } catch { /* 捕获失败时退化为旧行为 */ }
-      dragState = { startY: ev.clientY, startH: textarea.getBoundingClientRect().height };
-    });
-    resizeBar.addEventListener('pointermove', (e) => {
-      if (!dragState) return;
-      miResizeMode = 'manual';
-      const h = clampH(dragState.startH + (e.clientY - dragState.startY));
-      textarea.style.height = h + 'px';
-      syncAria(h);
-    });
-    const endDrag = () => { dragState = null; };
-    resizeBar.addEventListener('pointerup', endDrag);
-    resizeBar.addEventListener('pointercancel', endDrag);
-    // 双击重置回自适应。
-    resizeBar.addEventListener('dblclick', () => {
-      miTextareaReset();
-      syncAria(textarea.getBoundingClientRect().height);
-    });
-    // 键盘可达（WCAG 2.2 AA）：上下方向键微调，Home 重置，End 拉到上限。
-    resizeBar.addEventListener('keydown', (ev) => {
-      const h = parseFloat(textarea.style.height);
-      const cur = Number.isFinite(h) && h > 0 ? h : textarea.getBoundingClientRect().height;
-      let next = null;
-      switch (ev.key) {
-        case 'ArrowUp':
-          ev.preventDefault();
-          miResizeMode = 'manual';
-          // 垂直 slider 惯例：向上增大 value（高度）。
-          next = clampH(cur + 16);
-          break;
-        case 'ArrowDown':
-          ev.preventDefault();
-          miResizeMode = 'manual';
-          // 向下减小 value（高度）。
-          next = clampH(cur - 16);
-          break;
-        case 'Home':
-          ev.preventDefault();
-          miTextareaReset();
-          syncAria(textarea.getBoundingClientRect().height);
-          return;
-        case 'End':
-          ev.preventDefault();
-          miResizeMode = 'manual';
-          next = maxH();
-          break;
-      }
-      if (next !== null) {
-        textarea.style.height = next + 'px';
-        syncAria(next);
-      }
-    });
-  }
-  // 解析当前输入框文本，成功后渲染结果。
-  let previewSequence = 0;
-  async function runPreview() {
-    const yaml = textarea.value;
-    const sequence = ++previewSequence;
-    const current = () => textarea.isConnected && sequence === previewSequence && textarea.value === yaml;
-    if (!yaml.trim()) {
-      // 空输入：同步收起上一轮结果框（旧预览/成功态），避免与新反馈同屏
-      //（hidden 在下方统一执行，本分支提前 return 不经过它）
-      $('mi-result').hidden = true;
-      miPreviewRefs = [];
-      miFeedback(dshdT('modelImportEmpty'), false);
-      return;
-    }
-    miClearFeedback();
-    $('mi-result').hidden = true;
-    previewBtn.disabled = true;
-    previewBtn.textContent = dshdT('modelImportPreviewing');
-    try {
-      const preview = await invoke('preview_model_import', { yaml });
-      if (current()) miRenderResult(preview, yaml);
-    } catch (e) {
-      if (current()) miFeedback(String(e), false);
-    } finally {
-      previewBtn.disabled = false;
-      previewBtn.textContent = dshdT('modelImportPreview');
-    }
-  }
-  previewBtn.addEventListener('click', async () => {
-    // “粘贴并解析”：仅当输入框为空时才读取剪贴板填入并解析；输入框已有
-    // 内容（手动粘贴）时不覆盖，直接用现有内容解析，避免误删手输配置。
-    if (!textarea.value.trim()) {
-      let clipboard = '';
-      // 走 Tauri 原生命令读剪贴板，避免 WebView 的浏览器剪贴板权限弹窗；
-      // 权限由 capability 声明，读取失败时当作空剪贴板回退。
-      try {
-        clipboard = (await invoke('plugin:clipboard-manager|read_text') || '').trim();
-      } catch {
-        clipboard = ''; // 无权限或读取失败时当作空剪贴板
-      }
-      if (!textarea.isConnected) return;
-      if (clipboard && !textarea.value.trim()) {
-        textarea.value = clipboard;
-        miDraft = clipboard;
-        miTextareaAutosize();
-      }
-    }
-    await runPreview();
-  });
-  textarea.addEventListener('input', () => {
-    miDraft = textarea.value;
-    previewSequence++;
-    miClearFeedback();
-    $('mi-result').hidden = true;
-    miPreviewRefs = [];
-  });
-  const exportBtn = $('mi-export');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', async () => {
-      exportBtn.disabled = true;
-      miClearFeedback();
-      try {
-        const yaml = await invoke('export_model_config');
-        if (!exportBtn.isConnected) return;
-        if (!yaml) {
-          dshdToast(dshdT('modelExportNone'));
-          return;
-        }
-        await navigator.clipboard.writeText(yaml);
-        dshdToast(dshdT('modelExportCopied'), { kind: 'ok' });
-      } catch (e) {
-        if (exportBtn.isConnected) miFeedback(String(e), false);
-      } finally {
-        exportBtn.disabled = false;
-      }
-    });
-  }
-}
-function miRenderResult(preview, previewYaml) {
-  miPreviewRefs = preview.api_key_envs || [];
-  const refs = [...miPreviewRefs];
-  const textarea = $('mi-textarea');
-  const box = $('mi-result');
-  box.textContent = '';
-  const summary = document.createElement('div');
-  summary.className = 'srow-desc';
-  let text = dshdT('modelImportSummary', { count: preview.providers.length });
-  if (preview.replaces_existing) text += ' ' + dshdT('modelImportReplaces');
-  summary.textContent = text;
-  box.appendChild(summary);
-  if (miPreviewRefs.length === 0) {
-    const ok = document.createElement('div');
-    ok.className = 'mi-ok';
-    ok.textContent = dshdT('modelImportNoKeys');
-    box.appendChild(ok);
-  } else {
-    miPreviewRefs.forEach((ref, index) => {
-      const row = document.createElement('div');
-      row.className = 'mi-key-row';
-      const label = document.createElement('label');
-      label.className = 'mi-key-label';
-      label.textContent = dshdT('modelImportKeyLabel', { ref });
-      const input = document.createElement('input');
-      input.id = 'model-import-key-' + index;
-      input.className = 'dshd-input mi-key-input';
-      input.type = 'password';
-      input.autocomplete = 'off';
-      input.spellcheck = false;
-      input.dataset.ref = ref;
-      input.placeholder = 'sk-...';
-      label.htmlFor = input.id;
-      const inputRow = document.createElement('div');
-      inputRow.className = 'dshd-password-field';
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'dshd-x dshd-password-action';
-      toggle.setAttribute('aria-controls', input.id);
-      toggle.setAttribute('aria-pressed', 'false');
-      toggle.hidden = true;
-      inputRow.append(input, toggle);
-      dshdBindPasswordToggle(input, toggle);
-      row.append(label, inputRow);
-      box.appendChild(row);
-    });
-  }
-  const actions = document.createElement('div');
-  actions.className = 'mi-actions';
-  const applyBtn = document.createElement('button');
-  applyBtn.type = 'button';
-  applyBtn.className = 'mi-btn primary';
-  applyBtn.textContent = dshdT('modelImportApply');
-  applyBtn.addEventListener('click', async () => {
-    if (!textarea.isConnected || textarea.value !== previewYaml) return;
-    const yaml = previewYaml;
-    const keys = [];
-    const filled = new Set();
-    box.querySelectorAll('input[data-ref]').forEach((input) => {
-      const value = input.value.trim();
-      if (value) { keys.push([input.dataset.ref, value]); filled.add(input.dataset.ref); }
-    });
-    const missing = refs.filter((ref) => !filled.has(ref));
-    if (missing.length > 0) {
-      miFeedback(dshdT('modelImportKeyMissing', { ref: missing.join(', ') }), false);
-      return;
-    }
-    miClearFeedback();
-    applyBtn.disabled = true;
-    applyBtn.textContent = dshdT('modelImportApplying');
-    textarea.readOnly = true;
-    const previewButton = $('mi-preview');
-    if (previewButton) previewButton.disabled = true;
-    box.querySelectorAll('input').forEach(input => { input.disabled = true; });
-    let applied = false;
-    try {
-      await invoke('apply_model_import', { payload: { yaml, keys } });
-      applied = true;
-      if (miDraft === yaml) miDraft = '';
-      if (!textarea.isConnected) return;
-      // 成功后收尾：清空粘贴区与凭据行（连同密码可见性按钮），已填 key
-      // 不留残态；结果区只保留摘要与成功消息
-      textarea.value = '';
-      miTextareaReset();
-      miPreviewRefs = [];
-      box.querySelectorAll('.mi-key-row').forEach((row) => row.remove());
-      const ok = document.createElement('div');
-      ok.className = 'mi-ok';
-      ok.textContent = dshdT('modelImportSuccess');
-      box.appendChild(ok);
-      actions.remove();
-      // 导入成功后内容高度骤减、滚动条可能停在原 key 位置：滚回结果区/成功
-      // 消息可见（无论模型配置板块在顶部还是下部，scrollIntoView 都自适应）。
-      requestAnimationFrame(() => {
-        box.scrollIntoView({ block: 'center', behavior: 'auto' });
-      });
-    } catch (e) {
-      if (textarea.isConnected) miFeedback(String(e), false);
-    } finally {
-      textarea.readOnly = false;
-      if (previewButton) previewButton.disabled = false;
-      box.querySelectorAll('input').forEach(input => { input.disabled = false; });
-      // 成功时按钮已随操作区移除，不再复位其状态
-      if (!applied) {
-        applyBtn.disabled = false;
-        applyBtn.textContent = dshdT('modelImportApply');
-      }
-    }
-  });
-  actions.appendChild(applyBtn);
-  box.appendChild(actions);
-  box.hidden = false;
-  // 结果区/API Key 输入框在下方，展开后可能在视口外：滚动到可见，避免被遮挡。
-  // 用 rAF 确保布局完成后滚动；此处在设置页滚动容器（#body）内，scrollIntoView 自动滚动祖先。
-  requestAnimationFrame(() => {
-    box.scrollIntoView({ block: 'center', behavior: 'auto' });
-  });
-}
 function applySettingState(state) {
   const body = $('body');
   settingsStateCache = state;
@@ -736,28 +266,6 @@ function applySettingState(state) {
   if (limitInput && document.activeElement !== limitInput) {
     limitInput.value = state.usage_token_limit_m != null ? String(state.usage_token_limit_m) : '';
   }
-  const apiInput = $('settings-api-key');
-  const apiSave = $('settings-api-key-save');
-  const apiClear = $('settings-api-key-clear');
-  const apiToggle = $('settings-api-key-toggle');
-  [apiInput, apiSave, apiToggle].forEach((el) => {
-    if (!el) return;
-    el.dataset.locked = state.api_key_external || external ? '1' : '';
-    el.disabled = Boolean(state.api_key_external || external);
-  });
-  if (apiInput) {
-    apiInput.placeholder = state.api_key_set ? dshdT('settingsApiKeyConfigured') : 'sk-...';
-  }
-  if (apiClear) {
-    apiClear.dataset.locked = state.api_key_external || external || !state.api_key_set ? '1' : '';
-    apiClear.disabled = Boolean(state.api_key_external || external || !state.api_key_set);
-  }
-  ['mi-textarea', 'mi-preview', 'mi-export'].forEach((id) => {
-    const el = $(id);
-    if (el) el.disabled = external;
-  });
-  if (external) apiKeyFeedback(dshdT('settingsExternalServiceShort'), true);
-  else if (state.api_key_external) apiKeyFeedback(dshdT('settingsApiKeyExternal'), true);
 }
 // 设置操作失败统一走 toast（原页底 #serr 位置太偏，不易察觉）
 function showSettingError(message) {

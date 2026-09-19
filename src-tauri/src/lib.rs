@@ -20,7 +20,6 @@ mod file_icons;
 mod heartbeat;
 pub mod locale;
 mod logging;
-mod model_config;
 mod native_dialog;
 mod net_guard;
 mod notify;

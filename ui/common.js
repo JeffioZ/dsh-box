@@ -190,7 +190,7 @@ function dshdBindPasswordToggle(input, toggle) {
     const hasValue = String(input.value || '').length > 0;
     if (!hasValue && input.type === 'text') input.type = 'password';
     const visible = input.type === 'text';
-    const label = dshdT(visible ? 'settingsApiKeyHideAria' : 'settingsApiKeyShowAria');
+    const label = dshdT(visible ? 'passwordHideAria' : 'passwordShowAria');
     if (!toggle.firstElementChild) {
       toggle.innerHTML = '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="'
         + DSHD_ICON_PATHS.eyeShow + '"></path></svg>';

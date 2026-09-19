@@ -13,7 +13,7 @@ flowchart LR
     CMD --> UPDATER[updater/]
     CMD --> PLUGINS[plugins/]
     CMD --> STATE[app_state/]
-    CMD --> DATA[模型、凭据与会话数据模块]
+    CMD --> DATA[凭据与会话数据模块]
     UI --> WEB[主 WebView]
     WEB --> DSH[官方 dsh web]
     WEB --> BRIDGE[webview/ 导航与注入]
@@ -68,8 +68,8 @@ sequenceDiagram
 |---|---|---|
 | `config.json` | DSHBox/用户 | 读写用户设置 |
 | `state.json` | DSHBox | 内部状态，不建议手改 |
-| `$DSH_HOME/settings.yaml` | dsh/用户 | 只合并约定段落 |
-| `$DSH_HOME/.credentials.yaml` | dsh/用户 | 只合并指定凭据行 |
+| `$DSH_HOME/settings.yaml` | dsh/用户 | 只合并 locale/ui-theme 段；`llm-pi-ai` 段只读（余额路由） |
+| `$DSH_HOME/.credentials.yaml` | dsh/用户 | 仅首次引导合并 `DEEPSEEK_API_KEY` 行 |
 | 会话日志 | dsh | 只读统计与通知 |
 | `node/`、`dsh/` | DSHBox | 事务化安装和更新 |
 

@@ -2,16 +2,11 @@
 
 use super::*;
 
-// ---------- 设置页（统一弹窗内三开关） ----------
+// ---------- 设置页（开关/行为/阈值与更新通道） ----------
 
 /// 设置页开关状态快照。
 #[derive(serde::Serialize)]
 pub struct SettingsState {
-    pub api_key_set: bool,
-    /// 环境变量优先级高于凭据文件；为 true 时设置页只读，避免“保存成功但不生效”。
-    pub api_key_external: bool,
-    /// settings.yaml 是否已有自定义模型路由（llm-pi-ai 段含 providers 键）。
-    pub model_config_set: bool,
     pub autostart: bool,
     pub hide_tool_calls: bool,
     pub hide_stats_line: bool,
@@ -32,13 +27,7 @@ pub struct SettingsState {
 
 fn settings_state(app: &AppHandle) -> SettingsState {
     let config = app.state::<AppState>().config();
-    let api_key_external = ["DSH_BOX_API_KEY", "DEEPSEEK_API_KEY"]
-        .iter()
-        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
     SettingsState {
-        api_key_set: api_key_external || crate::credentials::has(&config, "DEEPSEEK_API_KEY"),
-        api_key_external,
-        model_config_set: crate::model_config::has_custom_providers(&config),
         autostart: crate::autostart::is_enabled(),
         hide_tool_calls: config.hide_tool_calls,
         hide_stats_line: config.hide_stats_line,
@@ -52,43 +41,6 @@ fn settings_state(app: &AppHandle) -> SettingsState {
         launch_behavior: config.launch_behavior.clone(),
         external_service: app.state::<AppState>().service_ownership().is_external(),
     }
-}
-
-/// 保存或清除 DeepSeek API Key。密钥仅进入 dsh 凭据文件，不进入 config.json，
-/// 返回值也只暴露“是否已配置”，绝不回传密钥内容。
-#[tauri::command]
-pub fn set_deepseek_api_key(
-    app: AppHandle,
-    webview: tauri::Webview,
-    api_key: Option<String>,
-) -> Result<SettingsState, String> {
-    ensure_local_origin(&webview)?;
-    ensure_local_service_scope(&app)?;
-    let current = settings_state(&app);
-    if current.api_key_external {
-        return Err(crate::locale::text(
-            "当前密钥由环境变量管理，请在环境变量中修改。",
-            "The current key is managed by an environment variable. Change it there.",
-        )
-        .into());
-    }
-    let config = app.state::<AppState>().config();
-    match api_key.map(|value| value.trim().to_string()) {
-        Some(value) if !value.is_empty() => {
-            crate::onboarding::validate_api_key(&value)?;
-            crate::credentials::save(&config, "DEEPSEEK_API_KEY", &value)?;
-            crate::logging::log("settings: DeepSeek API Key 已更新");
-        }
-        _ => {
-            crate::credentials::remove_saved(&config, "DEEPSEEK_API_KEY")?;
-            crate::logging::log("settings: DeepSeek API Key 已清除");
-        }
-    }
-    // 让状态栏立即反映新凭据状态。
-    crate::balance::refresh_once(app.clone());
-    let settings = settings_state(&app);
-    crate::emit_signed(&app, "settings-changed", &settings);
-    Ok(settings)
 }
 
 #[tauri::command]

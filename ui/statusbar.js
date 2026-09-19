@@ -187,7 +187,6 @@ function renderBalance() {
     chip.disabled = true;
     chip.classList.remove('low-warning', 'low-critical');
     chip.innerHTML = WALLET_ICON + '<span id="balance-text">--</span>';
-    chip.dataset.credentialIssue = '';
     chip.title = dshdT('balanceExternalHint');
     chip.setAttribute('aria-label', dshdT('balanceExternalHint'));
     return;
@@ -207,7 +206,7 @@ function renderBalance() {
     && !!lastBalance && !lastBalance.is_available;
   let hints;
   if (state.kind === 'no_key' || state.kind === 'invalid_key') {
-    // 未配置/无效 Key：引导点击去设置页（不点 Details 语义）
+    // 未配置/无效 Key：提示去 dsh 自己的设置里配置（本壳设置不再收密钥）
     hints = [dshdT(state.kind === 'no_key' ? 'balanceNoKeyHint' : 'balanceInvalidKeyHint')];
   } else {
     // 状态行在前、操作提示在后：悬停先看到"怎么了"再看到"点哪去"；
@@ -222,7 +221,6 @@ function renderBalance() {
   }
   chip.title = hints.join('\n');
   const credentialIssue = state.kind === 'no_key' || state.kind === 'invalid_key';
-  chip.dataset.credentialIssue = credentialIssue ? '1' : '';
   const actionHint = state.kind === 'invalid_key' ? dshdT('balanceInvalidKeyHint') : dshdT('balanceNoKeyHint');
   // 读屏信息与视觉对齐：状态行插中间；'--' 态用状态词替代无意义的杠杠，
   // 并滤掉与首段重复的状态行避免同一词读两遍
@@ -341,10 +339,9 @@ function init() {
   const statsEl = $('stats');
   const chip = $('balance-chip');
   chip.addEventListener('click', () => {
-    // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开用量与余额
-    const cmd = chip.dataset.credentialIssue ? 'app_dialog_open_settings' : 'app_dialog_open_usage';
-    // 点击是用户主动动作，失败必须留痕（其余 invoke 的静默失败是预期路径）
-    invoke(cmd).catch((e) => console.warn('statusbar: 打开弹窗失败', e));
+    // 打开用量与余额弹窗（未配置 Key 的处理路径在账户卡里给出指引）
+    invoke('app_dialog_open_usage')
+      .catch((e) => console.warn('statusbar: 打开弹窗失败', e));
   });
   statsEl.addEventListener('click', () => {
     invoke('app_dialog_open_usage')

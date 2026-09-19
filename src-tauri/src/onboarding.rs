@@ -91,8 +91,7 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
         return Err(crate::locale::text("不支持的主题。", "Unsupported theme.").into());
     }
 
-    // 凭据经 dsh 自身的文件监视器热发布（与 model_config 导入同口径），
-    // 无需为生效而重启服务
+    // 凭据经 dsh 自身的文件监视器热发布，无需为生效而重启服务
     if let Some(key) = api_key {
         save_credentials_api_key(&config, key)?;
     }

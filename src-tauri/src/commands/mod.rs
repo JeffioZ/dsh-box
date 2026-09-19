@@ -207,9 +207,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         onboarding::onboarding_probe_result,
         onboarding::preview_theme,
         onboarding::preview_language,
-        model_config::preview_model_import,
-        model_config::apply_model_import,
-        model_config::export_model_config,
         plugins::plugin_list,
         plugins::plugin_recommended,
         plugins::plugin_reinstallable_builtins,
@@ -242,7 +239,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::app_dialog_close,
         control_center::app_dialog_update,
         control_center::app_dialog_cancel_app_restart,
-        control_center::app_dialog_open_settings,
         control_center::app_dialog_open_usage,
         control_center::usage_report_get,
         control_center::usage_export,
@@ -253,14 +249,12 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         control_center::usage_accounts_refresh,
         settings::settings_get,
         settings::settings_set,
-        settings::set_deepseek_api_key,
         settings::set_dsh_channel,
         settings::set_window_behavior,
         settings::set_usage_token_limit,
     ]
 }
 mod control_center;
-mod model_config;
 mod onboarding;
 mod plugins;
 mod settings;

@@ -127,8 +127,7 @@ pub fn configured_routes(config: &Config) -> Vec<ProviderRoute> {
 }
 
 /// 是否为 `providers:` 键行（允许行内注释与行内流式 `{` 值；content 已去
-/// 行首空白）。借鉴 model_config 的同名判定；跨模块私用不可取，保留本地
-/// 简化副本。
+/// 行首空白）。行级解析的本地简化副本，不依赖其他模块。
 fn is_providers_key(content: &str) -> bool {
     content.strip_prefix("providers:").is_some_and(|rest| {
         let rest = rest.trim_start();
@@ -141,8 +140,8 @@ fn is_providers_key(content: &str) -> bool {
 /// `displayName` / `apiKeyEnv` / `baseURL`。
 ///
 /// 三级缩进（providers 键 / 路由键 / 字段行）动态探测而非硬编码 2/4/6
-/// 空格（思路同 model_config 的动态 route_indent），兼容 4 空格等缩进
-/// 风格。只行级解析相关的键，避免整体反序列化改动用户文件里的注释/顺序。
+/// 空格，兼容 4 空格等缩进风格。只行级解析相关的键，避免整体反序列化
+/// 改动用户文件里的注释/顺序。
 fn extract_providers_block(
     text: &str,
     section: &str,

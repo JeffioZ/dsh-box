@@ -213,9 +213,8 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   color: var(--dshd-text-dim); font-size: var(--dshd-fs-sm); line-height: 18px;
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px;
 }
-.settings-scope-note .mi-btn { flex: none; }
+.settings-scope-note .dshd-btn { flex: none; }
 .settings-scope-note[hidden] { display: none; }
-.settings-service-card { margin-bottom: 6px; }
 
 /* —— 用量与余额（统一弹窗页） —— */
 .usage-wrap { display: flex; flex-direction: column; gap: var(--dshd-sp-3); }
@@ -528,62 +527,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 #settings-usage-limit::placeholder { position: relative; top: -1px; }
 .usage-limit-unit { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: nowrap; }
 #settings-usage-limit[aria-invalid='true'] { border-color: var(--dshd-error-text); }
-/* —— 模型配置导入/导出（设置页独立卡片，紧凑）—— */
-.mi-box { margin-top: 8px; }
-.mi-card {
-  display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--dshd-border); border-radius: var(--dshd-r-md);
-  padding: 10px; background: var(--dshd-hover);
-}
-.mi-card-head { display: flex; flex-direction: column; gap: 2px; }
-.mi-card-name { font-size: var(--dshd-fs-md); font-weight: 500; color: var(--dshd-text); }
-.mi-card-desc { font-size: var(--dshd-fs-sm); line-height: 18px; color: var(--dshd-text-dim); }
-.mi-textarea {
-  /* 等宽场景：栈见 common.css --dshd-font-mono（dsh 上游同款，含中文尾防宋体） */
-  font-family: var(--dshd-font-mono);
-  font-size: var(--dshd-fs-sm);
-}
-/* 拖拽调整高度的热区：贴在 textarea 底边，悬停出现 row-resize 光标与分隔线
-   提示（点击/拖拽改高度、双击重置、上下方向键微调，见 control-center-settings.js）。 */
-.mi-textarea-wrap { position: relative; }
-.mi-resize-bar {
-  position: absolute; left: 0; right: 0; bottom: -2px; height: 8px;
-  cursor: row-resize; border-radius: 0 0 8px 8px;
-}
-.mi-resize-bar:hover,
-.mi-resize-bar:focus-visible {
-  background: linear-gradient(to bottom, transparent, var(--dshd-border-strong));
-}
-.mi-resize-bar:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
-.mi-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.mi-feedback { font-size: var(--dshd-fs-sm); line-height: 18px; }
-.mi-feedback.ok { color: var(--dshd-success-text); }
-.mi-feedback.err { color: var(--dshd-error-text); }
-.mi-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-height: 32px; padding: 0 12px; border-radius: var(--dshd-r-btn);
-  font: inherit; font-size: var(--dshd-fs-md); line-height: 18px; font-weight: 500; text-align: center;
-  border: 1px solid var(--dshd-btn-border); background: var(--dshd-hover);
-  color: var(--dshd-text); cursor: pointer;
-}
-/* 过渡/焦点环/按下/primary 色阶/禁用的状态语义见 common.css 共享规则；
-   此处只保留控制中心的填充式底色与 hover/disabled 复位 */
-.mi-btn:hover { border-color: var(--dshd-hover-border); background: var(--dshd-selected); }
-.mi-btn:disabled:hover { border-color: var(--dshd-btn-border); background: var(--dshd-hover); }
-.mi-result {
-  margin-top: 6px; padding: 8px 10px; border-radius: var(--dshd-r-md);
-  background: var(--dshd-hover); border: 1px solid var(--dshd-border);
-  display: flex; flex-direction: column; gap: 6px;
-}
-/* hidden 属性必须压过 display:flex，否则未解析时结果区仍占位 */
-.mi-result[hidden] { display: none; }
-.mi-key-row { display: flex; flex-direction: column; gap: 4px; }
-.mi-key-label { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); font-family: var(--dshd-font-mono); overflow-wrap: anywhere; }
-.api-key-feedback { min-height: 16px; }
-.mi-ok { font-size: var(--dshd-fs-sm); color: var(--dshd-success-text); line-height: 16px; }
-@media (prefers-reduced-motion: reduce) {
-  .mi-btn { transition: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .sswitch, .sswitch::before { transition: none; }
 }

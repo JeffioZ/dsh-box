@@ -200,7 +200,8 @@ pub fn items(tray_surface: bool) -> Vec<TrayMenuItem> {
     rows.push(TrayMenuItem::row_icon(
         "settings",
         "gear",
-        crate::locale::text("设置…", "Settings…"),
+        // 与 dsh 官方设置区分：明确这是外壳自己的设置入口
+        crate::locale::text("DSHBox 设置…", "DSHBox Settings…"),
     ));
     rows.push(TrayMenuItem::sep());
     // 服务维护
