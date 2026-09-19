@@ -41,7 +41,10 @@ var css = [
   'transition:background-color .12s ease,color .12s ease;}',
   '.__dshd_cm_i:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));}',
   '.__dshd_cm_i:focus{outline:none;}',
-  '.__dshd_cm.__dshd_cm_kbd .__dshd_cm_i:focus{outline:2px solid var(--dsw-brand-color-primary,#5686fe);outline-offset:-2px;}',
+  // 键盘焦点指示 = hover 同款填充（逐值对齐 dsh 0.1.6-alpha.2 起
+  // Menu.module.css 的 .item:focus-visible：填充即指示，ring 会与之叠加）。
+  // __dshd_cm_kbd 由 keydown 添加 / pointerdown 移除，等价 focus-visible。
+  '.__dshd_cm.__dshd_cm_kbd .__dshd_cm_i:focus{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08));}',
   // 按压底色读 dsh interactive-bg-active：深色 14% 白/浅色 10% 蓝灰，与内置
   // --dshd-pressed 两主题逐值一致；fallback 为深色值
   '.__dshd_cm_i:active{background:var(--dsw-alias-interactive-bg-active,rgba(255,255,255,.14));}',
