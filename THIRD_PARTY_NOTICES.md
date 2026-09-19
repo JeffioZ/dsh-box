@@ -52,7 +52,7 @@ SOFTWARE.
 
 ## lucide
 
-`ui/common.js` 的 `DSHD_ICON_PATHS` 表中的图标 path 数据（download / puzzle / gear / info / clock / chevronDown 等）取自 lucide 图标库的官方路径数据（24×24、描边式），用于菜单、导航与各页面的线性图标。
+`ui/common.js` 的 `DSHD_ICON_PATHS` 表中的图标 path 数据（download / puzzle / gear / info / clock / chevronDown / counts / speeds / cache 等）取自 lucide 图标库的官方路径数据（24×24、描边式），用于菜单、导航与各页面的线性图标；个别条目为官方路径的小幅衍生变体（如密码可见性眼睛调整瞳孔半径、钱包简化连线），修改仅限几何微调，署名与许可要求不变。
 
 - 项目：https://github.com/lucide-icons/lucide
 - 许可证：ISC
