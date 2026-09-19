@@ -124,6 +124,76 @@ fn inspect_runtime(executable: PathBuf) -> Option<NodeRuntime> {
     })
 }
 
+/// Node 探测缓存（state.json）：`node --version` 的 spawn 占启动关键路径
+/// ~80ms，运行时可执行文件身份（路径 + 长度 + mtime）未变时信任上次探测
+/// 结果跳过 spawn——任何替换 / 损坏 / 版本回退必然改变文件身份，安全性
+/// 等价于逐次探测，仅文件内容原位篡改且长度与时间戳恰好不变时失效。
+const NODE_PROBE_CACHE_KEY: &str = "node_runtime_probe";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct NodeProbeCache {
+    path: String,
+    version: String,
+    len: u64,
+    mtime_sec: u64,
+    mtime_nsec: u32,
+}
+
+impl NodeProbeCache {
+    /// 纯逻辑：缓存记录是否与当前文件身份一致，一致返回缓存的版本串。
+    fn matches(&self, path: &Path, len: u64, mtime: std::time::SystemTime) -> Option<String> {
+        if self.path != path.to_string_lossy() || self.len != len {
+            return None;
+        }
+        let elapsed = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
+        (elapsed.as_secs() == self.mtime_sec && elapsed.subsec_nanos() == self.mtime_nsec)
+            .then(|| self.version.clone())
+    }
+
+    fn of(path: &Path, version: &str, len: u64, mtime: std::time::SystemTime) -> Option<Self> {
+        let elapsed = mtime.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(Self {
+            path: path.to_string_lossy().into_owned(),
+            version: version.to_string(),
+            len,
+            mtime_sec: elapsed.as_secs(),
+            mtime_nsec: elapsed.subsec_nanos(),
+        })
+    }
+}
+
+/// 探测 Node 运行时：文件身份命中缓存则跳过 spawn；未命中走真实探测
+/// （含失败重试）并回写缓存。覆盖两个每次启动的热路径（托管 Node 与
+/// 系统 Node 常规分支）；隔离重选与装后校验属恢复场景，保持逐次真实探测。
+fn inspect_runtime_cached(executable: &Path, config: &Config) -> Option<NodeRuntime> {
+    let identity = std::fs::metadata(executable).ok()?;
+    let cache = crate::app_state::load_state_value(&config.root, NODE_PROBE_CACHE_KEY)
+        .and_then(|value| serde_json::from_value::<NodeProbeCache>(value).ok());
+    if let Some(version) = cache
+        .as_ref()
+        .and_then(|cache| cache.matches(executable, identity.len(), identity.modified().ok()?))
+    {
+        return Some(NodeRuntime {
+            executable: executable.to_path_buf(),
+            version,
+        });
+    }
+    let runtime = inspect_runtime_with_retry(executable.to_path_buf())?;
+    // 探测成功后重取身份回写：探测期间的文件变化不会把旧身份写进缓存
+    let identity = std::fs::metadata(executable).ok()?;
+    if let Some(record) = NodeProbeCache::of(
+        executable,
+        &runtime.version,
+        identity.len(),
+        identity.modified().ok()?,
+    ) {
+        if let Ok(value) = serde_json::to_value(record) {
+            let _ = crate::app_state::save_state_value(&config.root, NODE_PROBE_CACHE_KEY, value);
+        }
+    }
+    Some(runtime)
+}
+
 fn install_runtime(app: &AppHandle, config: &Config) -> Result<NodeRuntime, String> {
     let executable = install_portable_node(app, config)?;
     inspect_runtime(executable).ok_or_else(|| {
@@ -284,7 +354,7 @@ fn ensure_node_inner(app: &AppHandle, config: &Config) -> Result<NodeRuntime, St
     }
     let managed = config.node_exe();
     if managed.exists() {
-        if let Some(runtime) = inspect_runtime_with_retry(managed) {
+        if let Some(runtime) = inspect_runtime_cached(&managed, config) {
             // 探测成功：上轮隔离副本（如有）已无用（本次 node_dir 健康）
             if quarantine.exists() {
                 let _ = std::fs::remove_dir_all(&quarantine);
@@ -342,8 +412,10 @@ fn ensure_node_inner(app: &AppHandle, config: &Config) -> Result<NodeRuntime, St
             }
         };
     }
+    // 无便携 Node 的常规形态：系统 Node 也走身份缓存（上方 managed 分支
+    // 与隔离重选路径之外的第三个探测点，同样是每次启动的热路径）
     find_system_node()
-        .and_then(inspect_runtime)
+        .and_then(|exe| inspect_runtime_cached(&exe, config))
         .map(Ok)
         .unwrap_or_else(|| install_runtime(app, config))
 }
@@ -1030,6 +1102,64 @@ mod npm_cli_tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod node_probe_cache_tests {
+    use super::NodeProbeCache;
+    use std::path::Path;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    fn cache(path: &str, len: u64, mtime: std::time::SystemTime) -> NodeProbeCache {
+        NodeProbeCache::of(Path::new(path), "v24.19.0", len, mtime).unwrap()
+    }
+
+    #[test]
+    fn cache_hits_only_on_full_identity_match() {
+        // Windows 的 SystemTime 为 100ns 粒度，测试值取其整数倍才可区分
+        let mtime = UNIX_EPOCH + Duration::from_secs(1_800_000_009) + Duration::from_nanos(100);
+        let record = cache(r"C:\node\node.exe", 1000, mtime);
+        // 路径 / 长度 / mtime 全一致才命中
+        assert_eq!(
+            record.matches(Path::new(r"C:\node\node.exe"), 1000, mtime),
+            Some("v24.19.0".into())
+        );
+        assert_eq!(
+            record.matches(Path::new(r"C:\node2\node.exe"), 1000, mtime),
+            None
+        );
+        assert_eq!(
+            record.matches(Path::new(r"C:\node\node.exe"), 1001, mtime),
+            None
+        );
+        let other_mtime =
+            UNIX_EPOCH + Duration::from_secs(1_800_000_009) + Duration::from_nanos(200);
+        assert_eq!(
+            record.matches(Path::new(r"C:\node\node.exe"), 1000, other_mtime),
+            None
+        );
+        // 纪元前时间（文件系统异常值）不命中也不 panic
+        assert_eq!(
+            record.matches(
+                Path::new(r"C:\node\node.exe"),
+                1000,
+                UNIX_EPOCH - Duration::from_secs(1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_rejects_epoch_malformed_identity() {
+        // of() 对纪元前 mtime 返回 None（无法表示），调用方按未缓存处理
+        assert!(NodeProbeCache::of(
+            Path::new("/x/node"),
+            "v1.0.0",
+            1,
+            UNIX_EPOCH - Duration::from_secs(5),
+        )
+        .is_none());
     }
 }
 
