@@ -82,7 +82,11 @@ pub fn settings_set(
     let state = app.state::<AppState>();
     match key.as_str() {
         "autostart" => {
-            crate::autostart::set_enabled(value)?;
+            if let Err(e) = crate::autostart::set_enabled(value) {
+                // 错误已回传前端就地提示；这里补后端日志，注册表错误码事后可查
+                crate::logging::log(&format!("settings: 开机自启动设置失败：{e}"));
+                return Err(e);
+            }
         }
         "hide_tool_calls" => {
             state.set_hide_tool_calls(value)?;

@@ -115,7 +115,12 @@ pub fn save(app: &AppHandle, payload: OnboardingPayload) -> Result<(), String> {
     }
     crate::tray::apply_theme(app, &payload.theme);
 
-    crate::autostart::set_enabled(payload.autostart)?;
+    // 自启动是可选偏好：注册表/桌面文件写入失败（组策略锁定、目录权限等）
+    // 只记日志不阻断引导收尾——与语言/主题同步失败同一口径，用户后续可在
+    // 设置页重试（该处失败仅回滚开关并提示）
+    if let Err(e) = crate::autostart::set_enabled(payload.autostart) {
+        crate::logging::log(&format!("onboarding: 开机自启动设置失败（已跳过）：{e}"));
+    }
 
     app_state::save_state_value(
         &config.root,
