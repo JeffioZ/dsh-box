@@ -737,6 +737,8 @@ fn start_and_wait_managed_inner(
 ) -> Result<u16, String> {
     let state = app.state::<AppState>();
     let started = start_server(app, config, node_exe)?;
+    // spawn → 健康检查通过的服务启动耗时（性能诊断口径，不含前置探测）
+    let spawned_at = Instant::now();
     let log_offset = started.log_offset;
     state.set_running(started.child, started.guard);
     let mut actual_port = (config.port != 0).then_some(config.port);
@@ -764,6 +766,10 @@ fn start_and_wait_managed_inner(
                 // 供后续看门狗/心跳/重启与导航使用（与 set_port 同步的伴生状态）
                 state.set_auth_token(auth_token.clone());
                 crate::plugins::clear_resolved_install_marker(config, pnpm);
+                crate::logging::log(&format!(
+                    "dsh: 服务启动耗时 {}ms",
+                    spawned_at.elapsed().as_millis()
+                ));
                 return Ok(port);
             }
         }

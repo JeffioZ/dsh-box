@@ -216,6 +216,16 @@ pub(crate) fn run() {
                 let _ = win.set_background_color(Some(color));
             }
 
+            // 服务引导与窗口后续装配并行：boot_inner 在 enter_web_app 之前
+            // 不碰窗口（事件有启动页 get_status 拉取兜底），放在窗口 build
+            // 之后、几何恢复之前，让 dsh 启动与标题栏/状态栏/托盘创建重叠。
+            // 不能更早：外部服务快速复用路径 ~0.3s 即导航，窗口必须已存在，
+            // 否则 main_webview 为 None 会静默丢失本次导航。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || dsh::boot_loop(handle));
+            }
+
             let cfg = app.state::<AppState>().config();
 
             // 记忆窗口位置/大小：全程逻辑坐标——保存的就是逻辑值，恢复也直接用
@@ -463,8 +473,6 @@ pub(crate) fn run() {
                 Ok(()) => logging::log("托盘: 已创建"),
                 Err(e) => logging::log(&format!("托盘: 创建失败：{e}")),
             }
-            let handle = app.handle().clone();
-            std::thread::spawn(move || dsh::boot_loop(handle));
             Ok(())
         })
         .on_window_event(|window, event| match event {
