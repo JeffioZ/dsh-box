@@ -34,14 +34,26 @@ function renderStats() {
   const el = $('stats');
   const managedReady = serviceReady && serviceMode === 'managed';
   if (!managedReady || !statsGroups.length) {
-    el.innerHTML = '';
     el.dataset.truncated = '0';
-    el.title = managedReady ? '' : dshdT('navRequiresReady');
+    // 悬停 title 统一清空：占位文案常显自解释，数据态由 applyNativeTips
+    // 接管（不清会残留上一数据态的旧统计 tooltip）
+    el.title = '';
+    if (serviceMode === 'managed' && !serviceReady) {
+      // 托管服务未就绪（启动 / 看门狗恢复期）：常显弱化占位并保持可点；
+      // 就绪后下一轮轮询自动替换为真实统计
+      el.style.display = '';
+      el.innerHTML =
+        '<span class="g"><span class="g-t pending">' + esc(dshdT('navRequiresReady')) + '</span></span>';
+    } else {
+      // 就绪但暂无数据（轮询间隙防闪烁）或外部模式：整体隐藏；
+      // disabled 按钮原生吞点击的旧路不再回退
+      el.innerHTML = '';
+      el.style.display = 'none';
+    }
     el.setAttribute('aria-label', dshdT('statsRegion'));
-    el.disabled = true;
     return;
   }
-  el.disabled = false;
+  el.style.display = '';
   // tok/s 实时优先、平均回退（speeds 组的 Rust 文本只含首 token）
   const tps = liveTps != null ? liveTps : avgTps;
   const tpsText = tps != null ? formatTps(tps) : '';
@@ -67,6 +79,12 @@ function formatTps(v) {
 // 系统默认 tooltip 可获。
 function fitGroups() {
   const el = $('stats');
+  // 无数据（隐藏态 / 未就绪占位）时跳过：applyNativeTips 会重写按钮
+  // title 与 aria-label，须保住 renderStats 设置的占位语义
+  if (!statsGroups.length) {
+    el.dataset.truncated = '0';
+    return;
+  }
   const groups = [...el.querySelectorAll('.g')];
   if (!groups.length) {
     el.dataset.truncated = '0';
@@ -318,10 +336,12 @@ function init() {
   chip.addEventListener('click', () => {
     // 未配置 Key 时点击直达设置页（引导配置）；其余状态打开用量与余额
     const cmd = chip.dataset.credentialIssue ? 'app_dialog_open_settings' : 'app_dialog_open_usage';
-    invoke(cmd).catch(() => {});
+    // 点击是用户主动动作，失败必须留痕（其余 invoke 的静默失败是预期路径）
+    invoke(cmd).catch((e) => console.warn('statusbar: 打开弹窗失败', e));
   });
   statsEl.addEventListener('click', () => {
-    invoke('app_dialog_open_usage').catch(() => {});
+    invoke('app_dialog_open_usage')
+      .catch((e) => console.warn('statusbar: 打开用量弹窗失败', e));
   });
   // 宽度变化重排分组并重判截断（fitGroups 内未截断时自动收起 tooltip）
   if (typeof ResizeObserver !== 'undefined') {
