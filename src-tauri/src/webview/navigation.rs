@@ -313,7 +313,28 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
 /// 让 WebView 跳到 dsh 界面（或返回本地启动页）。
 pub fn navigate(app: &AppHandle, url: &str) {
     let Some(wv) = main_webview(app) else {
-        logging::log("navigate: 未找到主 webview");
+        // boot 线程早于窗口创建启动时的快路径（外部服务接入/并发就绪可
+        // 在窗口建完前到达此处）：直接丢弃导航会永久停在启动页。延迟重试
+        // 直到 webview 出现；窗口创建失败由 fatal_boot_exit 收尾，轮询以
+        // is_quitting 与 15s 截止兜底，不会悬挂。重试路径 webview 已存在，
+        // 不会再进本分支（无递归链）。
+        logging::log(&format!("navigate: 主 webview 未就绪，延迟重试 {url}"));
+        let handle = app.clone();
+        let target = url.to_string();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while std::time::Instant::now() < deadline {
+                if handle.state::<AppState>().is_quitting() {
+                    return;
+                }
+                if crate::main_webview(&handle).is_some() {
+                    navigate(&handle, &target);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            logging::log("navigate: 等待主 webview 超时，放弃本次导航");
+        });
         return;
     };
     if let Ok(u) = url::Url::parse(url) {

@@ -136,6 +136,15 @@ pub(crate) fn run() {
             // 返回值为“服务器是否已就绪”：仅 dev 构建且未就绪时需要延迟
             // reload 兜底；生产构建恒返回 false（由 dev_url 守卫排除）。
             let dev_ui_ready = ensure_dev_ui_server(app.handle());
+            // 服务引导与窗口创建/装配全程并行：boot_inner 在 enter_web_app
+            // 之前不碰窗口（事件由启动页 get_status 拉取兜底），dsh 的启动
+            // 与 WebView2 初始化、标题栏/状态栏/托盘创建全部重叠。快路径
+            // （外部服务接入等）可能在窗口建完前导航——navigate 对未就绪的
+            // webview 有延迟重试，不会丢失导航。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || dsh::boot_loop(handle));
+            }
             // 手建主窗口（conf windows 为空）：带初始化脚本预设 dsh 深色主题，
             // 背景色跟随系统主题，与 dsh/loading 底色统一，消除启动与导航的明暗闪烁
             let navigation_app = app.handle().clone();
@@ -214,16 +223,6 @@ pub(crate) fn run() {
                     LIGHT_BG
                 };
                 let _ = win.set_background_color(Some(color));
-            }
-
-            // 服务引导与窗口后续装配并行：boot_inner 在 enter_web_app 之前
-            // 不碰窗口（事件有启动页 get_status 拉取兜底），放在窗口 build
-            // 之后、几何恢复之前，让 dsh 启动与标题栏/状态栏/托盘创建重叠。
-            // 不能更早：外部服务快速复用路径 ~0.3s 即导航，窗口必须已存在，
-            // 否则 main_webview 为 None 会静默丢失本次导航。
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || dsh::boot_loop(handle));
             }
 
             let cfg = app.state::<AppState>().config();
