@@ -1,10 +1,12 @@
-//! 供应商发现：从 dsh 的 `settings.yaml` 读取已配置的账户路由。
+//! 供应商发现：从 dsh 的设置读取已配置的账户路由。
 //!
 //! 两个来源（与 dsh-usage-stats 的供应商枚举一致）：
-//! - 官方 DeepSeek 路由：`llm-deepseek` 段（缺省时用 `api.deepseek.com`）；
+//! - 官方 DeepSeek 路由：`llm-deepseek`（缺省时用 `api.deepseek.com`）；
 //! - 自定义/目录路由：`llm-pi-ai.providers` 字典的每个键（`displayName`、
 //!   `apiKeyEnv`、`baseURL`）。
 //!
+//! 存储位置按 dsh 版本选择（见 dsh_settings）：≥0.1.7 读 profile patch
+//! 文档的 entry config 子树（结构化遍历）；旧版读 settings.yaml 段——
 //! `providers` 值支持块式（缩进）与流式（花括号）两种 YAML 写法：dsh 的
 //! settings 写盘器按注释保留式 patch 重写、原样保留既有节点风格，手写或
 //! 编辑器格式化引入的流式块会长期合法存在。
@@ -78,7 +80,74 @@ fn has_section(text: &str, section: &str) -> bool {
 }
 
 /// 读取 `llm-deepseek` 段的官方路由与 `llm-pi-ai.providers` 的全部路由。
+/// dsh ≥0.1.7 设置迁入 profile patch 文档（`llm-deepseek` / `llm-pi-ai`
+/// entry 的 config 子树，见 dsh_settings），旧版仍读 settings.yaml 段。
 pub fn configured_routes(config: &Config) -> Vec<ProviderRoute> {
+    if crate::dsh_settings::uses_patch_settings(config) {
+        configured_routes_patch(config)
+    } else {
+        configured_routes_legacy(config)
+    }
+}
+
+/// 新版（patch 文档）读取：结构化遍历 entry 的 config 子树，无行级解析。
+fn configured_routes_patch(config: &Config) -> Vec<ProviderRoute> {
+    let deepseek = crate::dsh_settings::entry_config(config, "llm-deepseek");
+    let official_field = |name: &str| {
+        deepseek
+            .as_ref()
+            .and_then(|config| config.get(name))
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let mut out = vec![ProviderRoute {
+        id: "deepseek-official".to_string(),
+        display_name: "DeepSeek".to_string(),
+        api_key_env: Some(
+            official_field("apiKeyEnv").unwrap_or_else(|| DEEPSEEK_DEFAULTS.0.to_string()),
+        ),
+        base_url: Some(
+            official_field("baseURL").unwrap_or_else(|| DEEPSEEK_DEFAULTS.1.to_string()),
+        ),
+    }];
+
+    let Some(pi_ai) = crate::dsh_settings::entry_config(config, "llm-pi-ai") else {
+        return out;
+    };
+    match pi_ai.get("providers").and_then(|p| p.as_object()) {
+        Some(providers) => {
+            for (route, fields) in providers {
+                let field = |name: &str| {
+                    fields
+                        .get(name)
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string)
+                };
+                out.push(ProviderRoute {
+                    display_name: field("displayName").unwrap_or_else(|| route.clone()),
+                    api_key_env: field("apiKeyEnv"),
+                    base_url: field("baseURL"),
+                    id: route.clone(),
+                });
+            }
+        }
+        None if pi_ai.get("providers").is_some() => {
+            // providers 存在但不是映射：结构无法识别，全部自定义路由被
+            // 静默丢弃，必须留痕（与旧版 settings.yaml 同一口径）。
+            crate::logging::log(
+                "usage: cordis.patch.yml 的 llm-pi-ai entry 未提取到自定义路由（providers 结构无法识别）",
+            );
+        }
+        None => {}
+    }
+    out
+}
+
+/// 旧版（<0.1.7）读取：settings.yaml 的 `llm-deepseek` 段与
+/// `llm-pi-ai.providers` 字典（行级解析，保留原样不整体反序列化）。
+fn configured_routes_legacy(config: &Config) -> Vec<ProviderRoute> {
     let Ok(text) = std::fs::read_to_string(config.dsh_home().join("settings.yaml")) else {
         return vec![ProviderRoute {
             id: "deepseek-official".to_string(),
@@ -532,6 +601,9 @@ llm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayNam
         std::fs::create_dir_all(&root).unwrap();
         let mut config = Config::load();
         config.dsh_home = root.clone();
+        // 隔离 dsh 包目录：本机安装的 dsh 版本不得影响存储路径选择。
+        config.root = root.join("box");
+        std::fs::create_dir_all(&config.root).unwrap();
         std::fs::write(
             root.join("settings.yaml"),
             "llm-deepseek:\n  apiKeyEnv: DEEPSEEK_API_KEY\nllm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayName: 示例网关,\n          apiKeyEnv: GATEWAY_KEY,\n          baseURL: https://gateway.example.com/v1\n        }\n    }\n",
@@ -558,6 +630,9 @@ llm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayNam
         std::fs::create_dir_all(&root).unwrap();
         let mut config = Config::load();
         config.dsh_home = root.clone();
+        // 隔离 dsh 包目录：本机安装的 dsh 版本不得影响存储路径选择。
+        config.root = root.join("box");
+        std::fs::create_dir_all(&config.root).unwrap();
         // llm-pi-ai 段存在但没有 providers 块：自定义路由被静默丢弃，必须留痕。
         std::fs::write(root.join("settings.yaml"), "llm-pi-ai:\n  other: 1\n").unwrap();
         let log_path = root.join("logs").join("dshbox.log");
@@ -574,12 +649,81 @@ llm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          displayNam
 
     #[test]
     fn configured_routes_always_includes_deepseek() {
+        let root = std::env::temp_dir().join("dshbox-usage-providers-nonexistent");
+        std::fs::create_dir_all(&root).unwrap();
         let mut config = Config::load();
-        config.dsh_home = std::env::temp_dir().join("dshbox-usage-providers-nonexistent");
-        std::fs::create_dir_all(&config.dsh_home).unwrap();
+        config.dsh_home = root.clone();
+        // 隔离 dsh 包目录：本机安装的 dsh 版本不得影响存储路径选择。
+        config.root = root.join("box");
+        std::fs::create_dir_all(&config.root).unwrap();
         // 无 settings.yaml 时回落默认 DeepSeek。
         let routes = configured_routes(&config);
         assert!(routes.iter().any(|r| r.id == "deepseek-official"));
-        let _ = std::fs::remove_dir_all(&config.dsh_home);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn configured_routes_reads_patch_documents() {
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-usage-providers-patch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = Config::load();
+        config.dsh_home = root.clone();
+        // dsh_dir 基于 root：一并指到临时目录，避免读到本机真实安装的 dsh。
+        config.root = root.join("box");
+        std::fs::create_dir_all(&config.root).unwrap();
+        // 伪造已安装 dsh ≥0.1.7，切换到 patch 文档读取。
+        let pkg = config
+            .dsh_dir()
+            .join("node_modules/@deepseek-ai/dsh/package.json");
+        std::fs::create_dir_all(pkg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &pkg,
+            serde_json::json!({ "version": "0.1.7-alpha.1" }).to_string(),
+        )
+        .unwrap();
+        // profile 级：官方路由覆盖 + 自定义路由；settings.yaml 不再参与。
+        let patch = root.join("profiles/web/cordis.patch.yml");
+        std::fs::create_dir_all(patch.parent().unwrap()).unwrap();
+        std::fs::write(
+            &patch,
+            "- id: llm-deepseek\n  config:\n    baseURL: https://relay.example.com\n\
+             - id: llm-pi-ai\n  config:\n    providers:\n      gw:\n        displayName: 示例网关\n        apiKeyEnv: GATEWAY_KEY\n        baseURL: https://gateway.example.com/v1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("settings.yaml"),
+            "llm-pi-ai:\n  providers:\n    stale: { apiKeyEnv: OLD }\n",
+        )
+        .unwrap();
+        let routes = configured_routes(&config);
+        let official = routes.iter().find(|r| r.id == "deepseek-official").unwrap();
+        assert_eq!(
+            official.base_url.as_deref(),
+            Some("https://relay.example.com")
+        );
+        assert_eq!(official.api_key_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+        let gateway = routes.iter().find(|r| r.id == "gw").unwrap();
+        assert_eq!(gateway.display_name, "示例网关");
+        assert_eq!(gateway.api_key_env.as_deref(), Some("GATEWAY_KEY"));
+        // 旧存储不再参与
+        assert!(!routes.iter().any(|r| r.id == "stale"));
+        // home 级覆盖 profile 级的同名 entry
+        let home = root.join("cordis.patch.yml");
+        std::fs::write(
+            &home,
+            "- id: llm-pi-ai\n  config:\n    providers:\n      home-gw:\n        apiKeyEnv: HOME_KEY\n",
+        )
+        .unwrap();
+        let routes = configured_routes(&config);
+        assert!(!routes.iter().any(|r| r.id == "gw"));
+        assert!(routes.iter().any(|r| r.id == "home-gw"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

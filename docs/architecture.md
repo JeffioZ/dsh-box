@@ -68,7 +68,8 @@ sequenceDiagram
 |---|---|---|
 | `config.json` | DSHBox/用户 | 读写用户设置 |
 | `state.json` | DSHBox | 内部状态，不建议手改 |
-| `$DSH_HOME/settings.yaml` | dsh/用户 | 只合并 locale/ui-theme 段；`llm-pi-ai` 段只读（余额路由） |
+| `$DSH_HOME/cordis.patch.yml`、`$DSH_HOME/profiles/web/cordis.patch.yml` | dsh/用户 | dsh ≥0.1.7 的设置存储；只合并 locale/ui-theme entry；`llm-pi-ai` entry 只读（余额路由） |
+| `$DSH_HOME/settings.yaml` | dsh/用户 | 旧版 dsh（<0.1.7）的设置存储，同上口径（新版首启会改名为 `.imported` 导入 patch 文档） |
 | `$DSH_HOME/.credentials.yaml` | dsh/用户 | 仅首次引导合并 `DEEPSEEK_API_KEY` 行 |
 | 会话日志 | dsh | 只读统计与通知 |
 | `node/`、`dsh/` | DSHBox | 事务化安装和更新 |

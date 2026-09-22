@@ -360,7 +360,7 @@ impl AppState {
         managed_file::cleanup_stale_temp_files(&config.root);
         managed_file::cleanup_stale_temp_files(config.dsh_home());
         let language_override = std::env::var("DSHD_LANG").ok();
-        // 语言解析优先级：DSHD_LANG 环境变量 > dsh settings.yaml（locale.preference）
+        // 语言解析优先级：DSHD_LANG 环境变量 > dsh 设置的 locale 偏好
         // > config.json 的 language > 系统界面语言。dsh 偏好放在 config 之前，
         // 保证加载页第一帧就与 dsh 的界面语言一致。
         let preference = language_override

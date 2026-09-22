@@ -15,6 +15,7 @@ mod control_center;
 mod credentials;
 mod dev_ui;
 mod dsh;
+mod dsh_settings;
 mod file_actions;
 mod file_icons;
 mod heartbeat;

@@ -261,7 +261,15 @@ impl Config {
     }
 
     /// 读写共用 YAML 语义，保留的注释、引号和 flow 映射不影响偏好跟随。
+    /// dsh ≥0.1.7 设置迁入 profile patch 文档（见 dsh_settings），此处按
+    /// 版本选择存储；旧版（<0.1.7）仍读 settings.yaml 的 `section.field`。
     fn dsh_settings_value(&self, section: &str, field: &str) -> Option<String> {
+        if crate::dsh_settings::uses_patch_settings(self) {
+            return crate::dsh_settings::entry_config(self, section)?
+                .get(field)?
+                .as_str()
+                .map(str::to_string);
+        }
         let text = std::fs::read_to_string(self.dsh_home().join("settings.yaml")).ok()?;
         crate::yaml_fields::parse(&text)
             .ok()?
@@ -301,12 +309,21 @@ impl Config {
         }
     }
 
-    /// 把语言偏好写入 dsh 的 settings.yaml（`locale.preference: zh|en`）。
-    /// dsh 的 settings-file 提供者有文件监视器，外部编辑会被热发布，
-    /// 界面语言无需重载即切换。仅做行级合并，不触碰其他段落。
+    /// 把语言偏好写入 dsh 设置（`locale` entry 的 `preference: zh|en`）。
+    /// 新版 dsh（≥0.1.7）写 profile patch 文档，HMR 监视热重组，界面语言
+    /// 无需重载即切换；旧版写 settings.yaml（settings-file 监视器热发布）。
+    /// 两者都只做行级合并，不触碰其他 entry/段落。
     pub fn save_dsh_locale(&self, language: &str) -> Result<(), String> {
         if !matches!(language, "zh" | "en") {
             return Err("Unsupported locale".into());
+        }
+        if crate::dsh_settings::uses_patch_settings(self) {
+            return crate::dsh_settings::save_profile_patch_field(
+                self,
+                "locale",
+                "preference",
+                &serde_json::json!(language),
+            );
         }
         let path = self.dsh_home().join("settings.yaml");
         update_text_file(&path, |text| {
@@ -314,11 +331,20 @@ impl Config {
         })
     }
 
-    /// 把主题偏好写入 dsh 的 settings.yaml（`ui-theme.preference: light|dark|system`）。
-    /// 与 save_dsh_locale 同规格：行级合并、原子写；dsh 的文件监视器会热发布。
+    /// 把主题偏好写入 dsh 设置（`ui-theme` entry 的
+    /// `preference: light|dark|system`）。与 save_dsh_locale 同规格：
+    /// 按版本选择存储、行级合并、原子写、写后热生效。
     pub fn save_dsh_theme(&self, theme: &str) -> Result<(), String> {
         if !matches!(theme, "light" | "dark" | "system") {
             return Err("Unsupported theme".into());
+        }
+        if crate::dsh_settings::uses_patch_settings(self) {
+            return crate::dsh_settings::save_profile_patch_field(
+                self,
+                "ui-theme",
+                "preference",
+                &serde_json::json!(theme),
+            );
         }
         let path = self.dsh_home().join("settings.yaml");
         update_text_file(&path, |text| {

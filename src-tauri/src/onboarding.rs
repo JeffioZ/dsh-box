@@ -1,7 +1,8 @@
 //! 首次使用配置（onboarding）：启动页上的一次性引导。
 //!
 //! 提供 API Key、界面语言、主题与开机自启动四项配置。全部写入 dsh 的
-//! 原生配置文件（`$DSH_HOME/.credentials.yaml`、`$DSH_HOME/settings.yaml`）
+//! 原生配置文件（`$DSH_HOME/.credentials.yaml` 与 dsh 设置存储——
+//! 新版 `cordis.patch.yml` / 旧版 `settings.yaml`，见 `dsh_settings.rs`）
 //! 与外壳用户配置——不修改 dsh 代码，dsh 界面即时可见。
 //!
 //! 完成标记写入内部 `state.json`。

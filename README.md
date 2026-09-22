@@ -71,7 +71,7 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
 首次启动会准备运行时（安装过程可随时取消，不会退出应用），然后显示首次配置页。配置页所有项都可保持默认或直接跳过——DeepSeek API Key 也可留空，之后在 dsh 自己的设置中填写：
 
 1. API Key 写入 dsh 的 `$DSH_HOME/.credentials.yaml`，不会再复制到 DSHBox 的 `config.json`。
-2. 语言与主题写入 dsh 的 `settings.yaml`，与官方 CLI/Web 界面共享。
+2. 语言与主题写入 dsh 的设置存储（新版 dsh 为 `cordis.patch.yml`，旧版为 `settings.yaml`，按已安装版本自动选择），与官方 CLI/Web 界面共享。
 3. 开机自启动使用各平台系统机制。
 4. “安装内置插件”默认勾选，但可取消；未勾选时不会自动安装。
 
@@ -217,7 +217,7 @@ desktop/
 DSHBox 只通过三条通道与 dsh 协作：
 
 1. 向官方 Web 页面注入受限的初始化/菜单脚本。
-2. 读取会话日志，行级合并写入 `$DSH_HOME/settings.yaml` 与 `.credentials.yaml`。
+2. 读取会话日志，行级合并写入 dsh 设置存储（新版 `cordis.patch.yml` / 旧版 `settings.yaml`）与 `.credentials.yaml`。
 3. 调用 `dsh web` 和 `dsh plugin ...`。
 
 不 fork dsh、不 patch npm 包、不修改会话格式、不重复实现官方 Web UI。更多取舍见[为什么做 DSHBox](docs/why-desktop.md)。

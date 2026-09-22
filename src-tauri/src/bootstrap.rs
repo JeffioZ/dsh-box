@@ -207,7 +207,8 @@ pub(crate) fn run() {
             // 主窗口保持无装饰直角窗口，尺寸记忆由窗口状态逻辑独立负责。
             #[cfg(target_os = "macos")]
             let _ = win.set_title_bar_style(tauri::TitleBarStyle::Overlay);
-            // dsh 主题优先：启动时即读取 settings.yaml 的 ui-theme.preference，
+            // dsh 主题优先：启动时即读取 dsh 设置的 ui-theme 偏好（新版 patch
+            // 文档 / 旧版 settings.yaml，见 dsh_settings.rs），
             // light/dark 直接固定窗口主题，system 或未设置则跟随系统。
             // 这样加载页从第一帧起就与 dsh 的主题一致，而不是先按系统主题
             // 显示、加载完成后再切换（win.theme() 随后取到的是固定后的主题，
@@ -446,7 +447,7 @@ pub(crate) fn run() {
             notify::start_task_watch(app.handle().clone());
             // dsh 页面心跳监控：页面挂起/崩溃时重载自愈（指数退避）
             heartbeat::start_page_watch(app.handle().clone());
-            // 跟随 dsh 的设置（语言/主题）：后台每 3s 检查 settings.yaml mtime
+            // 跟随 dsh 的设置（语言/主题）：后台每 3s 检查设置文件集合 mtime
             tray::start_follow_dsh_settings(app.handle().clone());
             // 状态栏会话统计：每 5s 轮询 dsh 投影并广播（失败静默显示占位）
             crate::usage::start_periodic(app.handle().clone());

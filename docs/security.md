@@ -17,7 +17,7 @@ DSHBox 是本机单用户桌面外壳，不是把不可信网页隔离成沙箱�
 
 ## 配置与凭据
 
-- `settings.yaml` 与 `.credentials.yaml` 的写入在进程内锁住完整读改写过程，再用唯一临时文件原子替换；Unix 新文件权限为 `0600`。
+- dsh 设置存储（`cordis.patch.yml` / 旧版 `settings.yaml`）与 `.credentials.yaml` 的写入在进程内锁住完整读改写过程，再用唯一临时文件原子替换；Unix 新文件权限为 `0600`。
 - API Key 只从环境变量或 `$DSH_HOME/.credentials.yaml` 读取，首次引导的新写入也只进入凭据文件；`config.json` 不存储也不兼容读取 API Key，桌面端设置不收取密钥。凭据文件属于当前用户可读数据，不要提交、同步或发送。
 - 用户设置与内部状态分别写入 `config.json` 和 `state.json`，两者不做跨文件兜底或隐式迁移。
 

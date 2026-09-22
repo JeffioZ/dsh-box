@@ -305,9 +305,10 @@ pub fn check_dsh_settings_now(app: &AppHandle) {
     }
 }
 
-/// 后台跟随 dsh 的设置：每 3s 检查一次 settings.yaml 的 locale.preference 与
-/// ui-theme.preference（按文件 mtime 门控，未变化时跳过解析），用户在 dsh
-/// 界面里切换语言/主题后外壳自动跟随；托盘菜单每次打开时也会即时检查一次。
+/// 后台跟随 dsh 的设置：每 3s 检查一次 dsh 设置里 locale 与 ui-theme 的
+/// preference（新版 dsh ≥0.1.7 为两级 cordis.patch.yml，旧版为
+/// settings.yaml；按文件 mtime 门控，未变化时跳过解析），用户在 dsh 界面
+/// 里切换语言/主题后外壳自动跟随；托盘菜单每次打开时也会即时检查一次。
 pub fn start_follow_dsh_settings(app: AppHandle) {
     *LAST_LANGUAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(
         if crate::locale::is_chinese() {
@@ -339,18 +340,17 @@ pub fn start_follow_dsh_settings(app: AppHandle) {
                 continue;
             }
             let config = state.config();
-            // mtime 门控：文件未变时跳过读取与解析
-            let path = config.dsh_home().join("settings.yaml");
-            let Ok(meta) = std::fs::metadata(&path) else {
-                continue;
-            };
-            let Some(mtime) = meta.modified().ok() else {
-                continue;
-            };
-            if last_mtime == Some(mtime) {
+            // mtime 门控：设置文件集合（按 dsh 版本选择）任一变化才读取解析。
+            // 每轮重算路径，dsh 运行中升级（存储迁移）后无需重启外壳。
+            let latest = crate::dsh_settings::watch_paths(&config)
+                .iter()
+                .filter_map(|path| std::fs::metadata(path).ok())
+                .filter_map(|meta| meta.modified().ok())
+                .max();
+            if last_mtime == latest {
                 continue;
             }
-            last_mtime = Some(mtime);
+            last_mtime = latest;
             let h = app.clone();
             let _ = app.run_on_main_thread(move || check_dsh_settings_now(&h));
         }

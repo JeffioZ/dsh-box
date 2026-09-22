@@ -45,7 +45,7 @@ GitHub Actions 在 Windows x64、macOS arm64、Linux x64/arm64 原生任务上�
 
 - 命令层只校验 IPC 来源与参数，然后调用业务模块。
 - 新增替换文件/目录的更新流程必须复用更新事务。
-- 写 `settings.yaml` 或 `.credentials.yaml` 必须通过 `update_text_file`；不要直接覆盖整个用户文件。
+- 写 dsh 设置存储（`cordis.patch.yml` / 旧版 `settings.yaml`，统一经 `dsh_settings.rs`）或 `.credentials.yaml` 必须通过 `update_text_file`；不要直接覆盖整个用户文件。
 - UI 新文案同时添加中英文，并在所有主题与 `prefers-reduced-motion` 下检查。
 - 右键菜单涉及本地文件高频操作。除非有明确产品理由和回归验证，不删除项目、改变顺序或增加日常确认弹窗。
 - 新增纯逻辑必须有单测；跨平台 `cfg` 分支最终以 CI 为准。
