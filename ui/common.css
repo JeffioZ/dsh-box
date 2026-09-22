@@ -257,7 +257,12 @@
 }
 
 /* 标题栏主菜单与独立托盘菜单的共享表面。窗口承载方式不同，但视觉规格
-   必须来自同一处，避免圆角、描边、阴影再次分叉。 */
+   必须来自同一处，避免圆角、描边、阴影再次分叉。
+   背景保持实色卡片：上游 0.1.7 起 Menu 背景改半透明 rgba + backdrop-filter
+   毛玻璃（--dsw-specific-menu），该视觉依赖菜单背后是页面内容可被模糊；
+   本壳菜单是独立窗口，WebView 的 backdrop-filter 不作用于窗口后的桌面，
+   跟随半透明只会得到无模糊的透明面板（文字与桌面内容混叠），故不跟随
+   该值，保持 --dshd-card 实色档。 */
 .dshd-menu-surface {
   box-sizing: border-box;
   padding: 4px;
@@ -315,13 +320,16 @@
     scrollbar-color: var(--dsh-scrollbar-thumb) transparent;
   }
 }
-::-webkit-scrollbar { width: 8px; height: 8px; }
+/* 滚动条宽 5px、thumb 全圆角：dsh 0.1.7 起 scrollbar.css 的
+   --dsh-scrollbar-width 由 8px 收窄为 5px、thumb 圆角 999px（pill），
+   逐值对齐。互斥路径与上游同一原理，见 scrollbar.css 注释。 */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 /* 未定义的滚动条组件（按钮/corner）会回退 UA 默认白色方块，在 textarea 等
    元素上出现与自定义 thumb 不一致的奇怪图形；显式隐藏按钮并透明化 corner。 */
 ::-webkit-scrollbar-button { display: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  border-radius: 4px;
+  border-radius: 999px;
   background: var(--dsh-scrollbar-thumb, var(--dshd-scroll-thumb));
 }
 ::-webkit-scrollbar-thumb:hover {
