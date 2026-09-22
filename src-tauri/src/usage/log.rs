@@ -246,15 +246,17 @@ fn generation(name: &str) -> Option<u32> {
     version.parse().ok()
 }
 
-/// 支持的最高会话日志代次。dsh 0.1.5 起 Session Log V3（上游
-/// `SESSION_FORMAT_VERSION = 3`，packages/session/session-format-v2-to-v3）：
-/// 物理编码完全沿用 V2（事件信封 `{type,seq,time,data}`、独立 zstd 帧序列、
-/// 首帧 header 行），语义层变化——system 提示词移入 `system/message`
-/// surface 事件、surfaceOp replace 端点 `start/end` → `startSeq/endSeq`、
-/// PTC 工具事件与 `source.plugin` 改名——都不在聚合读取路径上
-/// （usage / message.source / header.config / turn / step 不变）。更新代次
-/// （v4+）仍按未知代次拒绝统计，不猜格式。
-const MAX_SUPPORTED_GENERATION: u32 = 3;
+/// 支持的最高会话日志代次。dsh 0.1.5 起 Session Log V3，0.1.7 起 V4
+/// （上游 `SESSION_FORMAT_VERSION = 4`，packages/session/session-format-v3-to-v4）：
+/// 物理编码沿用 V2/V3（事件信封 `{type,seq,time,data}`、独立 zstd 帧序列、
+/// 首帧 header 行、用量字段与归因字段位置），语义层变化——tool/result
+/// 提升为一等 tool-role 消息、新增 `developer/message` surface 事件、
+/// `turn/end` 新增 `forked` 原因、request header 的 `system` 字段退休、
+/// 未知 content 块加 `plugin:` 前缀——都不在聚合读取路径上（usage 的
+/// inputTokens 等字段、`message.source.{provider,model}`、
+/// `header.config` 不变；未知事件类型与 tool/result 新形状不被读取）。
+/// 下一代（v5+）仍按未知代次拒绝统计，不猜格式。
+const MAX_SUPPORTED_GENERATION: u32 = 4;
 
 pub(crate) fn supported_generation(path: &Path) -> bool {
     path.file_name()
@@ -294,12 +296,12 @@ mod tests {
         super::collect_session_logs(&root, &mut found);
         assert!(found.iter().any(|(_, p)| p == &path));
         assert!(!found.iter().any(|(_, p)| p == &old));
-        // Session Log V3（dsh ≥0.1.5）已支持；下一代（v4）仍拒绝
+        // Session Log V3/V4（dsh ≥0.1.5 / ≥0.1.7）已支持；下一代（v5）仍拒绝
         assert!(super::supported_generation(
-            &path.with_file_name("session.v3.jsonl")
+            &path.with_file_name("session.v4.jsonl")
         ));
         assert!(!super::supported_generation(
-            &path.with_file_name("session.v4.jsonl")
+            &path.with_file_name("session.v5.jsonl")
         ));
         assert_eq!(super::generation("session.v02.jsonl"), None);
         let _ = std::fs::remove_dir_all(root);
