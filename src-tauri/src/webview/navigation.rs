@@ -104,17 +104,25 @@ document.documentElement.appendChild(s);}";
 const HIDE_TOOLS_CLEAR: &str =
     "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();";
 
-/// 隐藏 StatsLine 的 CSS（initialization_script 首帧注入与 navigate 注入共用，
-/// 同一份定义避免双份拷贝；style id 与 fallback 脚本共用 guard）。
+/// 隐藏会话统计 pills 的 CSS（initialization_script 首帧注入与 navigate 注入
+/// 共用，同一份定义避免双份拷贝；style id 与 fallback 脚本共用 guard）。
 /// 注意：属性选择器必须用双引号——注入脚本以 JS 单引号字符串承载本 CSS，
 /// 内含单引号会破坏脚本语法（曾因此使整段注入失效）。
-const HIDE_STATS_CSS: &str =
-    "[data-slot=\"conversation.composer.dock\"] .FJxK0a_root{display:none!important}";
+///
+/// 选择器不引用具体哈希类名：0.1.6 的 `.FJxK0a_root`（前缀哈希）在 0.1.7
+/// 变为后缀哈希（`_root_<n>`、`_anchor_<n>`，StatsPills 顶层是 anchor span），
+/// 逐版跟哈希必然漏拍；改为 dock 稳定锚点（scoped-slots 渲染的 data-slot
+/// 包装）匹配 module 类后缀模式。dock 是 list 槽，当前唯一注入者是统计
+/// pills（ui-chat apply.ts），上游若注入其他内容会被一并隐藏——静默降级。
+/// 模式再变时由 sweepStats 文本特征 fallback 兜底。
+const HIDE_STATS_CSS: &str = "[data-slot=\"conversation.composer.dock\"] [class*=\"_root_\"],\
+     [data-slot=\"conversation.composer.dock\"] [class*=\"_anchor_\"]{display:none!important}";
 
-/// 隐藏会话统计行（开关开启时注入）：CSS 按当前版本 class 隐藏
-/// StatsLine，另挂文本特征 fallback + MutationObserver 补位——dsh 更新
-/// 后 class 变化时 fallback 仍能隐藏；两路都失效则统计行重新出现
-/// （静默降级，不影响任何功能）。
+/// 隐藏会话统计 pills（开关开启时注入）：CSS 按 module 类后缀模式隐藏，
+/// 另挂文本特征 fallback + MutationObserver 补位——dsh 更新后类模式变化时
+/// fallback 仍能隐藏；两路都失效则统计行重新出现（静默降级，不影响任何
+/// 功能）。pills 是 span/button 结构（0.1.7 StatsPills），Compact 档只含
+/// 速度/命中率读数，特征须覆盖 tok/s 与 % 而不仅是「轮/步」。
 pub(crate) fn hide_stats_apply() -> String {
     format!(
         "{head}{css}{tail}",
@@ -130,15 +138,17 @@ if (!document.getElementById('__dshd_hide_stats')) {
 if (!window.__dshdHideStatsObs) {
   window.__dshdHideStatsObs = true;
   var dockSel = '[data-slot="conversation.composer.dock"]';
-  var statsRe = /(轮|步|turns|steps)/i;
+  // 0.1.7 StatsPills 为 span/button 结构（0.1.6 StatsLine 是 div），
+  // 三种标签都扫；Compact 档只有速度/命中率读数，特征除「轮/步」外
+  // 须认 tok/s 与 %。文本由「·」分隔（本壳状态栏同款文案），「|」兼容旧版。
+  var statsRe = /(轮|步|turns|steps|tok\/s|tokens|%)/i;
   function sweepStats() {
     var dock = document.querySelector(dockSel);
     if (!dock) return;
     var matches = [];
-    dock.querySelectorAll('div').forEach(function (el) {
+    dock.querySelectorAll('div,span,button').forEach(function (el) {
       var t = el.textContent || '';
-      // dsh 统计行以「·」分组（本壳状态栏同款文案），「|」为兼容旧版
-      if (t.length < 12 || (t.indexOf('|') < 0 && t.indexOf('·') < 0) || !statsRe.test(t)) return;
+      if (t.length < 4 || t.length > 48 || (t.indexOf('|') < 0 && t.indexOf('·') < 0) || !statsRe.test(t)) return;
       matches.push(el);
     });
     matches.forEach(function (el) {
@@ -178,14 +188,15 @@ pub(crate) fn hide_stats_early() -> String {
     )
 }
 
-/// 关闭隐藏：移除样式并恢复 fallback 隐藏的元素。
+/// 关闭隐藏：移除样式并恢复 fallback 隐藏的元素（span/button 为 0.1.7
+/// StatsPills 结构，与 sweepStats 的扫描范围一致）。
 const HIDE_STATS_CLEAR: &str = r#"
 window.__dshdHideStats = false;
 var s = document.getElementById('__dshd_hide_stats');
 if (s) s.remove();
 var dock = document.querySelector('[data-slot="conversation.composer.dock"]');
 if (dock) {
-  dock.querySelectorAll('div').forEach(function (el) {
+  dock.querySelectorAll('div,span,button').forEach(function (el) {
     if (el.__dshdHiddenStats) { el.__dshdHiddenStats = false; el.style.display = ''; }
   });
 }

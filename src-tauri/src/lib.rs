@@ -299,7 +299,11 @@ mod url_tests {
             assert!(script.contains("__dshd_hide_stats"));
         }
         assert!(hide_stats_apply().contains("sweepStats"));
-        assert!(hide_stats_early().contains("FJxK0a_root"));
+        // 0.1.7 类名是后缀哈希模式（_root_/_anchor_），CSS 不得引用具体
+        // 哈希值（逐版跟哈希必然漏拍，0.1.6→0.1.7 即因此失效）。
+        assert!(hide_stats_early().contains("[class*=\"_root_\"]"));
+        assert!(hide_stats_early().contains("[class*=\"_anchor_\"]"));
+        assert!(!hide_stats_early().contains("FJxK0a"));
     }
 
     #[test]
