@@ -376,6 +376,51 @@ mod tests {
     }
 
     #[test]
+    fn fold_log_accumulates_session_stats_for_statusbar_fallback() {
+        let path = temp_log("stats-fallback");
+        // 一个完整步：step/start → 首非空 delta（打包 run）→ 带 usage 的
+        // assistant/message → step/end；外加一对 tool/call→tool/result。
+        let events = [
+            r#"{"seq":1,"time":1780000000000,"type":"step/start","data":{"turn":1,"step":1}}"#,
+            r#"{"seq":2,"time":1780000000100,"type":"tool/call","data":{"turn":1,"step":1,"callId":"k1"}}"#,
+            r#"{"seq":3,"time":1780000000150,"type":"assistant/message","data":{"turn":1,"step":1,"stream":[{"type":"text-chunks","time0":1780000000120,"dt":[5],"texts":["","hi"]}],"usage":{"inputTokens":100,"outputTokens":40}}}"#,
+            r#"{"seq":4,"time":1780000000200,"type":"tool/result","data":{"turn":1,"step":1,"message":{"role":"tool","source":{"kind":"tool","callId":"k1"}}}}"#,
+            r#"{"seq":5,"time":1780000000220,"type":"step/end","data":{"turn":1,"step":1}}"#,
+        ];
+        let payload: Vec<u8> = events
+            .iter()
+            .flat_map(|line| {
+                zstd::encode_all(
+                    format!(
+                        "{line}
+"
+                    )
+                    .as_bytes(),
+                    3,
+                )
+                .unwrap()
+            })
+            .collect();
+        std::fs::write(&path, &payload).unwrap();
+        let mut state = FoldState::default();
+        fold_log(&mut state, &path).unwrap();
+        let stats = &state.stats;
+        assert_eq!(stats.turns, 1);
+        assert_eq!(stats.steps, 1);
+        assert_eq!(stats.llm_ms, 150);
+        assert_eq!(stats.tool_ms, 200 - 100);
+        // 首 token 来自打包 run 的第二个成员：120 + 5 = 125
+        assert_eq!(stats.ttft_ms, 125);
+        assert_eq!(stats.ttft_steps, 1);
+        assert_eq!(stats.decode_ms, 150 - 125);
+        assert_eq!(stats.decode_tokens, 40.0);
+        // 会话全期用量（状态栏 tokenUsage 兜底口径）
+        let (input, output, read, write) = state.session_usage_totals();
+        assert_eq!((input, output, read, write), (100.0, 40.0, 0.0, 0.0));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn report_isolates_unreadable_generations_and_recovers_on_next_round() {
         let root = temp_log("partial-report").parent().unwrap().to_path_buf();
         let mut config = crate::app_state::Config::load();

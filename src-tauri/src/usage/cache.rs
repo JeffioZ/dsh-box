@@ -183,6 +183,7 @@ pub(crate) fn load(config: &Config) -> HashMap<String, FoldState> {
             (
                 id,
                 FoldState {
+                    stats: super::aggregate::SessionStatsState::default(),
                     source_file: s.source_file,
                     byte_offset: s.byte_offset,
                     pending_line: s.pending_line,

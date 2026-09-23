@@ -487,17 +487,39 @@ fn build_groups(config: &Config) -> Option<BuiltGroups> {
     let value = rpc_session_list(config)?;
     let item = selected_session_item(config, &value)?;
     // 两个分支各自借本地 value 取出投影（clone 断开借用，统一走反序列化）
-    let (stats_value, usage_value) = if config.auth_token.is_some() {
+    if config.auth_token.is_some() {
         // 新版：投影（sessionStats/tokenUsage）直接嵌在列表项里，
         // 一次 session/list 同时拿到当前会话与统计。
         let values = item.get("projections")?.get("values")?;
-        (
-            values.get("sessionStats").cloned()?,
-            values.get("tokenUsage").cloned()?,
-        )
+        match (
+            values.get("sessionStats").cloned(),
+            values.get("tokenUsage").cloned(),
+        ) {
+            (Some(stats_value), Some(usage_value)) => {
+                let stats: Option<RawSessionStats> = serde_json::from_value(stats_value).ok();
+                let usage: Option<RawTokenUsage> = serde_json::from_value(usage_value).ok();
+                Some(assemble_groups(stats, usage))
+            }
+            // 投影缺失兜底：dsh ≥0.1.7 的投影缓存绑定日志代次，代次升级
+            // 后未活跃过的会话（空闲查看、无新事件）不写回缓存、冷读也不
+            // 重建——投影长期缺失（上游页面用自己的节点折算兜底）。本壳
+            // 从会话日志直读折叠兜底（语义对齐上游投影，见 AGENTS.md）。
+            (stats_value, usage_value) => {
+                let session_id = item.get("sessionId")?.as_str()?;
+                let (fallback_stats, fallback_usage) = log_fallback(config, session_id)?;
+                let stats = stats_value
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .or(fallback_stats);
+                let usage = usage_value
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .or(fallback_usage);
+                Some(assemble_groups(stats, usage))
+            }
+        }
     } else {
         // 旧版：投影挂在 session.history 的 tail page，maxMessages=1
-        // 取最小页即可，响应体极小。
+        // 取最小页即可，响应体极小。旧版（<0.1.7）投影缓存不绑代次，
+        // 无升级失配缺口，不兜底。
         let session_id = item.get("sessionId")?.as_str()?;
         let page = rpc(
             config,
@@ -505,14 +527,56 @@ fn build_groups(config: &Config) -> Option<BuiltGroups> {
             serde_json::json!({ "sessionId": session_id, "maxMessages": 1 }),
         )?;
         let values = page.get("projections")?.get("values")?;
-        (
-            values.get("sessionStats").cloned()?,
-            values.get("tokenUsage").cloned()?,
-        )
+        let stats: Option<RawSessionStats> =
+            serde_json::from_value(values.get("sessionStats").cloned()?).ok();
+        let usage: Option<RawTokenUsage> =
+            serde_json::from_value(values.get("tokenUsage").cloned()?).ok();
+        Some(assemble_groups(stats, usage))
+    }
+}
+
+/// 兜底折叠状态池：会话 id → 增量 FoldState（与用量页聚合独立，共享
+/// `fold_log` 的游标续折/重建兜底机制）。轮询线程外无并发写入。
+static FALLBACK_STATES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, super::aggregate::FoldState>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// 从会话日志直读当前会话的统计兜底。首轮全量折叠一次（大日志一次性
+/// 开销），之后增量续折；会话日志不可读（代次不支持/IO）返回 None。
+/// 缓存池只留少量会话，超限整体重置（切换回旧会话重折一次，可接受）。
+fn log_fallback(
+    config: &Config,
+    session_id: &str,
+) -> Option<(Option<RawSessionStats>, Option<RawTokenUsage>)> {
+    let path = super::session_log_path(config, session_id)?;
+    let mut pool = FALLBACK_STATES.lock().ok()?;
+    if pool.len() >= 4 && !pool.contains_key(session_id) {
+        pool.clear();
+    }
+    let state = pool.entry(session_id.to_string()).or_default();
+    if let Err(e) = super::fold_log(state, &path) {
+        crate::logging::log(&format!("usage: 会话 {session_id} 统计兜底折叠失败：{e}"));
+        pool.remove(session_id);
+        return None;
+    }
+    let stats = RawSessionStats {
+        turns: state.stats.turns,
+        steps: state.stats.steps,
+        llm_ms: state.stats.llm_ms as f64,
+        tool_ms: state.stats.tool_ms as f64,
+        ttft_ms: state.stats.ttft_ms as f64,
+        ttft_steps: state.stats.ttft_steps,
+        decode_ms: state.stats.decode_ms as f64,
+        decode_tokens: state.stats.decode_tokens,
     };
-    let stats: Option<RawSessionStats> = serde_json::from_value(stats_value).ok();
-    let usage: Option<RawTokenUsage> = serde_json::from_value(usage_value).ok();
-    Some(assemble_groups(stats, usage))
+    let (input, output, cache_read, cache_write) = state.session_usage_totals();
+    let usage = RawTokenUsage {
+        uncached_input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+    };
+    Some((Some(stats), Some(usage)))
 }
 
 /// 由投影数据组装显示组（真实 RPC 与 dev 假数据共用，保证格式一致）。
