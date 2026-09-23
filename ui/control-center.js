@@ -814,7 +814,7 @@ function renderAccountCards(box, items) {
     if (a.status === 'not-configured') {
       detail = '<span class="usage-acc-hint">' + dshdT('accountNotConfiguredHint') + '</span>';
     } else if (a.balance && a.balance.remaining !== null && a.balance.remaining !== undefined) {
-      // 金额与状态栏 chip 同一格式化（dshdCurrency + dshdBalanceValue），
+      // 金额与标题栏 chip 同一格式化（dshdCurrency + dshdBalanceValue），
       // token 简写不适用于钱；unlimited 显示 ∞。dshdBalanceValue 对非数字
       // 原样返回，按防御性口径 esc（当前字段是 f64，无实际注入面）
       detail = '<b class="usage-acc-amount">' + cur(a.balance.currency || '') + (a.balance.unlimited ? '∞' : esc(dshdBalanceValue(a.balance.remaining))) + '</b>'
@@ -1470,21 +1470,24 @@ function renderNav(activeKind) {
     if (pageTitle) pageTitle.textContent = (currentOpen && currentOpen.title) || '';
     return;
   }
-  nav.setAttribute('aria-label', dshdT('navLabel'));
-  nav.innerHTML = '';
+  // 先在 detached 容器里完整构建再与现有 DOM 比对：dsh-status 每轮轮询
+  // 广播都会重走本函数，无变化的全量重写会让进行中的 view-enter 入场
+  // 动画因导航重排而上下抖动（偶现，取决于广播与动画窗口的竞态）
+  const stage = document.createElement('nav');
+  stage.setAttribute('aria-label', dshdT('navLabel'));
   // 导航顶部标题（对齐 dsh 设置弹窗 navTitle：16px/24px 500）；
   // 可拖拽区（head 只占内容区，导航顶部需承担部分窗口拖动）
   const title = document.createElement('div');
   title.className = 'nav-title';
   title.setAttribute('data-tauri-drag-region', 'deep');
   title.textContent = 'DSHBox';
-  nav.append(title);
+  stage.append(title);
   for (const item of NAV_ITEMS) {
     if (item.separator) {
       const separator = document.createElement('div');
       separator.className = 'nav-sep';
       separator.setAttribute('role', 'separator');
-      nav.append(separator);
+      stage.append(separator);
       continue;
     }
     const btn = document.createElement('button');
@@ -1497,17 +1500,27 @@ function renderNav(activeKind) {
     if (!capability.enabled) btn.title = capability.reason;
     btn.innerHTML = '<span class="nic">' + NAV_ICONS[item.icon] + '</span><span class="nav-label">' + esc(dshdT(item.label)) + '</span>';
     btn.addEventListener('click', () => navigateTo(item.kind));
-    nav.append(btn);
+    stage.append(btn);
   }
-  const titleKey = NAV_TITLE_KEY[activeKind];
-  const pageTitle = $('dialog-title');
-  if (pageTitle) pageTitle.textContent = titleKey ? dshdT(titleKey) : '';
   // 导航底部版本号（填充空间，弱化显示）
   const ver = document.createElement('div');
   ver.className = 'nav-ver';
   const v = (currentOpen && currentOpen.initial && currentOpen.initial.app_version) || '';
   ver.textContent = v ? 'v' + v : '';
-  nav.append(ver);
+  stage.append(ver);
+
+  const titleKey = NAV_TITLE_KEY[activeKind];
+  const ariaLabel = dshdT('navLabel');
+  if (stage.innerHTML === nav.innerHTML && nav.getAttribute('aria-label') === ariaLabel) {
+    // 无变化：仅同步弹窗标题（textContent 同值赋值无副作用）
+    const pageTitle = $('dialog-title');
+    if (pageTitle) pageTitle.textContent = titleKey ? dshdT(titleKey) : '';
+    return;
+  }
+  nav.setAttribute('aria-label', ariaLabel);
+  nav.replaceChildren(...stage.childNodes);
+  const pageTitle = $('dialog-title');
+  if (pageTitle) pageTitle.textContent = titleKey ? dshdT(titleKey) : '';
   // 导航列空白区域可拖动整窗（deep=子树可拖，列表项为 button 由
   // Tauri 自动豁免）；列内出现滚动（小屏）时以 "false" 阻断，
   // 避免 mousedown 劫持滚动条。等一帧布局稳定后再量取
@@ -1549,6 +1562,9 @@ function renderCurrent(opts) {
 // 导航切换的内容过渡：旧内容先退场（上浮淡出），再换内容并入场
 // （下浮淡入）。快速连点时重置退场定时器，旧内容重新起退场，不叠加。
 let viewSwapTimer = null;
+// 入场动画期间到达的 dsh-status 广播：状态真变时导航重排会与 view-enter
+// 竞态造成内容上下抖动，先记账、动画收尾（end/cancel 都算收尾）再补渲染
+let pendingNavRender = false;
 function playViewEnter() {
   const content = $('body');
   content.classList.remove('view-enter');
@@ -1563,6 +1579,10 @@ function playViewEnter() {
     content.classList.remove('view-enter');
     content.removeEventListener('animationend', onDone);
     content.removeEventListener('animationcancel', onDone);
+    if (pendingNavRender) {
+      pendingNavRender = false;
+      renderNav(openKind);
+    }
   };
   content.addEventListener('animationend', onDone);
   content.addEventListener('animationcancel', onDone);
@@ -1609,7 +1629,10 @@ function navigateTo(kind) {
     $('body').scrollTop = 0;
     renderCurrent({ triggerCheck: true });
     playViewEnter();
-  }, 90);
+    // 90ms = --dshd-menu-exit-duration，但 CSS 动画从下一渲染帧才起跑，
+    // 精确 90ms 会在动画播到 ~80% 时截断淡出（残余透明度的旧内容瞬移
+    // 消失）；+20ms 余量让退场完整走完再换内容
+  }, 110);
 }
 
 let closeTimer = null;
@@ -1675,7 +1698,10 @@ function applyOpen(p) {
 }
 // Rust 在隐藏状态下同步直呼（载荷内联）：show 前就渲染好本次内容，
 // 第一帧即正确内容，无上一弹窗残影
-window.__dshdOpen = applyOpen;
+// 返回 true 供 Rust 的 eval_with_callback 确认本轮载荷已同步渲染完成
+//（与托盘菜单首帧门控同款），回调到达后才 show——透明窗口在内容就绪前
+// 显示会露出底下的主窗口一瞬（首次打开的概率性整体闪烁）
+window.__dshdOpen = (p) => { applyOpen(p); return true; };
 // Rust 在关闭时直呼：清空内容并复位印章。空卡片会保持可见一帧后被
 // 隐藏（隐藏窗口不绘制），该帧成为下次打开前的第一帧——不再闪上一弹窗残影。
 // 印章复位也保证：再次打开时即使载荷与上次完全相同也会重新渲染
@@ -1711,6 +1737,11 @@ dshdListen('dsh-status', (e) => {
   currentOpen.initial.service_mode = e.payload.service_mode || 'none';
   currentOpen.initial.service_ready = e.payload.phase === 'ready'
     && (e.payload.service_mode === 'managed' || e.payload.service_mode === 'external');
+  const content = $('body');
+  if (content && content.classList.contains('view-enter')) {
+    pendingNavRender = true;
+    return;
+  }
   renderNav(openKind);
 }).catch(() => {});
 document.addEventListener('visibilitychange', async () => {

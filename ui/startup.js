@@ -866,7 +866,7 @@ async function init() {
 
 init();
 
-// 窗口失焦变淡：Rust 侧 Focused 广播驱动（与标题栏/状态栏同一机制），
+// 窗口失焦变淡：Rust 侧 Focused 广播驱动（与标题栏同一机制），
 // 仅启动阶段有效——导航到 dsh 页面后广播即停止。样式切换统一走
 // common.js 的去抖实现（启动期焦点往返不渲染，持续失焦才变淡）
 window.__dshdSetWindowActive = (active) => {

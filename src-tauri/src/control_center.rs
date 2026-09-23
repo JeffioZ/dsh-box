@@ -42,15 +42,6 @@ fn fit_card_height(content_height: f64) -> f64 {
     (content_height - 48.0).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT)
 }
 
-/// 状态栏高度（隐藏状态栏时为 0，与 sync_bounds 口径一致）。
-fn status_bar_height(app: &AppHandle) -> f64 {
-    if app.state::<AppState>().config().hide_statusbar {
-        0.0
-    } else {
-        crate::titlebar::STATUSBAR_HEIGHT
-    }
-}
-
 /// 主窗口内容区逻辑视口（宽, 内容高）。只含主窗口 getter，必须在 show 锁
 /// 之外调用——getter 经事件循环往返阻塞等主线程服务，持锁调用即 H1 互锁
 /// （见 show_with_update_token）。
@@ -60,14 +51,14 @@ fn main_content_viewport(app: &AppHandle) -> Option<(f64, f64)> {
     let size = w.inner_size().ok()?;
     Some((
         size.width as f64 / scale,
-        size.height as f64 / scale - crate::titlebar::TITLEBAR_HEIGHT - status_bar_height(app),
+        size.height as f64 / scale - crate::titlebar::TITLEBAR_HEIGHT,
     ))
 }
 
 /// 由主窗口内容区视口推弹窗卡片尺寸（视口未知时用规格默认值兜底）。
 /// 弹窗卡片逻辑宽度正常为 800px，窄窗口时把自绘阴影也完整收进主窗口；
-/// 高度口径：dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏与
-/// 状态栏），而非整个主窗口高度——直接取主窗口高度会偏大。
+/// 高度口径：dsh 的 100vh 指其页面视口 = 主窗口内容区（排除自绘标题栏），
+/// 而非整个主窗口高度——直接取主窗口高度会偏大。
 fn card_size_for(viewport: Option<(f64, f64)>) -> (f64, f64) {
     match viewport {
         Some((vw, vh)) => (fit_card_width(vw), fit_card_height(vh)),
@@ -170,15 +161,10 @@ fn main_inner_logical_rect(app: &AppHandle) -> Option<(f64, f64, f64, f64)> {
 /// 弹窗窗口（含阴影余量）相对主窗口内容区居中后的左上角逻辑坐标。
 /// 注意按卡片视觉中心对齐：窗口含不对称阴影空间（上 24/下 48/左右 36），
 /// 直接按窗口矩形居中会让卡片视觉中心偏下。
-fn centered_dialog_pos(
-    main: (f64, f64, f64, f64),
-    status_h: f64,
-    dialog_w: f64,
-    dialog_h: f64,
-) -> (f64, f64) {
+fn centered_dialog_pos(main: (f64, f64, f64, f64), dialog_w: f64, dialog_h: f64) -> (f64, f64) {
     let (mlx, mly, mlw, mlh) = main;
-    // dsh 弹窗对齐的是主窗口内容区（去标题栏/状态栏），非整个窗口
-    let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT - status_h;
+    // dsh 弹窗对齐的是主窗口内容区（去标题栏），非整个窗口
+    let content_h = mlh - crate::titlebar::TITLEBAR_HEIGHT;
     let content_y = mly + crate::titlebar::TITLEBAR_HEIGHT;
     let dx = mlx + (mlw - (dialog_w - SHADOW_SIDES * 2.0)) / 2.0 - SHADOW_SIDES;
     let dy = content_y + (content_h - (dialog_h - SHADOW_TOP - SHADOW_BOTTOM)) / 2.0 - SHADOW_TOP;
@@ -206,8 +192,8 @@ pub fn precreate(app: &AppHandle) {
     // 创建时即算好位置（相对主窗口内容区居中）——show 时的异步 set_position
     // 有窗口期（日志实锤：显示前位置仍是默认值），首帧错位；创建参数同步生效
     let (dialog_w, dialog_h) = dialog_size(app, "default", 0.0);
-    let initial_pos = main_inner_logical_rect(app)
-        .map(|rect| centered_dialog_pos(rect, status_bar_height(app), dialog_w, dialog_h));
+    let initial_pos =
+        main_inner_logical_rect(app).map(|rect| centered_dialog_pos(rect, dialog_w, dialog_h));
     precreate_sized(app, (dialog_w, dialog_h), initial_pos);
 }
 
@@ -407,8 +393,7 @@ fn show_with_update_token(
     if main_presented {
         // 主窗口正常显示时相对主窗口内容区居中（inner 口径，与卡片尺寸同源）。
         if let Some((mlx, mly, mlw, mlh)) = main_rect {
-            let (dx, dy) =
-                centered_dialog_pos((mlx, mly, mlw, mlh), status_bar_height(app), ww, wh);
+            let (dx, dy) = centered_dialog_pos((mlx, mly, mlw, mlh), ww, wh);
             crate::logging::log(&format!(
                 "app-dialog: 居中 main=({mlx:.0},{mly:.0} {mlw:.0}x{mlh:.0}) dialog=({dx:.0},{dy:.0} {ww:.0}x{wh:.0})"
             ));
@@ -510,54 +495,90 @@ fn show_with_update_token(
     }
     // 先把本次内容同步渲染进隐藏窗口，再显示：show 的第一帧就是正确内容，
     // 不会先把上一弹窗的残影亮出一帧。载荷内联进 eval（无 IPC 往返），
-    // 事件通道对隐藏窗口不可靠，下方 emit 仅作兜底（页面按载荷印章去重）
+    // 事件通道对隐藏窗口不可靠，下方 emit 仅作兜底（页面按载荷印章去重）。
+    // show 等 eval_with_callback 确认 JS 渲染完成（托盘菜单首帧门控同款）：
+    // 预创建的弹窗 WebView 首次打开前从未合成过一帧，固定延迟 show 会在
+    // 内容就绪前显示透明窗口、露出底下的主窗口一瞬——正是首次打开概率性
+    // 整体闪烁、之后（WebView 已热）绝迹的根因。JS 回调 1.2s 未到（WebView
+    // 冷启动排队/脚本异常）由超时兜底显示，代次 CAS 保证两条路径只显示一次。
     let json = serde_json::to_string(&payload).unwrap_or_default();
-    let _ = win.eval(format!("window.__dshdOpen && window.__dshdOpen({json})"));
+    let script =
+        format!("(() => {{ window.__dshdOpen && window.__dshdOpen({json}); return true; }})()");
     crate::emit_signed_to(app, APP_DIALOG_WINDOW, "app-dialog-open", &payload);
-    // 尺寸/位置设置交给事件循环处理一帧后再显示，既保留首帧位置稳定性，
-    // 又不在主线程用最多 1.2 秒的 sleep 轮询阻塞标题栏与菜单响应。
-    let handle = app.clone();
+    let cb_handle = app.clone();
+    if let Err(e) = win.eval_with_callback(&script, move |result| {
+        let dispatch = cb_handle.clone();
+        let _ = cb_handle.run_on_main_thread(move || {
+            if result != "true" {
+                crate::logging::log(&format!(
+                    "app-dialog: 首帧载荷脚本失败（{result}），转由超时兜底显示"
+                ));
+                return;
+            }
+            show_dialog_once(&dispatch, dialog_gen, target_pos, main_presented);
+        });
+    }) {
+        crate::logging::log(&format!("app-dialog: 首帧载荷脚本下发失败：{e}"));
+    }
+    let timeout_handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(16));
-        let dispatch = handle.clone();
-        let _ = handle.run_on_main_thread(move || {
-            if dispatch.state::<AppState>().dialog_gen() != dialog_gen {
-                return;
-            }
-            let Some(win) = dispatch.get_webview_window(APP_DIALOG_WINDOW) else {
-                return;
-            };
-            if let Some((tx, ty)) = target_pos {
-                if let Ok(position) = win.outer_position() {
-                    let scale = win.scale_factor().unwrap_or(1.0);
-                    crate::logging::log(&format!(
-                        "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
-                        position.x as f64 / scale,
-                        position.y as f64 / scale,
-                    ));
-                }
-            }
-            if win.show().is_ok() {
-                let _ = win.set_focus();
-                // WebView2：窗口级 set_focus 不把键盘焦点送进控制器——首次
-                // 打开按 Esc 无反应，需先点一下弹窗。补一次 webview 级聚焦
-                //（wry → MoveFocus(Programmatic)；UFCS 消 AsRef 歧义）
-                let _ = tauri::Webview::set_focus(win.as_ref());
-                // 模态：只在弹窗真正显示的同一代次禁用主窗口；关闭/快速重开
-                // 让旧代次失效，不会留下主窗口被禁用的孤立状态。
-                if main_presented {
-                    if let Some(main) = crate::main_window(&dispatch) {
-                        let _ = main.set_enabled(false);
-                        dispatch.state::<AppState>().set_main_disabled(true);
-                    }
-                }
-            } else {
-                // show 失败（窗口异常销毁等）：不留下"主窗口被禁用且无弹窗
-                // 可关"的孤立态，直接恢复主窗口
-                restore_main_after_dialog(&dispatch);
-            }
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let dispatch = timeout_handle.clone();
+        let _ = timeout_handle.run_on_main_thread(move || {
+            show_dialog_once(&dispatch, dialog_gen, target_pos, main_presented);
         });
     });
+}
+
+/// 已完成 show 的弹窗代次（show_once 的 CAS 去重）。
+static DIALOG_SHOWN_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 显示弹窗（每代次至多一次）：JS 回调与超时兜底两条路径共用，先比对
+/// AppState 代次（过期提交不显示）、再 CAS 已显示代次（双路径只显示一次）。
+fn show_dialog_once(
+    dispatch: &tauri::AppHandle,
+    dialog_gen: u64,
+    target_pos: Option<(f64, f64)>,
+    main_presented: bool,
+) {
+    if dispatch.state::<AppState>().dialog_gen() != dialog_gen {
+        return;
+    }
+    if DIALOG_SHOWN_GEN.swap(dialog_gen, std::sync::atomic::Ordering::SeqCst) == dialog_gen {
+        return;
+    }
+    let Some(win) = dispatch.get_webview_window(APP_DIALOG_WINDOW) else {
+        return;
+    };
+    if let Some((tx, ty)) = target_pos {
+        if let Ok(position) = win.outer_position() {
+            let scale = win.scale_factor().unwrap_or(1.0);
+            crate::logging::log(&format!(
+                "app-dialog: 显示前位置 ({:.0},{:.0})，目标 ({tx:.0},{ty:.0})",
+                position.x as f64 / scale,
+                position.y as f64 / scale,
+            ));
+        }
+    }
+    if win.show().is_ok() {
+        let _ = win.set_focus();
+        // WebView2：窗口级 set_focus 不把键盘焦点送进控制器——首次
+        // 打开按 Esc 无反应，需先点一下弹窗。补一次 webview 级聚焦
+        //（wry → MoveFocus(Programmatic)；UFCS 消 AsRef 歧义）
+        let _ = tauri::Webview::set_focus(win.as_ref());
+        // 模态：只在弹窗真正显示的同一代次禁用主窗口；关闭/快速重开
+        // 让旧代次失效，不会留下主窗口被禁用的孤立状态。
+        if main_presented {
+            if let Some(main) = crate::main_window(dispatch) {
+                let _ = main.set_enabled(false);
+                dispatch.state::<AppState>().set_main_disabled(true);
+            }
+        }
+    } else {
+        // show 失败（窗口异常销毁等）：不留下"主窗口被禁用且无弹窗
+        // 可关"的孤立态，直接恢复主窗口
+        restore_main_after_dialog(dispatch);
+    }
 }
 
 /// 隐藏弹窗（关闭按钮/动作完成后）：恢复主窗口可用状态。
@@ -1107,17 +1128,17 @@ mod tests {
 
     #[test]
     fn dialog_center_aligns_card_visual_center_with_content_area() {
-        // 主窗口内容区逻辑矩形 (100,200 1200x900)，状态栏可见（26px）
+        // 主窗口内容区逻辑矩形 (100,200 1200x900)
         let dialog_w = 800.0 + SHADOW_SIDES * 2.0;
         let dialog_h = 640.0 + SHADOW_TOP + SHADOW_BOTTOM;
-        let (dx, dy) = centered_dialog_pos((100.0, 200.0, 1200.0, 900.0), 26.0, dialog_w, dialog_h);
-        // 卡片视觉中心必须落在内容区（去标题栏/状态栏）中心
+        let (dx, dy) = centered_dialog_pos((100.0, 200.0, 1200.0, 900.0), dialog_w, dialog_h);
+        // 卡片视觉中心必须落在内容区（去标题栏）中心
         let card_cx = dx + SHADOW_SIDES + 800.0 / 2.0;
         let card_cy = dy + SHADOW_TOP + 640.0 / 2.0;
         let content_cx = 100.0 + 1200.0 / 2.0;
         let content_cy = 200.0
             + crate::titlebar::TITLEBAR_HEIGHT
-            + (900.0 - crate::titlebar::TITLEBAR_HEIGHT - 26.0) / 2.0;
+            + (900.0 - crate::titlebar::TITLEBAR_HEIGHT) / 2.0;
         assert!(
             (card_cx - content_cx).abs() < 1e-9,
             "水平未对齐：{card_cx} vs {content_cx}"
