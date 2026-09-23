@@ -86,13 +86,17 @@ const EDIT_CONTEXT_INJECT: &str = include_str!("../../../ui/edit-context.js");
 const MENU_INJECT: &str = include_str!("../../resources/injections/context-menu.js");
 /// 引导期续接遮罩（见文件头注释）：图标占位在编译期替换为与启动页同源的
 /// ui/assets/app-icon.svg 内联内容——注入目标是 dsh 远程文档，取不到本地资源。
+/// SVG 的换行必须剥掉：占位符落在 JS 单引号字符串里，多行 SVG 会让字符串
+/// 跨行、整段注入脚本语法解析失败（菜单/心跳/标题修正等一并全灭——
+/// 2026-09-19 引入后静默回归至 2026-09-23 才定位）。
 fn boot_continue_inject() -> &'static str {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        include_str!("../../resources/injections/boot-continue.js").replace(
-            "__DSHD_ICON__",
-            include_str!("../../../ui/assets/app-icon.svg"),
-        )
+        let icon: String = include_str!("../../../ui/assets/app-icon.svg")
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+        include_str!("../../resources/injections/boot-continue.js").replace("__DSHD_ICON__", &icon)
     })
 }
 
@@ -406,7 +410,67 @@ pub fn navigate_to_splash(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{injected_language, is_local_app_url, local_app_entry_url};
+    use super::{
+        boot_continue_inject, hide_stats_apply, hide_stats_early, injected_language,
+        is_local_app_url, local_app_entry_url, EDIT_CONTEXT_INJECT, MENU_INJECT,
+    };
+
+    /// 注入脚本的语法防御：任一段落语法坏会让整段 eval 解析失败——
+    /// 右键菜单、心跳、标题修正、统计隐藏全部静默丢失（2026-09-19 内联
+    /// 多行 SVG 进单引号字符串即此类回归，静默存活四天才定位）。有 node
+    /// 可用时对每段生成物与注入资源做 --check；无 node 的环境跳过（CI
+    /// 与开发机都有 node）。
+    #[test]
+    fn injection_scripts_pass_node_syntax_check() {
+        let Some(node) = find_node() else {
+            eprintln!("node 不可用，跳过注入脚本语法校验");
+            return;
+        };
+        let segments: [(&str, String); 5] = [
+            ("boot-continue", boot_continue_inject().to_string()),
+            ("hide-stats-apply", hide_stats_apply()),
+            ("hide-stats-early", hide_stats_early()),
+            ("menu", MENU_INJECT.to_string()),
+            ("edit-context", EDIT_CONTEXT_INJECT.to_string()),
+        ];
+        for (name, script) in segments {
+            let file = std::env::temp_dir().join(format!("dshbox-inject-check-{name}.js"));
+            std::fs::write(&file, &script).unwrap();
+            let status = std::process::Command::new(&node)
+                .arg("--check")
+                .arg(&file)
+                .status()
+                .unwrap();
+            let _ = std::fs::remove_file(&file);
+            assert!(
+                status.success(),
+                "注入段 {name} 语法错误：整段 eval 会静默失效"
+            );
+        }
+    }
+
+    fn find_node() -> Option<std::path::PathBuf> {
+        // PATH 探测：spawn 失败（找不到可执行）即视为无 node。
+        std::process::Command::new("node")
+            .arg("--version")
+            .status()
+            .ok()
+            .filter(|status| status.success())
+            .map(|_| std::path::PathBuf::from("node"))
+    }
+
+    /// 内联 SVG 必须是单行：占位符落在 JS 单引号字符串里，跨行即语法
+    /// 错误（node --check 防御的第一道快断言，无 node 也生效）。
+    #[test]
+    fn inlined_svg_stays_single_line() {
+        let script = boot_continue_inject();
+        let start = script.find("<svg").expect("svg inlined");
+        let end = start + script[start..].find("</svg>").expect("svg closed");
+        assert!(
+            !script[start..end].contains('\n'),
+            "内联 SVG 跨行会破坏承载它的单引号字符串"
+        );
+    }
 
     #[test]
     fn local_app_entry_uses_dev_origin_when_configured() {
