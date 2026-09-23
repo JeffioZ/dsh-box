@@ -1,11 +1,12 @@
 // 控制中心：用户设置。
 
-// —— 设置（按桌面行为 / 界面 / 服务能力分组） ——
+// —— 设置（按桌面行为 / 界面 / 服务与运行时三组渲染，见 renderSettings）——
 let settingsBusy = false;
 // 最近一次 applySettingState 的状态快照：radio 在忙碌期的同步弹回用它取
 // "已应用值"（否则只能等在途 invoke 的状态回填，期间显示错误选择）
 let settingsStateCache = null;
-const SETTING_KEYS = ['autostart', 'hide_tool_calls', 'hide_stats_line', 'hide_statusbar', 'hide_balance', 'task_notifications', 'auto_update_plugins'];
+// 开关项状态键（渲染顺序见 renderSettings；此数组只用于状态绑定遍历）
+const SETTING_KEYS = ['autostart', 'task_notifications', 'hide_tool_calls', 'hide_balance', 'auto_update_plugins'];
 // radio 组名 → 状态键（dsh-channel 特例，其余同名）
 function revertRadiosToApplied(name) {
   const state = settingsStateCache;
@@ -96,9 +97,8 @@ async function renderSettings() {
   const interfaceSec =
     '<section class="psection settings-section" aria-labelledby="settings-interface-heading">' +
     '<h3 id="settings-interface-heading">' + dshdT('settingsInterfaceTitle') + '</h3>' +
+    '<p class="settings-follow-note">' + dshdT('settingsFollowDshNote') + '</p>' +
     settingsRow('hide_tool_calls', 'settingsHideTools', 'settingsHideToolsDesc') +
-    settingsRow('hide_stats_line', 'settingsHideStats', 'settingsHideStatsDesc') +
-    settingsRow('hide_statusbar', 'settingsHideStatusbar', 'settingsHideStatusbarDesc') +
     settingsRow('hide_balance', 'settingsHideBalance', 'settingsHideBalanceDesc') +
     '</section>';
   const runtimeSec =
@@ -252,7 +252,6 @@ function applySettingState(state) {
       el.checked = Boolean(state[key]);
       if (key === 'auto_update_plugins') el.disabled = external;
       if (key === 'task_notifications') el.disabled = external;
-      if (key === 'hide_balance') el.disabled = Boolean(state.hide_statusbar);
     }
   });
   body.querySelectorAll('input[name="dsh-channel"]').forEach((el) => {
@@ -292,7 +291,6 @@ async function onSettingToggle(ev) {
   } finally {
     settingsBusy = false;
     if (input.dataset.key === 'auto_update_plugins' || input.dataset.key === 'task_notifications') input.disabled = Boolean(document.querySelector('#settings-external-note:not([hidden])'));
-    else if (input.dataset.key === 'hide_balance') input.disabled = Boolean($('body').querySelector('.sswitch[data-key="hide_statusbar"]')?.checked);
     else input.disabled = false;
   }
 }

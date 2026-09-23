@@ -32,11 +32,8 @@ pub struct Config {
     pub ui_language: Option<String>,
     /// 隐藏 dsh 对话中的工具调用卡片（仅保留文本消息与最终输出）。
     pub hide_tool_calls: bool,
-    /// 隐藏 dsh 输入区上方的会话统计行（统计迁移到自绘状态栏，默认隐藏）。
-    pub hide_stats_line: bool,
-    /// 隐藏窗口底部自绘状态栏（会话统计与余额一并隐藏，默认显示）。
-    pub hide_statusbar: bool,
-    /// 隐藏状态栏右侧的余额 chip（统计保留，默认显示余额）。
+    /// 隐藏标题栏右侧的余额 chip（会话统计已随状态栏移除，改由 dsh
+    /// 原生输入框下方的统计行承担；默认显示余额）。
     pub hide_balance: bool,
     /// 是否自动升级内置插件清单中的包（默认开启；
     /// 首次预装引导不受此开关影响）。
@@ -84,8 +81,6 @@ impl Config {
             api_base,
             ui_language: None,
             hide_tool_calls: false,
-            hide_stats_line: true,
-            hide_statusbar: false,
             hide_balance: false,
             auto_update_plugins: true,
             task_notifications: true,
@@ -118,12 +113,6 @@ impl Config {
                 }
                 if let Some(hide) = json.get("hide_tool_calls").and_then(|v| v.as_bool()) {
                     cfg.hide_tool_calls = hide;
-                }
-                if let Some(hide) = json.get("hide_stats_line").and_then(|v| v.as_bool()) {
-                    cfg.hide_stats_line = hide;
-                }
-                if let Some(hide) = json.get("hide_statusbar").and_then(|v| v.as_bool()) {
-                    cfg.hide_statusbar = hide;
                 }
                 if let Some(hide) = json.get("hide_balance").and_then(|v| v.as_bool()) {
                     cfg.hide_balance = hide;

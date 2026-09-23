@@ -44,13 +44,11 @@ mod window;
 mod yaml_fields;
 
 use dev_ui::ensure_dev_ui_server;
-#[cfg(test)]
-use webview::hide_stats_apply;
 use webview::{
-    app_dev_origin, handle_dshd_scheme, hide_stats_early, inject_dsh_page, is_allowed_navigation,
-    is_dsh_url, is_local_app_url, PAGE_INIT_SCRIPT,
+    app_dev_origin, handle_dshd_scheme, inject_dsh_page, is_allowed_navigation, is_dsh_url,
+    is_local_app_url, PAGE_INIT_SCRIPT,
 };
-pub use webview::{apply_hide_stats, apply_hide_tools, navigate, navigate_to_splash};
+pub use webview::{apply_hide_tools, navigate, navigate_to_splash};
 
 use app_state::{AppState, BootPhase};
 use tauri::{AppHandle, Emitter, Manager};
@@ -262,7 +260,6 @@ pub fn show_main(app: &AppHandle) {
             let _ = w.set_focus();
         }
     }
-    crate::usage::refresh_once(app.clone());
     crate::balance::refresh_once(app.clone());
 }
 
@@ -288,23 +285,7 @@ mod event_sign_tests {
 
 #[cfg(test)]
 mod url_tests {
-    use super::{hide_stats_apply, hide_stats_early, is_local_app_url};
-
-    /// 注入脚本以 JS 单引号字符串承载 CSS：CSS 内再出现单引号会破坏整段
-    /// 注入脚本语法（曾致 hide-stats/右键菜单/心跳一并失效的回归）。
-    #[test]
-    fn hide_stats_scripts_keep_js_quoting_valid() {
-        for script in [hide_stats_early(), hide_stats_apply()] {
-            assert!(!script.contains("[data-slot='"), "CSS 不得使用单引号");
-            assert!(script.contains("__dshd_hide_stats"));
-        }
-        assert!(hide_stats_apply().contains("sweepStats"));
-        // 0.1.7 类名是后缀哈希模式（_root_/_anchor_），CSS 不得引用具体
-        // 哈希值（逐版跟哈希必然漏拍，0.1.6→0.1.7 即因此失效）。
-        assert!(hide_stats_early().contains("[class*=\"_root_\"]"));
-        assert!(hide_stats_early().contains("[class*=\"_anchor_\"]"));
-        assert!(!hide_stats_early().contains("FJxK0a"));
-    }
+    use super::is_local_app_url;
 
     #[test]
     fn local_app_origin_is_an_exact_pair() {

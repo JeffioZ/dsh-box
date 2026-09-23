@@ -43,7 +43,7 @@ Windows 产物位于 `dist\DSHBox.exe`。macOS/Linux 的构建命令和依赖说
 |---|---|
 | 开箱即用 | 自动检测 Node.js、安装 dsh，并在 Windows 缺少 WebView2 时引导安装 |
 | 服务生命周期 | 系统分配端口回退、外部 dsh 安全接入、进程树清理、服务看门狗和页面心跳恢复 |
-| 桌面体验 | 自绘标题栏与状态栏、系统托盘、通知、窗口位置记忆、Windows 11 贴边布局浮层（Win10 自动回退）、深浅色和中英双语 |
+| 桌面体验 | 自绘标题栏（含余额 chip）、系统托盘、通知、窗口位置记忆、Windows 11 贴边布局浮层（Win10 自动回退）、深浅色和中英双语 |
 | 安全更新 | dsh/Node 事务化更新和中断恢复；Windows 应用附件按精确 tag 与 SHA-256 校验 |
 | 本地文件菜单 | 默认打开、VS Code/记事本打开、文件管理器定位、复制路径与 UTF-8 文本 |
 | 插件管理 | 通过官方 `dsh plugin` 搜索、安装、卸载与更新；首次内置插件可明确取消 |
@@ -108,8 +108,6 @@ Windows 是主要本地测试平台；五个目标由 GitHub Actions 构建。Li
   "api_base": "https://api.deepseek.com",
   "language": "zh-CN",
   "hide_tool_calls": false,
-  "hide_stats_line": true,
-  "hide_statusbar": false,
   "hide_balance": false,
   "auto_update_plugins": true,
   "task_notifications": true,
@@ -189,7 +187,7 @@ desktop/
 ├─ ui/                             # 无打包器的内置页面、共享样式与双语文案
 │  ├─ index.html + startup.*       # 启动页与首次配置
 │  ├─ control-center.*             # 余额/更新/插件/设置/关于
-│  ├─ titlebar.* / statusbar.*     # 主窗口子 WebView
+│  ├─ titlebar.*                    # 主窗口子 WebView（含余额 chip）
 │  ├─ tray-menu.html + menu.js     # 托盘与菜单交互
 │  └─ common.* + i18n.js           # 共享工具、设计 token、文案
 ├─ src-tauri/
@@ -202,7 +200,7 @@ desktop/
 │     ├─ dsh.rs                    # dsh 服务启动、外部接入与看门狗
 │     ├─ updater/                  # 检查、平台更新与事务恢复
 │     ├─ plugins/                  # CLI 执行、维护策略与手动操作
-│     ├─ usage/                    # 用量与余额聚合、缓存与状态栏统计
+│     ├─ usage/                    # 用量与余额聚合、缓存与账户监测
 │     ├─ tray.rs / tray_menu.rs    # 系统托盘与托盘菜单窗口
 │     ├─ webview/                  # 导航边界、自定义协议与注入
 │     └─ platform/windows/         # Windows 专属 WebView2 预检与贴边布局浮层

@@ -88,7 +88,7 @@ pub(crate) fn handle_dshd_scheme(
         // 页面心跳：会话选中上报 + 页面存活标记（看门狗判死依据）。dsh 页
         // 是远程来源，Tauri IPC 对其一律拒绝——此前心跳经
         // window.__TAURI__.core.invoke 上报从未送达（前端 catch 静默吞掉），
-        // 状态栏会话选择长期依赖 updatedAt 兜底。来源与令牌已在上方校验。
+        // 会话选择长期依赖 updatedAt 兜底。来源与令牌已在上方校验。
         ("heartbeat", _) => {
             let known = query("known").as_deref() == Some("1");
             let sid = query("sid")

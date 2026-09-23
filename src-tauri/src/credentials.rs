@@ -33,7 +33,7 @@ pub(crate) fn has(config: &Config, name: &str) -> bool {
 /// 统一 API Key 解析链：DSH_BOX_API_KEY → DEEPSEEK_API_KEY → 路由声明的
 /// apiKeyEnv → `$DSH_HOME/.credentials.yaml`（查路由声明键，缺省查
 /// DEEPSEEK_API_KEY）。环境变量值全部 trim 后判空；壳级覆盖优先于路由
-/// 声明，状态栏余额与用量页账户监测共用同一口径。
+/// 声明，标题栏余额与用量页账户监测共用同一口径。
 pub(crate) fn resolve_api_key(config: &Config, route_env: Option<&str>) -> Option<String> {
     let route_env = route_env.map(str::trim).filter(|name| !name.is_empty());
     for name in ["DSH_BOX_API_KEY", "DEEPSEEK_API_KEY"]
@@ -143,7 +143,7 @@ mod tests {
             super::resolve_api_key(&config, Some(ROUTE)).as_deref(),
             Some("file-route")
         );
-        // 无路由声明时凭据文件查 DEEPSEEK_API_KEY（与状态栏余额口径一致）。
+        // 无路由声明时凭据文件查 DEEPSEEK_API_KEY（与标题栏余额口径一致）。
         assert_eq!(
             super::resolve_api_key(&config, None).as_deref(),
             Some("file-deep")

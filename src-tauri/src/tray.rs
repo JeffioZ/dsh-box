@@ -226,9 +226,6 @@ pub(crate) fn apply_language(app: &AppHandle, language: &str) {
     if let (Some(tray), Ok(menu)) = (app.tray_by_id("main-tray"), native_menu(app)) {
         let _ = tray.set_menu(Some(menu));
     }
-    // 状态栏统计文本由 Rust 按当前语言生成（含量词/单位），语言切换后立即
-    // 重推一次，不等下一个 5s 轮询周期（statusbar 前端无法重译 Rust 快照）
-    crate::usage::refresh_once(app.clone());
 }
 
 /// 把 dsh 的主题偏好（light|dark|system）应用到外壳各窗口：
@@ -252,7 +249,6 @@ pub(crate) fn apply_theme(app: &AppHandle, theme: &str) {
             crate::DARK_BG
         };
         let _ = main.set_background_color(Some(color));
-        crate::titlebar::set_statusbar_theme_background(app, light);
     }
     // 弹窗与托盘菜单：透明宿主只更新 prefers-color-scheme。
     for label in [

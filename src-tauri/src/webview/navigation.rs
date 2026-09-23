@@ -89,7 +89,7 @@ const MENU_INJECT: &str = include_str!("../../resources/injections/context-menu.
 /// SVG 的换行必须剥掉：占位符落在 JS 单引号字符串里，多行 SVG 会让字符串
 /// 跨行、整段注入脚本语法解析失败（菜单/心跳/标题修正等一并全灭——
 /// 2026-09-19 引入后静默回归至 2026-09-23 才定位）。
-fn boot_continue_inject() -> &'static str {
+pub(crate) fn boot_continue_inject() -> &'static str {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         let icon: String = include_str!("../../../ui/assets/app-icon.svg")
@@ -107,117 +107,6 @@ document.documentElement.appendChild(s);}";
 /// 开关关闭时移除该样式。
 const HIDE_TOOLS_CLEAR: &str =
     "var __h=document.getElementById('__dshd_hide_tools');if(__h)__h.remove();";
-
-/// 隐藏会话统计 pills 的 CSS（initialization_script 首帧注入与 navigate 注入
-/// 共用，同一份定义避免双份拷贝；style id 与 fallback 脚本共用 guard）。
-/// 注意：属性选择器必须用双引号——注入脚本以 JS 单引号字符串承载本 CSS，
-/// 内含单引号会破坏脚本语法（曾因此使整段注入失效）。
-///
-/// 选择器不引用具体哈希类名：0.1.6 的 `.FJxK0a_root`（前缀哈希）在 0.1.7
-/// 变为后缀哈希（`_root_<n>`、`_anchor_<n>`，StatsPills 顶层是 anchor span），
-/// 逐版跟哈希必然漏拍；改为 dock 稳定锚点（scoped-slots 渲染的 data-slot
-/// 包装）匹配 module 类后缀模式。dock 是 list 槽，当前唯一注入者是统计
-/// pills（ui-chat apply.ts），上游若注入其他内容会被一并隐藏——静默降级。
-/// 模式再变时由 sweepStats 文本特征 fallback 兜底。
-const HIDE_STATS_CSS: &str = "[data-slot=\"conversation.composer.dock\"] [class*=\"_root_\"],\
-     [data-slot=\"conversation.composer.dock\"] [class*=\"_anchor_\"]{display:none!important}";
-
-/// 隐藏会话统计 pills（开关开启时注入）：CSS 按 module 类后缀模式隐藏，
-/// 另挂文本特征 fallback + MutationObserver 补位——dsh 更新后类模式变化时
-/// fallback 仍能隐藏；两路都失效则统计行重新出现（静默降级，不影响任何
-/// 功能）。pills 是 span/button 结构（0.1.7 StatsPills），Compact 档只含
-/// 速度/命中率读数，特征须覆盖 tok/s 与 % 而不仅是「轮/步」。
-pub(crate) fn hide_stats_apply() -> String {
-    format!(
-        "{head}{css}{tail}",
-        head = r#"window.__dshdHideStats = true;
-if (!document.getElementById('__dshd_hide_stats')) {
-  var s = document.createElement('style');
-  s.id = '__dshd_hide_stats';
-  s.textContent = '"#,
-        css = HIDE_STATS_CSS,
-        tail = r#"';
-  document.documentElement.appendChild(s);
-}
-if (!window.__dshdHideStatsObs) {
-  window.__dshdHideStatsObs = true;
-  var dockSel = '[data-slot="conversation.composer.dock"]';
-  // 0.1.7 StatsPills 为 span/button 结构（0.1.6 StatsLine 是 div），
-  // 三种标签都扫；Compact 档只有速度/命中率读数，特征除「轮/步」外
-  // 须认 tok/s 与 %。文本由「·」分隔（本壳状态栏同款文案），「|」兼容旧版。
-  var statsRe = /(轮|步|turns|steps|tok\/s|tokens|%)/i;
-  function sweepStats() {
-    var dock = document.querySelector(dockSel);
-    if (!dock) return;
-    var matches = [];
-    dock.querySelectorAll('div,span,button').forEach(function (el) {
-      var t = el.textContent || '';
-      if (t.length < 4 || t.length > 48 || (t.indexOf('|') < 0 && t.indexOf('·') < 0) || !statsRe.test(t)) return;
-      matches.push(el);
-    });
-    matches.forEach(function (el) {
-      // textContent 会让祖先也命中；只处理没有更小匹配后代的叶端候选，
-      // 避免误隐藏整个 composer/input 容器。
-      if (matches.some(function (other) { return other !== el && el.contains(other); })) return;
-      if (window.__dshdHideStats) {
-        if (!el.__dshdHiddenStats) { el.__dshdHiddenStats = true; el.style.display = 'none'; }
-      } else if (el.__dshdHiddenStats) {
-        el.__dshdHiddenStats = false; el.style.display = '';
-      }
-    });
-  }
-  var timer = null;
-  var obs = new MutationObserver(function () {
-    if (timer) return;
-    timer = setTimeout(function () { timer = null; sweepStats(); }, 200);
-  });
-  obs.observe(document.documentElement, { childList: true, subtree: true });
-  sweepStats();
-}
-"#,
-    )
-}
-
-/// initialization_script 首帧注入：dsh 页面挂载前即隐藏 StatsLine，消除
-/// “统计行先出现在输入框下方、注入后跳走”的闪动。与 navigate 后注入的
-/// 完整脚本共用同一 style id——后者 guard 命中即跳过，开关关闭一并移除。
-/// 外部 URL 导航的 initialization_script 可靠性不足，navigate 注入仍是兜底。
-pub(crate) fn hide_stats_early() -> String {
-    format!(
-        "try{{var __hs=document.getElementById('__dshd_hide_stats');\
-         if(!__hs){{var __hst=document.createElement('style');\
-         __hst.id='__dshd_hide_stats';__hst.textContent='{css}';\
-         document.documentElement.appendChild(__hst);}}}}catch(e){{}}",
-        css = HIDE_STATS_CSS
-    )
-}
-
-/// 关闭隐藏：移除样式并恢复 fallback 隐藏的元素（span/button 为 0.1.7
-/// StatsPills 结构，与 sweepStats 的扫描范围一致）。
-const HIDE_STATS_CLEAR: &str = r#"
-window.__dshdHideStats = false;
-var s = document.getElementById('__dshd_hide_stats');
-if (s) s.remove();
-var dock = document.querySelector('[data-slot="conversation.composer.dock"]');
-if (dock) {
-  dock.querySelectorAll('div,span,button').forEach(function (el) {
-    if (el.__dshdHiddenStats) { el.__dshdHiddenStats = false; el.style.display = ''; }
-  });
-}
-"#;
-
-/// 应用“隐藏会话统计行”开关到 dsh 页面（设置页切换与导航注入共用）。
-pub fn apply_hide_stats(app: &AppHandle) {
-    let hide = app.state::<AppState>().config().hide_stats_line;
-    let script = if hide {
-        hide_stats_apply()
-    } else {
-        HIDE_STATS_CLEAR.to_string()
-    };
-    if let Some(wv) = main_webview(app) {
-        let _ = wv.eval(script);
-    }
-}
 
 /// 应用“隐藏工具调用”开关到 dsh 页面：开启注入隐藏样式，关闭移除。
 /// 导航注入与菜单切换共用同一逻辑。
@@ -285,11 +174,6 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
     } else {
         ""
     };
-    let hide_stats = if config.hide_stats_line {
-        hide_stats_apply()
-    } else {
-        String::new()
-    };
     let script = format!(
         "(() => {{ \
          if (window.__dshdInit === 'loading' || window.__dshdInit === 'ready') return; \
@@ -308,7 +192,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
            fix(); \
            const el = document.querySelector('head > title'); \
            if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-           {boot_continue} {edit_context} {menu} {heartbeat} {hide_tools} {hide_stats} \
+           {boot_continue} {edit_context} {menu} {heartbeat} {hide_tools} \
            window.__dshdInit = 'ready'; \
          }} catch (error) {{ \
            delete window.__dshdInit; \
@@ -367,8 +251,6 @@ pub fn navigate(app: &AppHandle, url: &str) {
         if let Err(error) = wv.navigate(u) {
             logging::log(&format!("navigate: 导航 {url} 失败：{error}"));
         }
-        // 状态栏统计立即刷新：dsh 就绪后不必等下一个 5s 轮询周期
-        crate::usage::refresh_once(app.clone());
         // dsh 页面挂载时会用自带 document.title 覆盖窗口标题。
         // 两层保障：立即 set_title（窗口级，立刻生效）；
         // 页面加载完成后注入常驻脚本，任意时刻的 title 变化都会被拉回产品名。
@@ -411,8 +293,8 @@ pub fn navigate_to_splash(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        boot_continue_inject, hide_stats_apply, hide_stats_early, injected_language,
-        is_local_app_url, local_app_entry_url, EDIT_CONTEXT_INJECT, MENU_INJECT,
+        boot_continue_inject, injected_language, is_local_app_url, local_app_entry_url,
+        EDIT_CONTEXT_INJECT, MENU_INJECT,
     };
 
     /// 注入脚本的语法防御：任一段落语法坏会让整段 eval 解析失败——
@@ -426,10 +308,8 @@ mod tests {
             eprintln!("node 不可用，跳过注入脚本语法校验");
             return;
         };
-        let segments: [(&str, String); 5] = [
+        let segments: [(&str, String); 3] = [
             ("boot-continue", boot_continue_inject().to_string()),
-            ("hide-stats-apply", hide_stats_apply()),
-            ("hide-stats-early", hide_stats_early()),
             ("menu", MENU_INJECT.to_string()),
             ("edit-context", EDIT_CONTEXT_INJECT.to_string()),
         ];

@@ -3,7 +3,7 @@
 //! 目的：不配任何真实凭据/订阅也能把「用量与余额」的每个显示分支看全
 //! ——余额卡（含预警色/未配置/未授权/不支持/stale）、订阅窗口（含重置
 //! 时间）、用量报告（今日/本月/热力图/按模型/成本列，含未定价「—」）、
-//! 状态栏统计与实时速率、当前会话上下文。
+//! 当前会话上下文（历史统计状态栏移除后仅剩此项与用量页假数据）。
 //!
 //! 边界（不得破坏）：
 //! - 只在环境变量显式开启时生效，生产环境不设置即完全休眠；
@@ -435,13 +435,6 @@ pub(crate) fn session_context() -> SessionContext {
     }
 }
 
-/// 实时速率假值：18–52 tok/s 三角波（12s 周期），状态栏可见动态变化。
-pub(crate) fn live_tps() -> f64 {
-    let phase = (now_ms() % 12_000) as f64 / 12_000.0;
-    let tri = 1.0 - (2.0 * phase - 1.0).abs();
-    ((18.0 + 34.0 * tri) * 10.0).round() / 10.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,13 +511,5 @@ mod tests {
         let mut sorted = dates.clone();
         sorted.sort();
         assert_eq!(dates, sorted);
-    }
-
-    #[test]
-    fn live_tps_stays_in_wave_band() {
-        for _ in 0..50 {
-            let tps = live_tps();
-            assert!((18.0..=52.0).contains(&tps), "tps={tps}");
-        }
     }
 }

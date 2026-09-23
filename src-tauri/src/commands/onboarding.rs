@@ -69,7 +69,7 @@ pub fn preview_theme(app: AppHandle, webview: tauri::Webview, theme: String) -> 
     Ok(())
 }
 
-/// 首次配置界面的语言实时预览：切换内存语言并立即重推状态栏统计
+/// 首次配置界面的语言实时预览：切换内存语言并立即广播语言变更
 /// （不写 config、不持久化）——保存时由 onboarding::save 正式应用。
 #[tauri::command]
 pub fn preview_language(
@@ -81,7 +81,7 @@ pub fn preview_language(
     if !matches!(language.as_str(), "zh-CN" | "en") {
         return Err(crate::locale::text("未知语言。", "Unknown language.").into());
     }
-    // apply_language 内部：set_preference + 全窗口重译 + 状态栏统计重推
+    // apply_language 内部：set_preference + 全窗口重译 + 语言事件广播
     crate::tray::apply_language(&app, &language);
     Ok(())
 }

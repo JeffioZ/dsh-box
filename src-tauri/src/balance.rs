@@ -57,7 +57,7 @@ pub struct BalanceEntry {
     pub total_balance: String,
     pub granted_balance: String,
     pub topped_up_balance: String,
-    /// 机器可读剩余额度（total_balance 的数值解析，供状态栏 chip 预警色
+    /// 机器可读剩余额度（total_balance 的数值解析，供余额 chip 预警色
     /// 计算 ratio；字符串字段保持原样，解析失败为 None）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining: Option<f64>,
@@ -100,7 +100,7 @@ fn resolve_api_key(config: &Config) -> Result<String, String> {
 /// 同步查询并记录日志（托盘线程直接调用）。
 ///
 /// 查询路径：账户后台监测缓存中有新鲜（< ACCOUNT_REFRESH_MS）的 DeepSeek
-/// 官方路由快照时直接转换复用（状态栏与监测同查一个接口，避免双通道重复
+/// 官方路由快照时直接转换复用（标题栏与监测同查一个接口，避免双通道重复
 /// 请求）；缓存空/过期才回退直连查询。
 pub(crate) fn query_balance(config: &Config) -> BalancePayload {
     if let Some(snapshot) = crate::usage::cached_deepseek() {
@@ -156,7 +156,7 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// 监测快照 → 状态栏余额载荷（字段映射对齐现有契约：remaining/total 为
+/// 监测快照 → 余额载荷（字段映射对齐现有契约：remaining/total 为
 /// 机器可读值，字符串金额保留两位小数；updated_at 沿用快照的查询完成时刻）。
 fn payload_from_snapshot(snapshot: &crate::usage::AccountSnapshot) -> BalancePayload {
     if snapshot.status == "ok" {
@@ -223,7 +223,7 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
         std::time::Duration::from_secs(5),
         |app| {
             let config = app.state::<AppState>().config();
-            if config.hide_statusbar || config.hide_balance || !crate::main_is_visible(app) {
+            if config.hide_balance || !crate::main_is_visible(app) {
                 return;
             }
             let payload = query_balance(&config);
@@ -232,7 +232,7 @@ pub(crate) fn start_periodic_refresh(app: AppHandle) {
     );
 }
 
-/// 立即查询并广播一次余额（状态栏首帧数据，不等 5 分钟轮询周期）。
+/// 立即查询并广播一次余额（标题栏首帧数据，不等 5 分钟轮询周期）。
 pub(crate) fn refresh_once(app: AppHandle) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
@@ -245,7 +245,7 @@ pub(crate) fn refresh_once(app: AppHandle) {
             return;
         }
         let config = state.config();
-        if !config.hide_statusbar && !config.hide_balance && crate::main_is_visible(&app) {
+        if !config.hide_balance && crate::main_is_visible(&app) {
             let payload = query_balance(&config);
             crate::emit_signed(&app, "balance-updated", &payload);
         }

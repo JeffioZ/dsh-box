@@ -1,6 +1,6 @@
 //! 出站请求的 SSRF 防护判定：私有/回环/保留网段与本地主机名。
 //!
-//! 唯一定义点——状态栏余额（`balance.rs`）、多供应商账户查询
+//! 唯一定义点——标题栏余额（`balance.rs`）、多供应商账户查询
 //! （`usage/balance.rs`）与订阅适配器（`usage/subscriptions.rs`）共用
 //! 同一口径，改判定规则只改这里。注意：只校验主机名字符串，不解析
 //! DNS——公网域名解析到内网 IP 的 rebinding 不在此防（自配 baseURL
@@ -81,7 +81,7 @@ pub(crate) fn read_json_capped(body: ureq::Body) -> Result<serde_json::Value, St
 
 /// 账户/余额查询 URL 的统一校验：仅 http/https、拒绝 userinfo；https 放行
 /// 任意主机，http 仅放行回环/私有地址（自托管局域网网关场景，防止误配
-/// http 公网地址导致 API Key 明文外泄）。状态栏余额与多供应商账户查询
+/// http 公网地址导致 API Key 明文外泄）。标题栏余额与多供应商账户查询
 /// 共用本判定——历史上两处各写一份且口径漂移过，收敛于此。
 ///
 /// 两个入口：`guard_https_or_lan_http(base, path)` 负责「base + 相对路径」

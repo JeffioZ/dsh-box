@@ -8,17 +8,6 @@ const TAIL_WINDOW: u64 = 256 * 1024;
 const MAX_FRAME_DECOMPRESSED: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_DECOMPRESSED: usize = 32 * 1024 * 1024;
 
-/// dsh 以多个独立 zstd 帧追加会话日志。只回读文件尾部并从后向前尝试帧
-/// magic；压缩数据内的伪 magic 或正在写入的半帧会失败并继续尝试更早候选。
-///
-/// 语义契约：
-/// - `Ok(Some(text))`：最近一个完整帧解码成功；
-/// - `Ok(None)`：文件为空（尚无帧）；
-/// - `Err(_)`：文件打开/读取失败，或尾部窗口内没有任何可解码的完整帧。
-pub(crate) fn read_tail_frame(path: &Path) -> Result<Option<String>, String> {
-    Ok(read_tail_frames(path, 1)?.into_iter().next())
-}
-
 /// 返回最近若干个可解码帧（从新到旧）。通知扫描多帧，避免 turn/end 后又
 /// 追加一个很小的状态帧时漏报；实时速率只取第一个即可。
 pub(crate) fn read_tail_frames(path: &Path, limit: usize) -> Result<Vec<String>, String> {
@@ -86,7 +75,7 @@ pub(crate) fn read_tail_frames(path: &Path, limit: usize) -> Result<Vec<String>,
 
 #[cfg(test)]
 mod tests {
-    use super::read_tail_frame;
+    use super::read_tail_frames;
 
     #[test]
     fn extracts_the_last_appended_zstd_frame() {
@@ -103,7 +92,14 @@ mod tests {
         let mut stream = zstd::encode_all("first\n".as_bytes(), 3).unwrap();
         stream.extend_from_slice(&zstd::encode_all("second\n".as_bytes(), 3).unwrap());
         std::fs::write(&path, stream).unwrap();
-        assert_eq!(read_tail_frame(&path).unwrap().as_deref(), Some("second\n"));
+        assert_eq!(
+            read_tail_frames(&path, 1)
+                .unwrap()
+                .into_iter()
+                .next()
+                .as_deref(),
+            Some("second\n")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -126,7 +122,14 @@ mod tests {
         stream.extend_from_slice(&partial[..partial.len() / 2]);
         std::fs::write(&path, stream).unwrap();
         // 半帧只影响自身，更早的完整帧仍可解码
-        assert_eq!(read_tail_frame(&path).unwrap().as_deref(), Some("second\n"));
+        assert_eq!(
+            read_tail_frames(&path, 1)
+                .unwrap()
+                .into_iter()
+                .next()
+                .as_deref(),
+            Some("second\n")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

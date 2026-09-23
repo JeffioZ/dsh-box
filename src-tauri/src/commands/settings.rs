@@ -9,8 +9,6 @@ use super::*;
 pub struct SettingsState {
     pub autostart: bool,
     pub hide_tool_calls: bool,
-    pub hide_stats_line: bool,
-    pub hide_statusbar: bool,
     pub hide_balance: bool,
     pub auto_update_plugins: bool,
     /// 主窗口不可见时，任务完成后是否发系统通知。
@@ -30,8 +28,6 @@ fn settings_state(app: &AppHandle) -> SettingsState {
     SettingsState {
         autostart: crate::autostart::is_enabled(),
         hide_tool_calls: config.hide_tool_calls,
-        hide_stats_line: config.hide_stats_line,
-        hide_statusbar: config.hide_statusbar,
         hide_balance: config.hide_balance,
         auto_update_plugins: config.auto_update_plugins,
         task_notifications: config.task_notifications,
@@ -92,20 +88,9 @@ pub fn settings_set(
             state.set_hide_tool_calls(value)?;
             crate::apply_hide_tools(&app);
         }
-        "hide_stats_line" => {
-            state.set_hide_stats_line(value)?;
-            crate::apply_hide_stats(&app);
-            // 互斥：状态栏统计区随开关即时显示/隐藏（不等下一个轮询周期）
-            crate::usage::refresh_once(app.clone());
-        }
-        "hide_statusbar" => {
-            state.set_hide_statusbar(value)?;
-            // 即时生效：重新同步三区块边界（隐藏时状态区 0 高、主区到底）。
-            crate::titlebar::sync_bounds(&app);
-        }
         "hide_balance" => {
             state.set_hide_balance(value)?;
-            // 即时生效：余额 chip 显示/隐藏由状态栏前端据此渲染
+            // 即时生效：余额 chip 显示/隐藏由标题栏前端据此渲染
         }
         "auto_update_plugins" => {
             ensure_local_service_scope(&app)?;
@@ -119,7 +104,7 @@ pub fn settings_set(
         _ => return Err(crate::locale::text("未知设置项。", "Unknown setting.").into()),
     }
     crate::logging::log(&format!("settings: {key}={value}"));
-    // 广播给其他内建窗口（状态栏据此隐藏/显示余额 chip）
+    // 广播给其他内建窗口（标题栏据此隐藏/显示余额 chip）
     let st = settings_state(&app);
     crate::emit_signed(&app, "settings-changed", &st);
     Ok(st)

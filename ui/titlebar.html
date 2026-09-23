@@ -7,6 +7,11 @@
   <style>
 /* 自绘标题栏：36px 顶条；整条可拖动（按钮/余额区除外）。
    body 透明（子 webview transparent）：浮层展开加高时透出下层的 dsh 界面。 */
+/* 余额 chip（自底部状态栏迁入）：多态几何与右侧窗口按钮（.tb-btn）
+   同款——满高直角热区（Windows 标题栏 chrome 层惯例）、同 hover/pressed
+   底色、同 transition（m-base/ease-out）、focus-visible 同描边；
+   内容规格沿用状态栏实现（12px 图标/6px 状态点/tabular-nums），
+   min-width 44px 与相邻按钮等宽节奏、保证短文本热区。 */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
   /* 浮层定位规则（主菜单）：
@@ -101,6 +106,38 @@ body.hover-suspended .tb-btn.close:hover {
    式描边在奇数物理宽按钮里必然跨列发虚，这是整条链的根治 */
 .tb-icon path { vector-effect: non-scaling-stroke; stroke-width: 1.3333px; }
 
+body.window-inactive .bal-chip { opacity: .55; }
+.bal-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 100%;
+  min-width: 44px; color: var(--dshd-text); font: inherit;
+  background: transparent; border: none;
+  padding: 0 8px; font-size: var(--dshd-fs-sm); line-height: 1; cursor: pointer; outline: none;
+  font-variant-numeric: tabular-nums; font-weight: 500;
+  transition: background-color var(--dshd-m-base) var(--dshd-ease-out), color var(--dshd-m-base) var(--dshd-ease-out);
+}
+.bal-chip:hover { background: var(--dshd-hover); }
+/* 悬停点亮图标（dim→主色）：与 .tb-btn:hover 的图标点亮行为一致；
+   金额文字本就主色不动 */
+.bal-chip:hover .c-ic { color: var(--dshd-text); }
+.bal-chip:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
+.bal-chip:active { background: var(--dshd-pressed); }
+.bal-chip:disabled { cursor: default; opacity: .55; }
+.bal-chip:disabled:hover { background: transparent; }
+.bal-chip .c-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--dshd-text-dim); }
+.bal-chip .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--dshd-success); flex: none;
+  /* 光学补偿：钱包图标墨迹右缘内缩、金额字形左缘留白，左 1 / 右 2 补差 */
+  margin: 0 2px 0 1px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshd-success) 16%, transparent);
+}
+.bal-chip .dot.warn { background: var(--dshd-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshd-warning) 16%, transparent); }
+.bal-chip .dot.err { background: var(--dshd-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshd-error) 16%, transparent); }
+.bal-chip .dot.neutral { background: var(--dshd-text-dim); box-shadow: none; }
+.bal-chip #balance-text { position: relative; top: var(--dshd-text-opt-shift, 0px); }
+.bal-chip.low-warning #balance-text { color: var(--dshd-warning); }
+.bal-chip.low-critical #balance-text { color: var(--dshd-error-text); }
+
 /* macOS：系统红绿灯悬浮于左侧，标题栏内容让位 */
 body.macos .titlebar { padding-left: 82px; }
 
@@ -113,7 +150,7 @@ body.macos .titlebar { padding-left: 82px; }
 
 /* 系统“减弱动态效果”：关闭动画 */
 @media (prefers-reduced-motion: reduce) {
-  .tb-btn { transition: none; }
+  .tb-btn, .bal-chip { transition: none; }
 }
 </style>
 </head>
@@ -124,6 +161,8 @@ body.macos .titlebar { padding-left: 82px; }
       <span data-tauri-drag-region>DSHBox</span>
     </div>
     <div class="drag-space" data-tauri-drag-region></div>
+    <button type="button" id="balance-chip" class="bal-chip" style="display:none"
+            data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint"></button>
     <div id="main-menu-wrap" class="main-menu-wrap">
       <button type="button" id="btn-menu" class="tb-btn menu" data-i18n-title="mainMenu" data-i18n-aria-label="mainMenu" aria-expanded="false" aria-controls="main-menu-panel">
         <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h16"></path></svg>

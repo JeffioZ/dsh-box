@@ -265,6 +265,7 @@ pub(crate) fn supported_generation(path: &Path) -> bool {
         .is_none_or(|version| version <= MAX_SUPPORTED_GENERATION)
 }
 
+#[cfg(test)]
 /// 按会话 id 定位其真实日志路径（递归枚举，支持嵌套分组目录）。
 ///
 /// 供 `live.rs`（实时 tok/s）与 `notify.rs`（任务完成通知）复用，避免各自

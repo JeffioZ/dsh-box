@@ -106,7 +106,7 @@ fn credentials_changed(
 }
 
 /// 跟随 `$DSH_HOME/.credentials.yaml` 的 mtime：用户在 dsh 设置页保存
-/// key 后立即触发一轮账户刷新，不必等 5 分钟周期（状态栏"未配置 API
+/// key 后立即触发一轮账户刷新，不必等 5 分钟周期（标题栏"未配置 API
 /// Key"的最长滞留由整周期缩短为本轮询间隔）。非标准节奏的手写循环，
 /// 谓词复用 `service_gate`；外部模式不跟随（凭据归外部环境管）。
 pub(crate) fn start_credentials_follow(app: AppHandle) {
@@ -143,7 +143,7 @@ pub(crate) fn start_credentials_follow(app: AppHandle) {
     });
 }
 
-/// 监测缓存中新鲜的 DeepSeek 官方路由快照（< ACCOUNT_REFRESH_MS），供状态栏
+/// 监测缓存中新鲜的 DeepSeek 官方路由快照（< ACCOUNT_REFRESH_MS），供标题栏
 /// 余额直接复用（缓存空/过期由调用方回退直连查询）。stale 快照的
 /// updated_at 停留在上次成功时刻，天然被新鲜度判为过期。
 pub(crate) fn cached_deepseek() -> Option<AccountSnapshot> {
@@ -277,7 +277,7 @@ fn run_round_locked(app: &AppHandle) {
     }
     crate::emit_signed(app, "usage-accounts-updated", &payload);
     REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
-    // 状态栏 chip 只监听 balance-updated（非 usage-accounts-updated），其
+    // 标题栏 chip 只监听 balance-updated（非 usage-accounts-updated），其
     // 周期任务 5 分钟才读一次缓存——任何触发源（周期轮/手动/凭据跟随）
     // 完成后顺带推一次余额，让"dsh 设置页刚填完 key"立即生效
     //（refresh_once 自带本地模式与可见性门控；query_balance 命中刚写入
@@ -673,7 +673,7 @@ mod tests {
         stale.stale = true;
         set_cache_for_test(vec![stale]);
         assert!(cached_deepseek().is_none());
-        // 只有其他路由的新鲜快照：不命中（状态栏只复用 DeepSeek 官方路由）。
+        // 只有其他路由的新鲜快照：不命中（标题栏只复用 DeepSeek 官方路由）。
         set_cache_for_test(vec![ok_account("openrouter", now - 10)]);
         assert!(cached_deepseek().is_none());
         if let Ok(mut cache) = CACHE.lock() {

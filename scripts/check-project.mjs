@@ -376,15 +376,15 @@ if (restartService < 0 || restartStatus < restartService || enterRestartView < r
   fail('重启服务必须先进入与普通启动相同的内置加载页，再停止托管服务');
 }
 
-const statusbar = read('ui/statusbar.js');
-if (statusbar.includes('.errorKind')) fail('ui/statusbar.js: BalancePayload 契约字段必须使用 error_kind');
-const authBranch = statusbar.indexOf("b.error_kind === 'no_key'");
-const genericFailure = statusbar.indexOf('if (!b.ok)', authBranch);
+// 余额 chip 契约（复用上方 298 行的 titlebarJs）
+if (titlebarJs.includes('.errorKind')) fail('ui/titlebar.js: BalancePayload 契约字段必须使用 error_kind');
+const authBranch = titlebarJs.indexOf("b.error_kind === 'no_key'");
+const genericFailure = titlebarJs.indexOf('if (!b.ok)', authBranch);
 if (authBranch < 0 || genericFailure < authBranch) {
-  fail('ui/statusbar.js: 凭据错误必须在通用余额失败分支之前处理');
+  fail('ui/titlebar.js: 凭据错误必须在通用余额失败分支之前处理');
 }
-if (!statusbar.includes('!payload.error_kind && lastBalance && lastBalance.ok')) {
-  fail('ui/statusbar.js: 只有瞬时错误可保留 stale 余额，凭据错误必须立即替换');
+if (!titlebarJs.includes('!payload.error_kind && lastBalance && lastBalance.ok')) {
+  fail('ui/titlebar.js: 只有瞬时错误可保留 stale 余额，凭据错误必须立即替换');
 }
 const settingsCommands = read('src-tauri/src/commands/settings.rs');
 const commandRegistry = read('src-tauri/src/commands/mod.rs');

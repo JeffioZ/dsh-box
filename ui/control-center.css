@@ -118,7 +118,9 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
-.body.view-exit { animation: view-exit var(--dshd-menu-exit-duration) var(--dshd-ease-in); }
+/* forwards：淡出播完保持终态（透明），直到定时器（时长+20ms 余量）换内容——
+   无 forwards 时动画结束即回基线 opacity:1，余量窗口内旧内容闪回可见 */
+.body.view-exit { animation: view-exit var(--dshd-menu-exit-duration) var(--dshd-ease-in) forwards; }
 .body.view-enter { animation: view-enter var(--dshd-m-base) var(--dshd-ease-out); }
 /* 动画期间提升为合成层：位移/透明度不因页面内容重排（异步数据到达、
    轮询更新）而掉帧抖动；仅在动画类存在时启用，不常驻占用显存 */
@@ -206,6 +208,10 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .settings-section + .settings-section {
   margin-top: var(--dshd-sp-5); padding-top: var(--dshd-sp-3);
   border-top: 1px solid var(--dshd-line);
+}
+.settings-follow-note {
+  margin: 0 0 10px; color: var(--dshd-text-dim);
+  font-size: var(--dshd-fs-sm); line-height: 18px;
 }
 .settings-scope-note {
   margin: 2px 0 10px; padding: 9px 11px; border-radius: var(--dshd-r-md);

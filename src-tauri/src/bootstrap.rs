@@ -137,7 +137,7 @@ pub(crate) fn run() {
             let dev_ui_ready = ensure_dev_ui_server(app.handle());
             // 服务引导与窗口创建/装配全程并行：boot_inner 在 enter_web_app
             // 之前不碰窗口（事件由启动页 get_status 拉取兜底），dsh 的启动
-            // 与 WebView2 初始化、标题栏/状态栏/托盘创建全部重叠。快路径
+            // 与 WebView2 初始化、标题栏/托盘创建全部重叠。快路径
             // （外部服务接入等）可能在窗口建完前导航——navigate 对未就绪的
             // webview 有延迟重试，不会丢失导航。
             {
@@ -148,16 +148,13 @@ pub(crate) fn run() {
             // 背景色跟随系统主题，与 dsh/loading 底色统一，消除启动与导航的明暗闪烁
             let navigation_app = app.handle().clone();
             let page_load_app = app.handle().clone();
-            let hide_stats_early = if app.state::<AppState>().config().hide_stats_line {
-                hide_stats_early()
-            } else {
-                String::new()
-            };
             let page_init_script = format!(
                 "{}\n{}\n{}",
                 locale::init_script(),
                 PAGE_INIT_SCRIPT,
-                hide_stats_early
+                // 引导期遮罩快路径：文档创建即装（#root 门控不进本壳页面），
+                // 消除启动页卸载到 navigate-eval 注入之间的空档
+                crate::webview::boot_continue_inject()
             );
             let win = tauri::WebviewWindowBuilder::new(
                 app,
@@ -175,7 +172,7 @@ pub(crate) fn run() {
             .background_color(DARK_BG)
             // 禁用后台节流：失焦时 WebView2 暂停渲染，loading 进度条动画
             // 会停摆（首次设置停留后"卡住不动、恢复时一闪而过"），
-            // 状态栏等实时更新的子页面也会滞后
+            // 标题栏等实时更新的子页面也会滞后
             .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
             // Windows 上默认的 drag-drop handler 会禁用页面 HTML5 拖放
             // （破坏 dsh 页面自身的拖放与文件上传插件），显式关闭
@@ -389,24 +386,14 @@ pub(crate) fn run() {
             if let Err(e) = titlebar::init(app.handle()) {
                 logging::log(&format!("标题栏: 初始化失败：{e}"));
             }
-            // 底部状态栏：会话统计 + 余额 + 设置入口（独立子 webview）
-            if let Err(e) = titlebar::init_statusbar(app.handle()) {
-                logging::log(&format!("状态栏: 初始化失败：{e}"));
-            }
-            // 标题栏/状态栏加载自愈：页面初始化完成回报就绪（titlebar_ready /
-            // statusbar_ready）；未回报（加载失败/脚本初始化失败/被跳过）由
-            // 看门狗重载重试——偶发的「启动后标题栏/状态栏空白」由此兜底
+            // 标题栏加载自愈：页面初始化完成回报就绪（titlebar_ready）；
+            // 未回报（加载失败/脚本初始化失败/被跳过）由看门狗重载重试——
+            // 偶发的「启动后标题栏空白」由此兜底
             spawn_load_watchdog(
                 app.handle().clone(),
                 "titlebar",
                 titlebar::is_ready,
                 titlebar::reload,
-            );
-            spawn_load_watchdog(
-                app.handle().clone(),
-                "statusbar",
-                titlebar::statusbar_is_ready,
-                titlebar::reload_statusbar,
             );
             // 标题栏渲染自愈：合成层失效（间歇空白、DOM 正常）无法探测，
             // 周期发送重绘脉冲兜底恢复
@@ -421,7 +408,7 @@ pub(crate) fn run() {
                 });
             }
             // 窗口以隐藏状态创建，图标就绪后再显示 —— 任务栏/标题栏第一帧即是清晰图标。
-            // show 放在标题栏/状态栏（防闪必须先于首帧）之后、其余预创建与后台任务
+            // show 放在标题栏（防闪必须先于首帧）之后、其余预创建与后台任务
             // 启动之前：首帧更早到达，托盘菜单/托盘图标与十余个周期任务的启动
             // 不阻塞用户看到启动页
             let config = app.state::<AppState>().config();
@@ -431,7 +418,7 @@ pub(crate) fn run() {
                 logging::log("启动: --minimized 静默进托盘");
             } else if let Some(win) = main_window(app.handle()) {
                 let _ = win.show();
-                // 状态栏首帧数据由其页面加载完成后的初始拉取（api_balance/
+                // 标题栏首帧数据由其页面加载完成后的初始拉取（api_balance/
                 // get_status）与既有 5s 周期任务负责，这里无需额外推送。
             }
             // 托盘菜单窗口：启动时预创建（隐藏）。自绘弹窗移至主窗口几何
@@ -449,15 +436,11 @@ pub(crate) fn run() {
             heartbeat::start_page_watch(app.handle().clone());
             // 跟随 dsh 的设置（语言/主题）：后台每 3s 检查设置文件集合 mtime
             tray::start_follow_dsh_settings(app.handle().clone());
-            // 状态栏会话统计：每 5s 轮询 dsh 投影并广播（失败静默显示占位）
-            crate::usage::start_periodic(app.handle().clone());
-            // 状态栏实时生成速率：每 2s 尾帧解码会话日志估算流式 tok/s
-            crate::usage::start_live_rate(app.handle().clone());
             // 账户后台监测：dsh 就绪后立即全量刷新余额/订阅缓存，此后每 5 分钟
             // 一轮并广播 usage-accounts-updated（控制中心用量页只读缓存）
             crate::usage::start_account_monitor(app.handle().clone());
             // 凭据文件跟随：每 3s 检查 .credentials.yaml 的 mtime，变化即触发
-            // 一轮账户刷新——dsh 设置页填完 key 后状态栏无需等 5 分钟周期
+            // 一轮账户刷新——dsh 设置页填完 key 后标题栏无需等 5 分钟周期
             crate::usage::start_credentials_follow(app.handle().clone());
             // 用量预警：每 10 分钟聚合增量日志并线性外推今日全天用量，
             // 预计越过用户阈值时发一次系统通知（每天至多一次）
@@ -516,7 +499,7 @@ pub(crate) fn run() {
                 // WM_KILLFOCUS，tao 上报 Focused(false)——但前台窗口仍是本
                 // 应用的窗口树，应用并未失焦。广播前核实前台归属，避免
                 // 启动/交互期的焦点内部迁移被误判为失焦（启动页、标题栏、
-                // 状态栏闪变淡）
+                // 标题栏闪变淡）
                 #[cfg(windows)]
                 let focused = *focused || !blur_is_real();
                 #[cfg(not(windows))]
@@ -533,13 +516,10 @@ pub(crate) fn run() {
                         ));
                     }
                 }
-                // 标题栏/状态栏失焦样式跟随主窗口焦点：子 webview 的 window
+                // 标题栏失焦样式跟随主窗口焦点：子 webview 的 window
                 // focus/blur 事件与主窗口焦点并不同步（WebView2 行为），
                 // 由 Rust 侧统一广播，页面侧按此切换样式
-                for label in [
-                    crate::titlebar::TITLEBAR_LABEL,
-                    crate::titlebar::STATUSBAR_LABEL,
-                ] {
+                for label in [crate::titlebar::TITLEBAR_LABEL] {
                     if let Some(wv) = window.webviews().into_iter().find(|w| w.label() == label) {
                         let _ = wv.eval(format!(
                             "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
@@ -559,10 +539,6 @@ pub(crate) fn run() {
                     DARK_BG
                 };
                 let _ = window.set_background_color(Some(color));
-                titlebar::set_statusbar_theme_background(
-                    window.app_handle(),
-                    *theme == tauri::Theme::Light,
-                );
             }
             tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. }
                 if window.label() == MAIN_WINDOW =>

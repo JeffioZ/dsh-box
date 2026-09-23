@@ -580,20 +580,6 @@ impl AppState {
         )
     }
 
-    pub fn set_hide_stats_line(&self, value: bool) -> Result<(), String> {
-        self.persist_config_change(
-            "hide_stats_line",
-            serde_json::Value::Bool(value),
-            |config| config.hide_stats_line = value,
-        )
-    }
-
-    pub fn set_hide_statusbar(&self, value: bool) -> Result<(), String> {
-        self.persist_config_change("hide_statusbar", serde_json::Value::Bool(value), |config| {
-            config.hide_statusbar = value
-        })
-    }
-
     pub fn set_hide_balance(&self, value: bool) -> Result<(), String> {
         self.persist_config_change("hide_balance", serde_json::Value::Bool(value), |config| {
             config.hide_balance = value

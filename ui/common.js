@@ -138,7 +138,7 @@ const DSHD_ICON_PATHS = {
   undo: '<path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path>',
   redo: '<path d="m15 14 5-5-5-5"></path><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path>',
   // —— 页面级条目（此前散落在各页内联，收敛回注册表）——
-  // 状态栏统计组：counts=lucide message-square，speeds=lucide zap，
+  // 统计组图标（历史状态栏遗留，用量页等处仍复用）：counts=lucide message-square，speeds=lucide zap，
   // cache=lucide database
   counts: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>',
   speeds: '<path d="M13 2 4 14h6l-1 8 9-12h-6z"></path>',
@@ -155,7 +155,7 @@ const DSHD_ICON_PATHS = {
   server: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect><rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect><path d="M6 6h.01M6 18h.01"></path>',
   // toast 关闭叉：lucide x（调用方透传 14px 尺寸与描边属性）
   x: '<path d="m6 6 12 12M18 6 6 18"></path>',
-  // 状态栏 tokens 组：lucide arrow-left-right
+  // tokens 组：lucide arrow-left-right
   tokens: '<path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path>',
   // 余额 chip 钱包（调用方透传 class="c-ic"）：lucide wallet 形态的简化版
   wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path>',
@@ -544,7 +544,7 @@ function dshdToastDismiss(el) {
   setTimeout(() => el.remove(), 300);
 }
 
-// 失焦变淡的统一去抖（启动页/标题栏/状态栏共用；Rust Focused 广播驱动）：
+// 失焦变淡的统一去抖（启动页/标题栏共用；Rust Focused 广播驱动）：
 // 启动与窗口创建期，焦点会在本应用与此前的前台窗口间快速往返（OS 激活
 // 竞速），逐次应用会让界面闪烁。失焦延迟 200ms 生效、期间获焦即取消，
 // 持续失焦才切换样式；首次获焦前忽略失焦（默认按获焦外观呈现）。

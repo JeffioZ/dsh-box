@@ -1,5 +1,5 @@
 // 自绘标题栏：品牌区/拖拽区、共用主菜单与窗口控制按钮。
-// （余额 chip 已迁移到窗口底部状态栏，见 statusbar.js）
+// （余额 chip 自底部状态栏迁入：状态栏已整体移除，统计交还 dsh 原生统计行）
 const $ = (id) => document.getElementById(id);
 const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const listen = (event, handler) => window.__TAURI__.event.listen(event, handler);
@@ -182,8 +182,129 @@ async function refreshMaxState() {
   }
 }
 
+// ---------- 余额 chip（自底部状态栏迁入：点击打开用量页，系统默认悬停提示） ----------
+
+const WALLET_ICON = dshdIcon('wallet', 'class="c-ic" aria-hidden="true"');
+const esc = dshdEsc;
+let lastBalance = null;
+let hideBalance = false;
+let serviceMode = 'none';
+
+// 余额预警：remaining/total ≤30% warning、≤10% critical；total 未知不加色
+function chipLowLevel(entry) {
+  const remaining = entry ? Number(entry.remaining) : NaN;
+  const total = entry ? Number(entry.total) : NaN;
+  if (!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) return 'none';
+  const ratio = remaining / total;
+  return ratio <= 0.1 ? 'critical' : ratio <= 0.3 ? 'warning' : 'none';
+}
+
+function balanceChipState() {
+  const b = lastBalance;
+  if (!b) return { text: '--', dot: 'err', kind: 'unavailable' };
+  if (b.error_kind === 'no_key') return { text: dshdT('balanceNoKey'), dot: 'neutral', kind: 'no_key' };
+  if (b.error_kind === 'invalid_key') return { text: dshdT('balanceInvalidKey'), dot: 'warn', kind: 'invalid_key' };
+  if (!b.ok) return { text: '--', dot: 'err', kind: 'unavailable' };
+  if (b.error) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
+  if (!b.balances || !b.balances.length) return { text: dshdT('balanceUnavailable'), dot: 'warn', kind: 'unavailable' };
+  const first = b.balances[0];
+  const cur = dshdCurrency(first.currency);
+  const curText = cur.length === 1 ? cur : cur + ' ';
+  const low = chipLowLevel(first);
+  return {
+    text: curText + dshdBalanceValue(first.total_balance),
+    dot: low === 'critical' ? 'err' : low === 'warning' ? 'warn' : b.stale ? 'warn' : b.is_available ? 'ok' : 'warn',
+    kind: 'ok',
+    low,
+  };
+}
+
+function renderBalance() {
+  const chip = $('balance-chip');
+  // 首个余额结果到达前整体隐藏：loading 期整窗已自解释；结果到达即显示
+  if (hideBalance || !lastBalance) {
+    chip.style.display = 'none';
+    return;
+  }
+  chip.style.display = '';
+  if (serviceMode === 'external' || serviceMode === 'external-disconnected') {
+    chip.disabled = true;
+    chip.classList.remove('low-warning', 'low-critical');
+    chip.innerHTML = WALLET_ICON + '<span id="balance-text">--</span>';
+    chip.title = dshdT('balanceExternalHint');
+    chip.setAttribute('aria-label', dshdT('balanceExternalHint'));
+    return;
+  }
+  chip.disabled = false;
+  const state = balanceChipState();
+  const dotClass = state.dot === 'ok' ? 'dot' : 'dot ' + state.dot;
+  chip.classList.toggle('low-warning', state.low === 'warning');
+  chip.classList.toggle('low-critical', state.low === 'critical');
+  chip.innerHTML =
+    WALLET_ICON +
+    '<span class="' + dotClass + '" aria-hidden="true"></span>' +
+    '<span id="balance-text">' + esc(state.text) + '</span>';
+  const stale = !!(lastBalance && lastBalance.stale);
+  const depleted = state.kind === 'ok' && state.low === 'none' && !stale
+    && !!lastBalance && !lastBalance.is_available;
+  let hints;
+  if (state.kind === 'no_key' || state.kind === 'invalid_key') {
+    hints = [dshdT(state.kind === 'no_key' ? 'balanceNoKeyHint' : 'balanceInvalidKeyHint')];
+  } else {
+    hints = [];
+    if (state.kind === 'unavailable') hints.push(dshdT('balanceUnavailable'));
+    if (state.low === 'critical') hints.push(dshdT('usageWarnCritical'));
+    else if (state.low === 'warning') hints.push(dshdT('usageWarnLow'));
+    if (stale) hints.push(dshdT('staleBalance'));
+    if (depleted) hints.push(dshdT('balanceDepleted'));
+    hints.push(dshdT('balanceChipHint'));
+  }
+  chip.title = hints.join('\n');
+  const credentialIssue = state.kind === 'no_key' || state.kind === 'invalid_key';
+  const actionHint = state.kind === 'invalid_key' ? dshdT('balanceInvalidKeyHint') : dshdT('balanceNoKeyHint');
+  const ariaLead = state.kind === 'unavailable' && state.text === '--'
+    ? dshdT('balanceUnavailable') : state.text;
+  const ariaStatus = credentialIssue ? [] : hints.slice(0, -1).filter((line) => line !== ariaLead);
+  chip.setAttribute('aria-label',
+    [ariaLead].concat(ariaStatus, [credentialIssue ? actionHint : dshdT('balanceDetailsAria')]).join(' — '));
+}
+
+// 数值文本与 12px 图标/状态点的垂直光学补偿：数字无下降部，其墨迹中心
+// 相对行盒中心的偏移只取决于字体度量且逐平台不同（Windows Segoe UI
+// ≈0.7px、macOS SF Pro 近似 0）——用 canvas 实测当前字体栈渲染 '0' 的
+// 度量来计算补偿，量化 0.1px；不足 0.2px 视为已对齐不引入亚像素偏移；
+// 度量不可用则不设变量，CSS 回退 0px（自移除前的状态栏实现移植）。
+function applyTextOpticalShift() {
+  try {
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return;
+    ctx.font = '500 12px ' + getComputedStyle(document.body).fontFamily;
+    if (ctx.font.indexOf('12px') === -1) return;
+    const m = ctx.measureText('0');
+    const metrics = [m.fontBoundingBoxAscent, m.fontBoundingBoxDescent, m.actualBoundingBoxAscent];
+    if (!metrics.every(Number.isFinite)) return;
+    const offset = Math.max(-1, Math.min(1, (metrics[0] - metrics[1] - metrics[2]) / 2));
+    const shift = Math.round(offset * 10) / 10;
+    if (Math.abs(shift) >= 0.2) {
+      document.documentElement.style.setProperty('--dshd-text-opt-shift', (-shift).toFixed(1) + 'px');
+    }
+  } catch (e) { /* 度量失败维持 0 回退 */ }
+}
+
+function onBalance(payload) {
+  // stale 保留：刷新失败但已有成功数据时保留上次金额（标记过期）
+  if (payload && !payload.ok && !payload.error_kind && lastBalance && lastBalance.ok) {
+    lastBalance = Object.assign({}, lastBalance, { stale: true });
+    renderBalance();
+    return;
+  }
+  lastBalance = payload;
+  renderBalance();
+}
+
 async function init() {
   dshdApplyI18n();
+  applyTextOpticalShift();
   initPlatform();
   bindMainMenu();
   bindWindowControls();
@@ -208,9 +329,12 @@ async function init() {
     applyMaxState($('btn-max').classList.contains('maximized'));
     applyCloseBehavior(closeBehavior);
     refreshMainMenu();
+    renderBalance();
   });
   dshdListen('settings-changed', (event) => {
     applyCloseBehavior(event.payload && event.payload.close_behavior);
+    hideBalance = !!(event.payload && event.payload.hide_balance);
+    renderBalance();
   }).catch(() => {});
 
   // 渲染自愈脉冲（Rust 侧周期/获焦时直呼）：WebView2 合成层失效会导致
@@ -223,9 +347,32 @@ async function init() {
       requestAnimationFrame(() => { tb.style.transform = ''; });
     });
   };
+  $('balance-chip').addEventListener('click', () => {
+    invoke('app_dialog_open_usage').catch((e) => console.warn('titlebar: 打开用量弹窗失败', e));
+  });
+  dshdListen('balance-updated', (e) => onBalance(e.payload)).catch(() => {});
+  dshdListen('dsh-status', (e) => {
+    const payload = e.payload || {};
+    const previousMode = serviceMode;
+    serviceMode = payload.service_mode || 'none';
+    renderBalance();
+    const ready = payload.phase === 'ready' && serviceMode === 'managed';
+    if (ready && previousMode !== 'managed') {
+      invoke('api_balance').then(onBalance).catch(() => {});
+    }
+  }).catch(() => {});
   refreshMaxState();
   invoke('settings_get').then((settings) => {
     applyCloseBehavior(settings && settings.close_behavior);
+    hideBalance = !!(settings && settings.hide_balance);
+    renderBalance();
+  }).catch(() => {});
+  invoke('get_status').then((payload) => {
+    serviceMode = (payload && payload.service_mode) || 'none';
+    renderBalance();
+    if (serviceMode !== 'external' && serviceMode !== 'external-disconnected') {
+      invoke('api_balance').then(onBalance).catch(() => {});
+    }
   }).catch(() => {});
   // 窗口焦点状态由 Rust 侧广播（WebView2 子窗口的 window focus/blur
   // 与主窗口焦点不同步），挂载全局函数供 Rust eval 直呼
