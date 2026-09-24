@@ -188,6 +188,8 @@ const WALLET_ICON = dshdIcon('wallet', 'class="c-ic" aria-hidden="true"');
 const esc = dshdEsc;
 let lastBalance = null;
 let hideBalance = false;
+// 版本信息的实测宽度（可见时更新）：宽度分级恢复判定的防震荡输入
+let versionWidth = 0;
 let serviceMode = 'none';
 
 // 余额预警：remaining/total ≤30% warning、≤10% critical；total 未知不加色
@@ -219,14 +221,46 @@ function balanceChipState() {
   };
 }
 
+/** 标题栏常驻版本号（DSHBox x.y.z · dsh a.b.c）：dsh 未安装时整段隐藏；
+    完整环境信息（Node/npm/端口/外部服务）收进悬停 title。 */
+function renderVersions(payload) {
+  const el = $('brand-ver');
+  if (!el) return;
+  const parts = [];
+  if (payload && payload.app_version) parts.push(payload.app_version);
+  if (payload && payload.dsh_version) parts.push('dsh ' + payload.dsh_version);
+  const wasHidden = el.hidden;
+  el.hidden = parts.length === 0;
+  // 首启编排：只在 隐藏→显示 跃迁时播淡入；周期刷新不重播
+  if (wasHidden && !el.hidden) el.classList.add('ver-in');
+  if (el.hidden) el.classList.remove('ver-in');
+  el.textContent = parts.join(' · ');
+  // 宽度缓存：分级恢复判定「放回来之后是否仍舒适」用（display:none 时量不到）
+  if (!el.hidden) versionWidth = el.offsetWidth || versionWidth;
+  const tip = [];
+  if (payload && payload.app_version) tip.push('DSHBox ' + payload.app_version);
+  if (payload && payload.dsh_version) tip.push('dsh ' + payload.dsh_version);
+  if (payload && payload.node_version) tip.push('Node ' + payload.node_version);
+  if (payload && payload.npm_version) tip.push('npm ' + payload.npm_version);
+  if (payload && payload.port) tip.push(dshdT('port', { port: payload.port }));
+  const external = payload && (payload.service_mode === 'external'
+    || payload.service_mode === 'external-disconnected');
+  if (external) tip.push(dshdT('externalService'));
+  el.title = tip.join(' · ');
+}
+
 function renderBalance() {
   const chip = $('balance-chip');
   // 首个余额结果到达前整体隐藏：loading 期整窗已自解释；结果到达即显示
   if (hideBalance || !lastBalance) {
     chip.style.display = 'none';
+    chip.classList.remove('chip-in');
     return;
   }
+  const wasHidden = chip.style.display === 'none';
   chip.style.display = '';
+  // 首启编排：网络晚到的「蹦出」改淡入；周期刷新不重播
+  if (wasHidden) chip.classList.add('chip-in');
   if (serviceMode === 'external' || serviceMode === 'external-disconnected') {
     chip.disabled = true;
     chip.classList.remove('low-warning', 'low-critical');
@@ -355,6 +389,7 @@ async function init() {
     const payload = e.payload || {};
     const previousMode = serviceMode;
     serviceMode = payload.service_mode || 'none';
+    renderVersions(payload);
     renderBalance();
     const ready = payload.phase === 'ready' && serviceMode === 'managed';
     if (ready && previousMode !== 'managed') {
@@ -369,6 +404,7 @@ async function init() {
   }).catch(() => {});
   invoke('get_status').then((payload) => {
     serviceMode = (payload && payload.service_mode) || 'none';
+    renderVersions(payload);
     renderBalance();
     if (serviceMode !== 'external' && serviceMode !== 'external-disconnected') {
       invoke('api_balance').then(onBalance).catch(() => {});
@@ -412,3 +448,30 @@ async function init() {
 }
 
 init();
+
+// 宽度分级：拖拽区实际宽度是挤压力信号。三级优先级——品牌核心+右侧四钮
+// 永不让位；tb-compact-1 余额 chip 让位（覆盖层：释放拖拽区面积与视觉密度，
+// 不释放布局宽度，阈值独立带迟滞）；tb-compact-2 版本信息让位（释放布局
+// 宽度）。版本恢复用「放回来之后仍舒适」判定（拖拽区宽 − 版本宽 > 恢复线）
+// ——简单阈值会被「隐藏释放宽度→立即可恢复」的反馈环拖入无限抖动。
+// 放顶层而非 init()：不依赖任何 IPC/await 成功；脚本在 body 末尾执行，
+// .drag-space 已就绪。窄窗冷启接受首帧全员闪现后收敛（避免首帧前测量）
+(() => {
+  const applyCompact = () => {
+    const space = document.querySelector('.drag-space');
+    if (!space) return;
+    const w = space.clientWidth;
+    const compacted1 = document.body.classList.contains('tb-compact-1');
+    // chip：让位 @32 / 找回 @40（迟滞防边缘闪烁；让位不改布局，无反馈环）
+    document.body.classList.toggle('tb-compact-1', w < 32 || (compacted1 && w < 40));
+    // 版本：让位 @24；找回需 w − versionWidth > 40（防震荡数学）
+    if (w < 24) document.body.classList.add('tb-compact-2');
+    else if (w - versionWidth > 40) document.body.classList.remove('tb-compact-2');
+  };
+  const dragSpace = document.querySelector('.drag-space');
+  if (dragSpace && window.ResizeObserver) {
+    new ResizeObserver(applyCompact).observe(dragSpace);
+  }
+  window.addEventListener('resize', applyCompact);
+  applyCompact();
+})();

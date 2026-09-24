@@ -37,45 +37,7 @@ let updateCheckRequested = false;
 let installCancelRequested = false;
 let installGeneration = 0;
 let installCanCancel = false;
-let readyTransitionSequence = 0;
 let serviceChoiceVisible = false;
-
-function notifyReadyTransition() {
-  const sequence = ++readyTransitionSequence;
-  let sent = false;
-  let onEnd = null;
-  let timer = 0;
-  // 序列失效（新一轮过渡已开始）同样要清理：旧监听器/定时器不得残留
-  const cleanup = () => {
-    if (onEnd) {
-      document.body.removeEventListener('transitionend', onEnd);
-      onEnd = null;
-    }
-    if (timer) {
-      clearTimeout(timer);
-      timer = 0;
-    }
-  };
-  const finish = () => {
-    if (sent) return;
-    cleanup();
-    if (sequence !== readyTransitionSequence) return;
-    sent = true;
-    window.__TAURI__.core.invoke('startup_transition_done').catch(() => {});
-  };
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduced) {
-    finish();
-    return;
-  }
-  onEnd = (event) => {
-    if (event.target === document.body && event.propertyName === 'opacity') finish();
-  };
-  document.body.addEventListener('transitionend', onEnd);
-  // transitionend 可能因页面不可见、动画被系统取消而不触发；兜底保证导航必达。
-  // 220ms = 0.18s 淡出 + 余量，与 Rust 侧 STARTUP_TRANSITION_TIMEOUT 匹配
-  timer = setTimeout(finish, 220);
-}
 
 function phaseText(phase) {
   return PHASE_KEYS[phase] ? dshdT(PHASE_KEYS[phase]) : phase;
@@ -200,7 +162,6 @@ function setStatus(phaseOrPayload, message, detail) {
     ? phaseOrPayload
     : { phase: phaseOrPayload, message: message || '', detail: detail || '' };
   const phase = payload.phase;
-  const spinner = $('spinner');
   renderRuntimePresentation(payload, {
     state: $('status-text'),
     detail: $('status-detail'),
@@ -223,27 +184,29 @@ function setStatus(phaseOrPayload, message, detail) {
       button.textContent = installCancelRequested ? dshdT('cancellingInstall') : dshdT('cancelInstall');
     });
   } else cancelButtons.forEach((button) => button.removeAttribute('aria-busy'));
-  if (phase === 'ready') {
-    // 面板等待期（提交前）：ready 只更新卡片（绿色就绪态），不淡出；
-    // 提交后（含普通启动）：loading/设置视图保持原样，整页统一淡出——
-    // 元素不逐个消失，观感为「当前界面淡出 → dsh」
-    if (onboardingPendingView() && !onboardingSubmitted) {
-      spinner.classList.add('hidden');
-    } else {
-      // 提交前面板显示期间到达的 ready（服务复用/并发路径下 get_status
-      // 直接返回 Ready）跳过整体淡出：淡出会让配置面板视觉消失而 boot
-      // 仍在等待用户操作
-      document.body.classList.add('fade-out');
-      notifyReadyTransition();
-    }
-  }
-  else if (phase === 'error') { spinner.classList.add('hidden'); }
-  else if (phase === 'cancelled') {
-    spinner.classList.add('hidden');
-  }
-  else {
-    document.body.classList.remove('fade-out');
-    spinner.classList.remove('hidden');
+  if (phase === 'ready' && !(onboardingPendingView() && !onboardingSubmitted)) {
+    // 提交后（含普通启动）：末帧文案切换为与引导遮罩首帧逐字一致的
+    // 「正在加载…」并立即放行——跨源导航下 WebView 保留旧帧直到新文档
+    // （遮罩）首帧，遮罩与启动页几何/信息逐值一致，帧级切换零内容差异，
+    // 即同一段加载的延续（淡出会制造「消解→空白→再弹出」的两段式观感）。
+    // 面板等待期（提交前）不进入此分支：ready 只更新卡片，等用户操作
+    $('status-text').textContent = dshdT('loading');
+    $('status-text').title = dshdT('loading');
+    // 安装流程的进度条可能停在 determinate 定格态：先归位为不定动画，
+    // 末帧与遮罩首帧的进度条形态一致（正常启动本就是不定态，此步无操作）
+    const fill = $('bar-fill');
+    fill.classList.remove('determinate', 'done', 'err');
+    fill.style.width = '';
+    // 相位交接：动画当前相位 + 时间戳写入 window.name（旧文档内同步写，
+    // 无竞态；跨导航跨源保留），遮罩以负 animation-delay 续播同一周期，
+    // 进度条从启动页到 dsh 是同一根条。失败静默：退化为遮罩从头播
+    try {
+      const anim = document.getAnimations().find((a) => a.animationName === 'slide');
+      const barPhase = anim && Number.isFinite(anim.currentTime)
+        ? Math.round(anim.currentTime % 1400) : 0;
+      window.name = JSON.stringify({ barPhase, t: Date.now() });
+    } catch (e) { /* 相位交接失败不影响导航 */ }
+    window.__TAURI__.core.invoke('startup_transition_done').catch(() => {});
   }
 }
 
@@ -347,22 +310,6 @@ async function copyText(text) {
   if (!copied) throw new Error(dshdT('copyFailed'));
 }
 
-function renderVersions(payload) {
-  const el = $('versions');
-  if (!el) return;
-  const parts = [];
-  if (payload.dsh_version) parts.push('dsh v' + payload.dsh_version);
-  if (payload.node_version) parts.push('Node ' + payload.node_version);
-  if (payload.npm_version) parts.push('npm ' + payload.npm_version);
-  if (payload.port) parts.push(dshdT('port', { port: payload.port }));
-  if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
-    parts.push(dshdT('externalService'));
-  }
-  // 字段缺失时保留已显示内容（防御：事件载荷异常时不清空 footer）
-  if (parts.length === 0) return;
-  el.textContent = parts.join(' · ');
-}
-
 function renderStatus(payload) {
   lastStatusPayload = payload;
   installGeneration = Number(payload.install_generation || 0);
@@ -379,7 +326,6 @@ function renderStatus(payload) {
   const fixedMsg = payload.phase === 'starting-server' ? phaseText('starting-server') : payload.message;
   const presentation = { ...payload, message: fixedMsg };
   setStatus(presentation);
-  renderVersions(payload);
   renderOnboardingRuntime(presentation);
   syncOnboardingCompletionAction();
   $('btn-use-local').classList.toggle('hidden', payload.service_mode !== 'external-disconnected');

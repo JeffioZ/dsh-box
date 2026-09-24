@@ -80,6 +80,8 @@ pub struct StatusPayload {
     pub phase: String,
     pub message: String,
     pub detail: String,
+    /// DSHBox 应用自身版本（编译期常量；标题栏常驻显示用）。
+    pub app_version: &'static str,
     /// 确定进度 0-100；None = 不确定（动画）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<f64>,
@@ -726,6 +728,7 @@ impl AppState {
         }
         StatusPayload {
             phase: phase.as_str().to_string(),
+            app_version: env!("CARGO_PKG_VERSION"),
             message,
             detail,
             progress: None,

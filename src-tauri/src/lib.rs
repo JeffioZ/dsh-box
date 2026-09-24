@@ -193,6 +193,7 @@ pub fn emit_status_progress(
     let snapshot = app.state::<AppState>().snapshot();
     let payload = app_state::StatusPayload {
         phase: phase.as_str().to_string(),
+        app_version: env!("CARGO_PKG_VERSION"),
         message: message.to_string(),
         detail: detail.to_string(),
         progress,

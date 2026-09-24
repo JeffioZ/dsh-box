@@ -10,25 +10,16 @@ body {
   color: var(--dshd-text);
   display: flex; align-items: center; justify-content: center;
   position: relative; user-select: none; overflow: hidden;
-  /* 进入界面前的整体淡出：与 WebView 背景色衔接，避免导航瞬间白闪。
-     淡出是短距离透明度过渡，0.18s 足够平滑（UEUI：时长随距离/复杂度定，
-     无通用截断值），把 ready 到导航的固定等待压到最小 */
-  transition: opacity .18s ease;
 }
-/* 就绪后由 startup.js 添加：内容淡出，露出与 dsh 界面一致的深色背景 */
-body.fade-out { opacity: 0; }
 /* 失焦变淡（Rust Focused 广播 → startup.js 切换类）：与标题栏/状态栏
    同一系统语义；无过渡（原生失焦反馈即瞬时） */
 body.window-inactive .card { opacity: .78; }
-body.window-inactive .footer { opacity: .6; }
-/* 入场编排：品牌元素先行，文案与状态区按 60ms 节奏阶梯上浮；
-   动效令牌与全 UI 一致（ease-out/.32s），reduced-motion 下整体关闭 */
-@keyframes splash-logo-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
-@keyframes splash-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.logo-wrap { animation: splash-logo-in .32s var(--dshd-ease-out) both; }
-.title { animation: splash-rise .32s var(--dshd-ease-out) .06s both; }
-.tagline { animation: splash-rise .32s var(--dshd-ease-out) .12s both; }
-.status { animation: splash-rise .32s var(--dshd-ease-out) .18s both; }
+/* 入场：整卡单手势淡入（.2s 纯 opacity，合成层）。此前为四元素 60ms 阶梯
+   逐件浮现——首帧全空 + 组装感 ~500ms 是「轻微突兀」的来源；单手势一拍
+   完成，注意力停在品牌而非拼装。fill 用 backwards：结束后 opacity 交还
+   正常级联，否则前向回填会以动画值永久压掉上面的失焦变暗规则 */
+@keyframes splash-card-in { from { opacity: 0; } }
+.card { animation: splash-card-in .2s var(--dshd-ease-out) backwards; }
 .stage {
   width: 100%; height: 100%; display: flex; flex-direction: column;
   align-items: center; justify-content: flex-start; gap: 20px;
@@ -56,7 +47,9 @@ body.window-inactive .footer { opacity: .6; }
 .tagline { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); letter-spacing: .4px; margin-top: 2px; }
 
 .status { width: 100%; margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
-.status-line { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: var(--dshd-fs-base); font-weight: 500; min-height: 20px; }
+/* 进度指示由进度条独立承担（UEUI 单指示元素）：状态行只留文字，
+   min-height 占位保持与引导遮罩（boot-continue.js）的行高逐值一致 */
+.status-line { display: flex; align-items: center; justify-content: center; font-size: var(--dshd-fs-base); font-weight: 500; min-height: 20px; }
 #status-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-detail {
   text-align: center; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim);
@@ -86,10 +79,6 @@ body.window-inactive .footer { opacity: .6; }
   86% { opacity: 1; }
   100% { transform: translateX(917%); opacity: 0; }
 }
-
-.spinner { width: 16px; height: 16px; border: 2px solid var(--dshd-border-strong); border-top-color: var(--dshd-accent); border-radius: 50%; animation: spin var(--dshd-anim-spin); }
-/* 用 visibility 而非 display 隐藏：占位保留，就绪/失败切换时文字不跳动 */
-.spinner.hidden { visibility: hidden; }
 
 .error-box { width: 100%; background: var(--dshd-error-subtle); border: 1px solid var(--dshd-error-border); border-radius: var(--dshd-r-lg); padding: 14px; margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
 .error-box.reveal { animation: error-in .11s ease-out; }
@@ -163,9 +152,6 @@ body.window-inactive .footer { opacity: .6; }
 .btn:hover { background: var(--dshd-hover); border-color: var(--dshd-border-strong); }
 .btn:disabled:hover { background: #23232b; border-color: var(--dshd-border-strong); }
 .btn.small { min-height: 28px; padding: 0 12px; font-size: var(--dshd-fs-sm); border-radius: 14px; }
-
-.footer { position: fixed; z-index: 2; bottom: 18px; left: 0; right: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); pointer-events: none; }
-.versions { opacity: .75; }
 
 /* 首次使用配置：保留分组层级，纵向采用紧凑的 4px 节奏。 */
 .ob-box {
@@ -333,8 +319,7 @@ body.window-inactive .footer { opacity: .6; }
   .title { font-size: var(--dshd-fs-xl); }
   .ob-box { margin-top: 2px; }
   body.onboarding-mode .stage { padding-bottom: 10px; }
-  body.onboarding-mode .title,
-  body.onboarding-mode .footer { display: none; }
+  body.onboarding-mode .title { display: none; }
   body.onboarding-mode .ob-box { padding: 10px 18px; gap: 8px; }
   body.onboarding-mode .ob-section { gap: 6px; }
   body.onboarding-mode .ob-field { gap: 2px; }
@@ -365,7 +350,7 @@ body.window-inactive .footer { opacity: .6; }
 @media (prefers-reduced-motion: reduce) {
   .ob-switch-row, .dshd-select-trigger, .dshd-select-list li { transition: none; }
   .ob-box.reveal { animation: none; }
-  .logo-wrap, .title, .tagline, .status { animation: none; }
+  .card { animation: none; }
 }
 /* 浅色系统主题适配（--dshd-* token 已自动切换；仅保留非 token 覆盖） */
 @media (prefers-color-scheme: light) {
@@ -384,7 +369,6 @@ body.window-inactive .footer { opacity: .6; }
 @media (prefers-reduced-motion: reduce) {
   body { transition: none; }
   .btn { transition: none; }
-  .spinner { animation: none; }
   .bar-fill { animation: none; transition: none; }
   .error-box.reveal { animation: none; }
 }

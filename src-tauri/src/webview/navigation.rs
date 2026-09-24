@@ -245,7 +245,8 @@ pub fn navigate(app: &AppHandle, url: &str) {
         let navigating_to_dsh = is_dsh_url(&u, &app.state::<AppState>().config());
         if navigating_to_dsh {
             // 即使首次注入完全失败，也让心跳监视在超时后触发一次 reload 自愈，
-            // 避免 last_heartbeat=None 导致永久不检查。
+            // 避免 last_heartbeat=None 导致永久不检查。（版本信息常驻标题栏，
+            // 页面交接的 window.name 只承载进度条相位，由启动页在旧文档内自写）
             app.state::<AppState>().set_heartbeat();
         }
         if let Err(error) = wv.navigate(u) {
@@ -350,6 +351,105 @@ mod tests {
             !script[start..end].contains('\n'),
             "内联 SVG 跨行会破坏承载它的单引号字符串"
         );
+    }
+
+    // ---------- 启动页/引导遮罩 同源守卫 ----------
+
+    const COMMON_CSS: &str = include_str!("../../../ui/common.css");
+    const STARTUP_CSS: &str = include_str!("../../../ui/startup.css");
+    const I18N_JS: &str = include_str!("../../../ui/i18n.js");
+
+    fn nospace(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// 从 CSS 文本解析 `--token: value;`（取首个匹配）。
+    fn css_var(css: &str, token: &str) -> String {
+        let marker = format!("--{token}:");
+        let start = css
+            .find(&marker)
+            .unwrap_or_else(|| panic!("缺少令牌 {token}"));
+        let value = &css[start + marker.len()..];
+        value[..value.find(';').expect("令牌值未终止")]
+            .trim()
+            .to_string()
+    }
+
+    /// 引导遮罩（boot-continue.js 内联字面量，注入跨源文档无法引用本壳 CSS）
+    /// 与启动页视觉必须逐值一致：帧级衔接靠「同一段 loading」成立，任一处
+    /// 漂移都会在切换瞬间可见。此测试把 common.css 令牌与两侧规格对账——
+    /// 改任一侧都必须同步另一侧（遮罩侧是手抄字面量，本测试即其防漂移源）。
+    #[test]
+    fn mask_splash_parity_holds() {
+        let mask = boot_continue_inject();
+        let mask_n = nospace(mask);
+        let startup_n = nospace(STARTUP_CSS);
+        let common_n = nospace(COMMON_CSS);
+
+        // 颜色：common.css 深色（默认块）+ 浅色（prefers-color-scheme: light 块）
+        // 的令牌值必须作为字面量出现在遮罩里
+        let light_at = COMMON_CSS
+            .find("@media (prefers-color-scheme: light)")
+            .expect("浅色令牌块");
+        for css in [&COMMON_CSS[..light_at], &COMMON_CSS[light_at..]] {
+            for token in ["dshd-bg", "dshd-text", "dshd-text-dim"] {
+                let value = css_var(css, token);
+                assert!(
+                    mask_n.contains(&nospace(&value)),
+                    "遮罩缺少令牌 --{token} 的字面量 {value}"
+                );
+            }
+        }
+
+        // 字号：遮罩内联值 ↔ common.css 令牌值
+        for (mask_size, token) in [("20px", "2xl"), ("14px", "base"), ("12px", "sm")] {
+            assert!(mask_n.contains(&format!("font-size:{mask_size}")));
+            assert!(
+                common_n.contains(&format!("--dshd-fs-{token}:{mask_size}")),
+                "common.css 令牌 --dshd-fs-{token} 不再是 {mask_size}，需同步遮罩"
+            );
+        }
+
+        // 承重几何：卡片行高/占位、进度条圆角——双侧同值（footer 已移除，
+        // 版本信息常驻标题栏；占位行在遮罩是空 div 定高、在启动页是
+        // min-height，书写不同值相同）
+        for (mask_spec, startup_spec) in [
+            ("min-height:20px", "min-height:20px"),
+            ("height:18px", "min-height:18px"),
+            ("height:28px", "min-height:28px"),
+            ("border-radius:999px", "border-radius:999px"),
+        ] {
+            assert!(mask_n.contains(mask_spec), "遮罩缺少规格 {mask_spec}");
+            assert!(
+                startup_n.contains(startup_spec),
+                "启动页缺少规格 {startup_spec}"
+            );
+        }
+        // 行高：遮罩 line-height 内联，启动页经 body 的 font 简写斜杠书写
+        assert!(mask_n.contains("line-height:1.5"));
+        assert!(
+            startup_n.contains("var(--dshd-fs-md)/1.5"),
+            "启动页 body 行高不再是 1.5，需同步遮罩"
+        );
+
+        // 背景径向渐变逐值同源（startup.css body ↔ 遮罩 el + 调色板 g1）
+        assert!(
+            startup_n.contains("radial-gradient(1200px600pxat50%-10%,#191a1f0%,var(--dshd-bg)60%)"),
+            "启动页深色渐变规格漂移"
+        );
+        assert!(startup_n.contains("#edeef40%"), "启动页浅色渐变起点漂移");
+        assert!(
+            mask_n.contains("radial-gradient(1200px600pxat50%-10%,'+c.g1+'0%,'+c.bg+'60%)"),
+            "遮罩渐变代码漂移"
+        );
+        assert!(mask.contains("'#191a1f'") && mask.contains("'#edeef4'"));
+
+        // 末帧/首帧文案逐字一致（i18n.js loading 键 ↔ 遮罩字面量）
+        assert!(
+            I18N_JS.contains("['正在加载…', 'Loading…']"),
+            "i18n loading 键与遮罩文案需逐字一致"
+        );
+        assert!(mask.contains("'正在加载…'") && mask.contains("'Loading…'"));
     }
 
     #[test]

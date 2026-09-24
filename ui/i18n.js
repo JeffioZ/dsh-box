@@ -262,6 +262,9 @@ const DSHD_MESSAGES = {
   themeSystem: ['跟随系统', 'System'],
   startProgress: ['启动进度', 'Startup progress'],
   starting: ['正在启动…', 'Starting…'],
+  // 就绪放行导航的末帧文案：须与 dsh 文档内引导遮罩首帧文案逐字一致
+  //（boot-continue.js 的 zh/en 字面量），帧级切换零内容差异
+  loading: ['正在加载…', 'Loading…'],
   startingServer: ['正在启动 dsh 服务…', 'Starting the dsh service…'],
   switchingLocalService: ['正在切换到本地服务…', 'Switching to the local service…'],
   startupFailed: ['启动失败', 'Startup failed'],

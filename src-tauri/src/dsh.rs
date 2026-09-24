@@ -15,7 +15,8 @@ use crate::{emit_status, navigate, navigate_to_splash};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const WATCH_INTERVAL: Duration = Duration::from_secs(5);
-// 与前端 0.18s 就绪淡出 + 220ms 兜底定时器匹配（startup.css / startup.js）
+// 就绪握手的前端信号即时到达（startup.js 不再淡出，直接 invoke）；本超时
+// 仅作信号丢失（IPC 异常/提交竞态）时的兜底，见 enter_web_app_inner
 const STARTUP_TRANSITION_TIMEOUT: Duration = Duration::from_millis(250);
 const DSH_OFFICIAL_PORT: u16 = 3080;
 const LAST_MANAGED_PORT_KEY: &str = "last_managed_port";
@@ -277,7 +278,8 @@ fn release_market_after_onboarding() {
     crate::plugins::release_first_onboarding_bootstrap();
 }
 
-/// 让启动页完成淡出后立即导航；页面未响应时按短超时兜底，导航正确性不依赖动画事件。
+/// 就绪后立即导航（前端信号即时到达；跨源导航下 WebView 保留启动页旧帧
+/// 直到 dsh 文档内引导遮罩首帧，帧级衔接）；信号丢失时按短超时兜底。
 pub(crate) fn enter_web_app(app: &AppHandle, url: &str) {
     enter_web_app_inner(app, url, false);
 }

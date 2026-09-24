@@ -47,6 +47,10 @@ body.window-inactive .tb-btn { color: var(--dshd-chrome-btn-inactive); }
 }
 .brand { display: inline-flex; align-items: center; gap: 7px; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: nowrap; }
 .brand-icon { width: 16px; height: 16px; -webkit-user-drag: none; user-drag: none; }
+/* 版本号（DSHBox x.y.z · dsh a.b.c）：品牌文字的弱化延续——小一档、
+   数字等宽（更新时不跳动）；dsh 未安装时整段隐藏（A1）。完整环境信息
+   （Node/npm/端口）收进 title 悬停，标题栏只保留稳定事实 */
+.brand-ver { font-size: var(--dshd-fs-xs); opacity: .82; font-variant-numeric: tabular-nums; }
 .drag-space { flex: 1; height: 100%; }
 
 
@@ -107,7 +111,12 @@ body.hover-suspended .tb-btn.close:hover {
 .tb-icon path { vector-effect: non-scaling-stroke; stroke-width: 1.3333px; }
 
 body.window-inactive .bal-chip { opacity: .55; }
+/* 右侧聚簇：chip（覆盖层）+ 菜单 + 窗控。chip 以 absolute right:100% 浮在
+   聚簇左缘（拖拽区右端），不参与 flex 布局——数据晚到/宽度变化都不再推移
+   右侧按钮（曾致按钮随机时点右跳）；聚簇 relative 同时是 chip 的锚 */
+.tb-right { position: relative; display: flex; align-items: center; gap: 8px; height: 100%; }
 .bal-chip {
+  position: absolute; right: 100%; top: 0;
   display: inline-flex; align-items: center; gap: 4px; height: 100%;
   min-width: 44px; color: var(--dshd-text); font: inherit;
   background: transparent; border: none;
@@ -115,6 +124,17 @@ body.window-inactive .bal-chip { opacity: .55; }
   font-variant-numeric: tabular-nums; font-weight: 500;
   transition: background-color var(--dshd-m-base) var(--dshd-ease-out), color var(--dshd-m-base) var(--dshd-ease-out);
 }
+/* 首启编排：数据到达的「蹦出」改 150ms 淡入（纯 opacity 合成层动画）。
+   类只在 隐藏→显示 跃迁时由 JS 添加，5 分钟周期刷新不重播 */
+@keyframes tb-fade-in { from { opacity: 0; } }
+.bal-chip.chip-in { animation: tb-fade-in .15s var(--dshd-ease-out); }
+.brand-ver.ver-in { animation: tb-fade-in .15s var(--dshd-ease-out); }
+/* 宽度分级（titlebar.js ResizeObserver 按拖拽区实际宽度挂类）：
+   第一级 tb-compact-1 余额 chip 让位（覆盖层，让位释放拖拽区面积与视觉密度）；
+   第二级 tb-compact-2 版本信息让位（释放 ~150px 布局宽度）。
+   !important 压过 chip 的内联 display 恢复；纯显示层让位，数据链路照常 */
+.tb-compact-1 .bal-chip { display: none !important; }
+.tb-compact-2 .brand-ver { display: none !important; }
 .bal-chip:hover { background: var(--dshd-hover); }
 /* 悬停点亮图标（dim→主色）：与 .tb-btn:hover 的图标点亮行为一致；
    金额文字本就主色不动 */
@@ -151,6 +171,7 @@ body.macos .titlebar { padding-left: 82px; }
 /* 系统“减弱动态效果”：关闭动画 */
 @media (prefers-reduced-motion: reduce) {
   .tb-btn, .bal-chip { transition: none; }
+  .bal-chip.chip-in, .brand-ver.ver-in { animation: none; }
 }
 </style>
 </head>
@@ -159,11 +180,16 @@ body.macos .titlebar { padding-left: 82px; }
     <div class="brand" data-tauri-drag-region>
       <img class="brand-icon" src="assets/app-icon.svg" alt="" draggable="false" data-tauri-drag-region />
       <span data-tauri-drag-region>DSHBox</span>
+      <span id="brand-ver" class="brand-ver" data-tauri-drag-region hidden></span>
     </div>
     <div class="drag-space" data-tauri-drag-region></div>
-    <button type="button" id="balance-chip" class="bal-chip" style="display:none"
-            data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint"></button>
-    <div id="main-menu-wrap" class="main-menu-wrap">
+    <div class="tb-right">
+      <!-- 余额 chip 为覆盖层（absolute right:100%）：浮在拖拽区右端、菜单钮
+           左侧，不参与 flex 布局——网络晚到时右侧按钮零位移；过窄时由
+           tb-compact-1 分级隐藏让位（见 titlebar.js 的 ResizeObserver） -->
+      <button type="button" id="balance-chip" class="bal-chip" style="display:none"
+              data-i18n-aria-label="balanceDetailsAria" data-i18n-title="balanceChipHint"></button>
+      <div id="main-menu-wrap" class="main-menu-wrap">
       <button type="button" id="btn-menu" class="tb-btn menu" data-i18n-title="mainMenu" data-i18n-aria-label="mainMenu" aria-expanded="false" aria-controls="main-menu-panel">
         <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h16"></path></svg>
       </button>
@@ -171,17 +197,18 @@ body.macos .titlebar { padding-left: 82px; }
         <div id="main-menu-list" role="menu" data-i18n-aria-label="mainMenu"></div>
       </div>
     </div>
-    <div id="win-buttons" class="win-buttons hidden">
-      <!-- 自绘 SVG 描边图标：三平台同款，不依赖系统字体（最大化态由 JS 换还原图标） -->
-      <button type="button" id="btn-min" class="tb-btn" data-i18n-title="minimize" data-i18n-aria-label="minimize">
-        <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"></path></svg>
-      </button>
-      <button type="button" id="btn-max" class="tb-btn" data-i18n-title="maximize" data-i18n-aria-label="maximize">
-        <svg class="tb-icon ic-caption-square" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4h16v16H4z"></path></svg>
-      </button>
-      <button type="button" id="btn-close" class="tb-btn close" data-i18n-title="closeToTray" data-i18n-aria-label="closeToTray">
-        <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
-      </button>
+      <div id="win-buttons" class="win-buttons hidden">
+        <!-- 自绘 SVG 描边图标：三平台同款，不依赖系统字体（最大化态由 JS 换还原图标） -->
+        <button type="button" id="btn-min" class="tb-btn" data-i18n-title="minimize" data-i18n-aria-label="minimize">
+          <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"></path></svg>
+        </button>
+        <button type="button" id="btn-max" class="tb-btn" data-i18n-title="maximize" data-i18n-aria-label="maximize">
+          <svg class="tb-icon ic-caption-square" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4h16v16H4z"></path></svg>
+        </button>
+        <button type="button" id="btn-close" class="tb-btn close" data-i18n-title="closeToTray" data-i18n-aria-label="closeToTray">
+          <svg class="tb-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18"></path></svg>
+        </button>
+      </div>
     </div>
   </div>
   <script src="i18n.js"></script>
