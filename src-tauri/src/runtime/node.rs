@@ -116,7 +116,7 @@ pub(crate) struct NodeRuntime {
     pub version: String,
 }
 
-fn inspect_runtime(executable: PathBuf) -> Option<NodeRuntime> {
+pub(crate) fn inspect_runtime(executable: PathBuf) -> Option<NodeRuntime> {
     let (major, minor, patch) = node_version(&executable)?;
     node_satisfies(major, minor).then(|| NodeRuntime {
         executable,
@@ -751,6 +751,11 @@ pub(crate) fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(
         crate::locale::text("正在升级 npm…", "Upgrading npm…"),
         "",
     );
+    // npm 安装是子进程、无进度解析：弹窗侧给一条无百分比的过程文案，
+    // 避免「处理中」期间检查更新页完全无反馈（emit_status 只到启动页/托盘）。
+    // 反向调用 updater 的反馈通道是可接受的依赖方向：本函数本就只由
+    // 检查更新页驱动（见函数 doc），反馈域归属 updater
+    crate::updater::emit_progress(app, crate::locale::text("正在升级 npm…", "Upgrading npm…"));
     let staging = npm_upgrade_staging(config);
     let target = super::npm_latest_version()?;
     // 清掉上次崩溃遗留的半成品 staging 与隔离残留，全新开始
@@ -770,6 +775,13 @@ pub(crate) fn upgrade_portable_npm(app: &AppHandle, config: &Config) -> Result<(
             BootPhase::InstallingNode,
             crate::locale::text("正在升级 npm…", "Upgrading npm…"),
             source,
+        );
+        crate::updater::emit_progress(
+            app,
+            &crate::locale::owned(
+                format!("正在升级 npm…（{source}）"),
+                format!("Upgrading npm… ({source})"),
+            ),
         );
         let args = vec![
             npm_cli.to_string_lossy().into_owned(),

@@ -26,7 +26,7 @@ use app::{parse_app_release_asset, windows_replace_script};
 pub(crate) use check::apply_dsh_update;
 pub use check::{check, check_and_report, silent_check, start_periodic_check, CheckResult};
 use dsh_update::update_dsh;
-use node::update_node;
+use node::{switch_to_portable_node, update_node};
 #[cfg(test)]
 use powershell::parse_pwsh_metadata;
 #[cfg(test)]
@@ -369,6 +369,8 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         update_app_exe(app, &state.config())
     } else if which == "npm" {
         runtime::upgrade_portable_npm(app, &state.config())
+    } else if which == "node-switch" {
+        switch_to_portable_node(app, &state.config())
     } else {
         Err(format!(
             "{}: {which}",

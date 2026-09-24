@@ -28,6 +28,11 @@ pub struct VersionInfo {
     /// `update_available` 语义保持"有新版"，静默/周期弹窗不受降级影响。
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub downgrade_available: bool,
+    /// 仅 npm 行使用：当前是否运行在 DSHBox 自管（便携）Node 上。系统
+    /// Node 的 npm 归系统管理（一键升级被拒），前端据此改示「改用内置
+    /// Node」入口（切换后 npm/dsh 升级均可在壳内闭环）。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub portable_node: bool,
     /// 仅 dsh 行使用：其他通道存在更高版本的跨通道发现（仅手动检查页展示，
     /// 不参与 update_available 语义，静默/周期弹窗不触发）。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +74,7 @@ fn dsh_version_info(installed: String, latest: String) -> VersionInfo {
     VersionInfo {
         update_available: ordering == std::cmp::Ordering::Greater,
         downgrade_available: ordering == std::cmp::Ordering::Less,
+        portable_node: false,
         installed,
         latest,
         latest_error: None,
@@ -166,6 +172,7 @@ pub fn silent_check(app: &AppHandle) {
             if !result.dsh.as_ref().is_some_and(|d| d.update_available) {
                 dsh_simulated = true;
                 result.dsh = Some(VersionInfo {
+                    portable_node: false,
                     installed: "0.9.8".into(),
                     latest: "0.9.9-dev".into(),
                     update_available: true,
@@ -177,6 +184,7 @@ pub fn silent_check(app: &AppHandle) {
             if !result.app.as_ref().is_some_and(|a| a.update_available) {
                 app_simulated = true;
                 result.app = Some(VersionInfo {
+                    portable_node: false,
                     installed: env!("CARGO_PKG_VERSION").into(),
                     latest: "9.9.9-dev".into(),
                     update_available: true,
@@ -415,6 +423,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                     );
                     (
                         Some(VersionInfo {
+                            portable_node: false,
                             installed: installed.clone(),
                             latest: String::new(),
                             update_available: false,
@@ -487,6 +496,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                 (
                     Some(VersionInfo {
                         installed: installed.unwrap_or_default(),
+                        portable_node: npm_cfg.node_exe().exists(),
                         latest: latest.clone(),
                         update_available,
                         latest_error: None,
@@ -502,6 +512,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                 if installed.is_some() {
                     (
                         Some(VersionInfo {
+                            portable_node: false,
                             installed: installed.unwrap_or_default(),
                             latest: String::new(),
                             update_available: false,
@@ -604,6 +615,7 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
     let fail = |e: String| {
         crate::logging::log(&format!("updater: 应用版本查询失败：{e}"));
         Some(VersionInfo {
+            portable_node: false,
             installed: env!("CARGO_PKG_VERSION").to_string(),
             latest: String::new(),
             update_available: false,
@@ -643,6 +655,7 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
     let update_available =
         versions::compare_versions(&latest, &installed) == std::cmp::Ordering::Greater;
     Some(VersionInfo {
+        portable_node: false,
         installed,
         latest,
         update_available,

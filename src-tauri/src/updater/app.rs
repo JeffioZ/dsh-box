@@ -721,6 +721,7 @@ mod tests {
 
     fn app_info(latest: &str, available: bool, failed: bool) -> VersionInfo {
         VersionInfo {
+            portable_node: false,
             installed: "1.0.0".into(),
             latest: latest.into(),
             update_available: available,

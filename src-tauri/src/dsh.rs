@@ -444,9 +444,16 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
     let ready = crate::locale::text("已就绪", "Ready");
     state.set_phase(BootPhase::Ready, ready, "");
     crate::logging::log(&format!(
-        "boot: 就绪 dsh={} node={} port={}",
+        "boot: 就绪 dsh={} node={}（{}）port={}",
         runtime::installed_dsh_version(&config).unwrap_or_default(),
         state.node_version().unwrap_or_default(),
+        // 来源标注以本次实际选中的运行时为准（便携探测失败回落系统的
+        // 窗口里，裸文件存在会误标「内置」）
+        if node.executable == config.node_exe() {
+            "内置"
+        } else {
+            "系统"
+        },
         config.port
     ));
     if state.onboarding_pending() {

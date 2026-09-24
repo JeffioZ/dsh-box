@@ -865,6 +865,13 @@ pub fn apply_update(app: &AppHandle, which: &str) {
     }
     std::thread::spawn(move || {
         let success_message = match which.as_str() {
+            // 切换的终态必须说清「重启生效」：done 是检查更新页稳定的
+            // 终态通道（一次性渲染），走通配分支的「操作完成。」会丢失
+            // 重启指引
+            "node-switch" => crate::locale::text(
+                "内置 Node.js 已安装，重启 DSHBox 后生效。",
+                "Built-in Node.js installed; restart DSHBox to take effect.",
+            ),
             "node" => crate::locale::text("Node.js 更新完成。", "Node.js was updated."),
             "pwsh" => crate::locale::text(
                 "PowerShell 7 安装或更新完成。",
@@ -874,11 +881,25 @@ pub fn apply_update(app: &AppHandle, which: &str) {
         };
         let (ok, message) = match crate::updater::apply(&handle, &which) {
             Ok(()) => (true, success_message.to_string()),
-            Err(e) => (false, e),
+            Err(e) => {
+                // 失败原因必须落日志：UI 的「未完成」是一次性消费态，关弹窗
+                // 即失，排查只能靠日志文件
+                crate::logging::log(&format!("app-dialog: 更新 {which} 失败：{e}"));
+                (false, e)
+            }
         };
         handle
             .state::<AppState>()
             .set_update_done(ok, Some(message));
+        // 即时生效的组件（npm/pwsh/node 更新完即运行在新版上）：延迟让
+        // 用户读完完成文案后自动重查一次，刷新版本行——否则版本号停在
+        // 旧检查快照上，与「已完成」并存成过时信息。需重启生效的
+        // （node-switch / 应用本体）不重查：版本要等重启才变，重查无意义
+        // 还会冲掉重启指引
+        if ok && matches!(which.as_str(), "npm" | "pwsh" | "node") {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            run_check(&handle);
+        }
     });
 }
 

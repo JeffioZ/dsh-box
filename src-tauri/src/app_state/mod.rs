@@ -1031,10 +1031,19 @@ impl AppState {
         let mut g = self.lock_inner();
         g.update_done_ok = ok;
         g.update_done = message;
+        // 终态一出、进度即清：done 消费制下终态文案只渲染一次，残留的
+        // progress 会在下一轮轮询把终态文案覆盖回旧进度（此前靠 done 每
+        // 轮重渲互相踩踏掩盖）；复位场景（None）同样清进度
+        g.check_progress = None;
     }
+    /// 消费式读取：一次更新完成标记只被拉取一次。此前 done 写入后从不清
+    /// 除，检查更新页的 1.5s 轮询每轮都重触「更新完成/未完成」渲染（结果
+    /// 区反复重建、按钮被反复复位）；消费制下每次更新操作写入的新 done
+    /// 必被下一轮读走并触发一次性的按钮复位，相同结果的重复失败也不会
+    /// 因「内容未变」而失去复位路径（卡「处理中…」的根源）。
     pub fn update_done(&self) -> Option<(bool, String)> {
-        let g = self.lock_inner();
-        g.update_done.clone().map(|m| (g.update_done_ok, m))
+        let mut g = self.lock_inner();
+        g.update_done.take().map(|m| (g.update_done_ok, m))
     }
 
     /// 弹窗禁用/恢复主窗口的标记读写。

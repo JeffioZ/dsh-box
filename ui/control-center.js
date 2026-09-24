@@ -1001,6 +1001,34 @@ function renderCheckResult(r) {
         : (r.node.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
       '<span id="u-node"></span></div>';
   }
+  if (r.npm) {
+    const v = r.npm.installed || dshdT('notInstalled');
+    const hint = r.npm.latest_error ? ' data-tip-extra="' + esc(r.npm.latest_error) + '"' : '';
+    // 判定用 !== true：该字段 false 时 serde 省略序列化（前端为
+    // undefined），严格 === false 会漏判、错回「更新」按钮（系统 Node
+    // 上一键升级被拒的撞墙路径）
+    const systemNode = r.npm.portable_node !== true;
+    // 系统 Node：npm 由系统管理（一键升级被拒），标注与 Node 行同构的
+    // 陈述式三态（最新对照/已最新/不可用，不给升级暗示——行动入口是
+    // 「改用内置 Node」按钮）；探测失败（未安装）不叠加托管标注
+    const label = !r.npm.installed ? dshdT('notInstalled')
+      : systemNode
+        ? (!r.npm.latest
+          ? dshdT('npmSystemNode') + ' · ' + dshdT('versionServiceUnavailable')
+          : (r.npm.update_available
+            ? dshdT('npmSystemLatest', { version: esc(r.npm.latest) })
+            : dshdT('npmSystemNode') + ' · ' + dshdT('upToDate')))
+        : !r.npm.latest ? dshdT('versionServiceUnavailable')
+        : dshdT('upToDate');
+    const npmVer = systemNode && r.npm.installed
+      ? esc(v) + '<span class="v-ok">' + label + '</span>'
+      : (r.npm.update_available
+        ? verHtml(v, r.npm.latest || dshdT('latestVersion'), true)
+        : (r.npm.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v)));
+    html += '<div class="uprow"><div class="info"><div class="name">npm</div>' +
+      '<div class="ver" data-trunc-tip' + hint + '>' + npmVer + '</div></div>' +
+      '<span id="u-npm"></span></div>';
+  }
   if (r.pwsh) {
     const v = r.pwsh.installed || dshdT('notInstalled');
     const label = !r.pwsh.installed ? dshdT('notInstalled')
@@ -1015,18 +1043,6 @@ function renderCheckResult(r) {
   }
   // npm 是 Node 自带但可独立维护的工具，版本与操作入口单列，避免把它
   // 误解成 Node 版本的一部分。
-  if (r.npm) {
-    const v = r.npm.installed || dshdT('notInstalled');
-    const hint = r.npm.latest_error ? ' data-tip-extra="' + esc(r.npm.latest_error) + '"' : '';
-    const label = !r.npm.installed ? dshdT('notInstalled')
-      : !r.npm.latest ? dshdT('versionServiceUnavailable')
-      : dshdT('upToDate');
-    html += '<div class="uprow"><div class="info"><div class="name">npm</div>' +
-      '<div class="ver" data-trunc-tip' + hint + '>' + (r.npm.update_available
-        ? verHtml(v, r.npm.latest || dshdT('latestVersion'), true)
-        : (r.npm.installed ? esc(v) + '<span class="v-ok">' + label + '</span>' : esc(v))) + '</div></div>' +
-      '<span id="u-npm"></span></div>';
-  }
   // GitHub 查询失败时 r.app 为空，但应用本机版本仍应始终可见；
   // 远端状态明确标注不可用，避免用户误以为没有检查应用本体。
   const localAppVersion = currentOpen && currentOpen.initial
@@ -1064,9 +1080,19 @@ function renderCheckResult(r) {
       () => invoke('set_dsh_channel', { channel: hint.channel }),
     );
   }
-  if (r.node && r.node.update_available) updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
+  if (r.node && r.node.managed === false && r.node.installed) {
+    // 系统 Node：行内已标注「系统托管」，自动更新被拒——与 npm 行同款
+    // 的运行时切换入口（同一动作，两处可达）
+    updBtn('u-node', dshdT('usePortableNode'), 'node-switch', false);
+  } else if (r.node && r.node.update_available) {
+    updBtn('u-node', dshdT(r.node.installed ? 'update' : 'install'), 'node', false);
+  }
   if (r.pwsh && r.pwsh.update_available) updBtn('u-pwsh', dshdT(r.pwsh.installed ? 'update' : 'install'), 'pwsh', false);
-  if (r.npm && r.npm.update_available) updBtn('u-npm', dshdT('update'), 'npm', false);
+  if (r.npm && r.npm.portable_node !== true) {
+    updBtn('u-npm', dshdT('usePortableNode'), 'node-switch', false);
+  } else if (r.npm && r.npm.update_available) {
+    updBtn('u-npm', dshdT('update'), 'npm', false);
+  }
   if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
   const any = (r.dsh && (r.dsh.update_available || r.dsh.downgrade_available || r.dsh.other_channel)) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
   if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
@@ -1148,6 +1174,11 @@ let lastProgress = '';
 function renderProgress(message) {
   if (openKind !== 'check') return;
   if (!message || message === lastProgress) return;
+  // 终态性失败文案（Rust 侧 emit_progress 的「更新失败: …」）不在此渲染：
+  // 该事件同时服务启动页/托盘（无 done 通道），检查页的正式失败反馈走
+  // done 通道（「未完成：…」）——两个通道赛跑会造成先闪「更新失败」再被
+  // 覆盖的观感
+  if (message.lastIndexOf('更新失败', 0) === 0 || message.lastIndexOf('Update failed', 0) === 0) return;
   lastProgress = message;
   const body = $('body');
   const line = body.querySelector('.msg');
@@ -1194,6 +1225,15 @@ function renderUpdateDone(p) {
   document.querySelectorAll('.uprow .dshd-btn, #plugin-conflict .dshd-btn').forEach((button) => {
     if (button.dataset.done) return;
     if (p.ok && button.textContent === dshdT('processing')) {
+      button.disabled = true;
+      button.dataset.done = '1';
+      button.textContent = dshdT('completed');
+      return;
+    }
+    // 切换内置 Node 在 Node/npm 两行各有一个入口（同一动作）：任一处
+    // 完成后另一处一并收尾，否则旧检查数据（managed/portable_node 未
+    // 变）会让残留按钮保持可点，再点只会撞幂等报错
+    if (p.ok && button.dataset.label === dshdT('usePortableNode')) {
       button.disabled = true;
       button.dataset.done = '1';
       button.textContent = dshdT('completed');
@@ -1748,6 +1788,11 @@ document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'visible') {
     // 轮询挂起期间错过的状态（后台更新完成等）立即补拉
     pollDialogState();
+    // 更新进行中不做 applyOpen 兜底重渲染：本 WebView 的可见性事件
+    // 不可靠（误发一次 visible 就会触发），且更新开始后载荷的 updating
+    // 已翻转、印章去重失效——全量重渲会销毁重建下载进度行（一次闪烁）。
+    // 进度由事件/轮询通道自行维护，无需整体重开
+    if (updateRunning) return;
     // 不做动效重放：该 WebView 对“隐藏→显示”的可见性事件不可靠，
     // 迟到重放会中途重启动画造成抖动（托盘菜单的教训）；入场动效
     // 由 applyOpen 在预渲染时播放，show 后可见部分自然呈现
