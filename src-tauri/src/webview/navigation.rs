@@ -72,7 +72,10 @@ if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').match
     var dsDarkObs = new MutationObserver(function () {
       if (document.body) { applyDsDark(); dsDarkObs.disconnect(); }
     });
-    dsDarkObs.observe(document.documentElement, { childList: true });
+    // 观察目标必须是 document：本段在文档创建时刻执行，彼时
+    // documentElement 还是 null（observe 抛错会中止整个初始化脚本——
+    // 2026-09-25 探针实证，浅色主题下深色预设分支才走到这里）
+    dsDarkObs.observe(document, { childList: true });
   }
 }
 "#;

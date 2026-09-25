@@ -166,32 +166,36 @@
   }
 
   var dismissed = false;
-  // 死文档自愈（会话级一次）：dsh 更新是同端口原地换版，上游静态服务不发
-  // 缓存头，WebView2 会话缓存可能仍持有旧版 index/入口响应——旧 hash chunk
-  // 被新服务端 404，入口 module 从未执行，#root 永远空着（2026-09-23 与
-  // 09-24 两次 dsh 更新后均白屏到手动重启应用）。cache:'reload' 回源刷新
-  // 当前路径与根路径后 reload，新 index 引用全新 hash 链即恢复；自愈期间
-  // 不撤遮罩（reload 销毁文档，观感仍是一段连续 loading）。guard 落在
-  // sessionStorage：确定性坏文档 reload 后依旧坏，不会循环；应用重启清零。
+  // 中毒文档自愈（会话级一次）。中毒有两种形态（2026-09-23/24/25 三次 dsh
+  // 更新现场）：①死文档——缓存持旧 index、其入口 chunk 被新服务端 404，
+  // #root 永远空；②活体错配——旧 index 与旧 chunk **都**在缓存里，旧版
+  // 应用完整启动画出 boot 页（#root 非空！）后对不上新服务端而卡死，遮罩
+  // 等到 30s 上限退场露出原生 loading。统一检测信号是**入口 chunk 指纹**：
+  // load+2.5s 若 #root 为空或仍只有 boot 页，fetch 回源服务器当前的 index，
+  // 比对文档入口 chunk 名与服务器 index 的入口 chunk 名——不一致即中毒，
+  // location.replace 到带时间戳查询的 '/'（09-25 rc.2 现场教训：渲染进程
+  // 内存缓存按完整 URL 键控，reload 主资源仍命中同 URL 旧条目；换从未请求
+  // 过的 URL 击穿所有缓存层；静态服务按路径匹配、带查询照常返回 index）。
+  // 一致则是正常慢启动，遮罩继续等。fetch 兼作可达性确认（失败不导航）。
+  // guard 落在 sessionStorage（跨导航同标签存续）：不会循环；应用重启清零。
   var HEAL_KEY = '__dshd_boot_heal';
-  function healDeadDocument() {
+  function documentEntryChunk() {
+    var script = document.querySelector('script[type="module"][src]');
+    return script ? script.getAttribute('src') : '';
+  }
+  function healStaleDocument() {
     try {
       if (sessionStorage.getItem(HEAL_KEY)) return;
-      sessionStorage.setItem(HEAL_KEY, '1');
-      var paths = {};
-      paths[location.pathname || '/'] = true;
-      paths['/'] = true;
-      var refreshed = false;
-      var checks = Object.keys(paths).map(function (path) {
-        return fetch(path, { cache: 'reload' }).then(function (resp) {
-          if (resp.ok) refreshed = true;
-        }).catch(function () {});
-      });
-      Promise.all(checks).then(function () {
-        // 任一路径回源成功才 reload；全失败（连接拒绝/401 等）不 reload：
-        // 401 下 reload 只会把带 cookie 的页面换成 401 纯文本页，比空白更糟
-        if (refreshed) location.reload();
-      });
+      fetch('/', { cache: 'reload' }).then(function (resp) {
+        if (!resp.ok) return;
+        return resp.text().then(function (text) {
+          var match = text.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/);
+          var serverChunk = match ? match[1] : '';
+          if (!serverChunk || serverChunk === documentEntryChunk()) return;
+          sessionStorage.setItem(HEAL_KEY, '1');
+          location.replace('/?_dshd_heal=' + Date.now());
+        });
+      }).catch(function () {});
     } catch (e) { /* 自愈失败静默：维持绝对上限等既有兜底路径 */ }
   }
   function scheduleRemoval(el, card) {
@@ -254,16 +258,21 @@
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     if (bootMounted()) { armExit(); return; }
-    // load 后 2.5s 只做死文档判定，不再无条件退场：dsh ≥0.1.7-rc 的插件
+    // load 后 2.5s 只做中毒判定，不再无条件退场：dsh ≥0.1.7-rc 的插件
     // 装载常超 2.5s，boot 页仍是 #root 唯一内容时由遮罩继续覆盖（定时退场
     // 会露出 dsh 的 boot 页，「两个 loading」回归即此），真实挂载交给上面
-    // 的观察器。module 入口阻塞 load、boot 页在 main.ts 同步画入 #root：
-    // load 已触发而 #root 仍空只能是入口从未执行（404/解析失败）→ 自愈。
-    // 迟到的 eval 注入通道注册时 load 可能已触发，按 readyState 直接补判。
+    // 的观察器。判定扩展到两种中毒形态（见 healStaleDocument 注释）：
+    // #root 为空（死文档）或仍只有 boot 页（活体错配——boot 页在但应用
+    // 永远不来）→ 入口 chunk 指纹比对，与服务端不一致才导航。module 入口
+    // 阻塞 load、boot 页在 main.ts 同步画入 #root：load 已触发而 #root 空
+    // 只能是入口从未执行；boot 页在而应用迟到则可能是慢启动（正常）或错
+    // 配（中毒），指纹比对可区分。迟到的 eval 注入通道注册时 load 可能已
+    // 触发，按 readyState 直接补判。
     var judgeAfterLoad = function () {
       setTimeout(function () {
         var root = document.getElementById('root');
-        if (!root || root.childElementCount === 0) healDeadDocument();
+        var stale = !root || root.childElementCount === 0 || bootMounted() === false;
+        if (stale) healStaleDocument();
       }, 2500);
     };
     if (document.readyState === 'complete') judgeAfterLoad();
@@ -288,7 +297,14 @@
     }
     return false;
   }
-  bootDocObs.observe(document.documentElement, { childList: true, subtree: true });
+  // 观察目标必须是 document 而非 documentElement：本段在文档创建时刻执行
+  // （initialization_script，先于解析开始），彼时 documentElement 还是 null
+  // （2026-09-25 现场探针实证：observe 抛 TypeError 被整体 catch 吞掉，guard
+  // 已设导致 eval 兜底被挡，遮罩永不安装——且深色主题下 PAGE_INIT 会先抛
+  // 同样的错炸掉初始化脚本、guard 没设，遮罩靠 eval 兜底「碰巧」正常，缺陷
+  // 被主题时段门控掩盖）。Document 本身恒为 Node，subtree 观察对 html/body/
+  // #root 的出现效果完全一致。
+  bootDocObs.observe(document, { childList: true, subtree: true });
   if (!tryInstall()) {
     // 长期无 #root 的文档（本壳页面）观察器随页面卸载自然释放；上限兜底防泄漏
     setTimeout(function () { bootDocObs.disconnect(); }, 15000);
