@@ -601,7 +601,7 @@ function usageRenderCalendar(cal, detail, monthKey, dayMap, report) {
     // 格子内只放日期号数（对齐插件：token/命中率进 tooltip/aria-label 与
     // 选中后的明细，避免格内塞三项导致换行溢出）。
     btn.innerHTML = '<span>' + d + '</span>';
-    btn.title = key + '：' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? '，' + dshdT('usageCacheHit') + ' ' + hit + '%' : '');
+    btn.title = key + ': ' + fmtTokens(tokens) + (hit !== null && hit !== undefined ? ' · ' + dshdT('usageCacheHit') + ' ' + hit + '%' : '');
     btn.addEventListener('click', () => {
       const prevSel = cal.querySelector('.usage-day.selected');
       if (prevSel) prevSel.classList.remove('selected');

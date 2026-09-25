@@ -332,22 +332,18 @@ pub(crate) fn apply_dsh_update(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || match apply(&handle, "dsh") {
         Ok(()) => {
-            // 成功后重查一次：弹窗显示新版本状态（已是最新）。
-            // 结果同时写入状态（轮询通道）与事件（即时渲染）：
-            // 事件早于弹窗页面就绪时被丢弃，轮询兜底保证不滞留
-            emit_progress(
-                &handle,
-                crate::locale::text("正在确认新版本…", "Verifying the new version…"),
-            );
-            let result = check(&handle);
+            // 完成先行：主界面此刻已重新进入 dsh，弹窗若停留在“正在确认…”
+            // 会落后于主界面、显得迟滞（用户实测）。立即置完成态并清进度，
+            // 版本复核（网络往返）转后台，结果经 update-result 异步刷新行项
             let done_msg = crate::locale::text("dsh 更新完成。", "dsh was updated.");
             handle
                 .state::<AppState>()
                 .set_update_done(true, Some(done_msg.into()));
+            handle.state::<AppState>().set_check_progress(None);
+            let result = check(&handle);
             handle
                 .state::<AppState>()
                 .set_last_check(Some(result.clone()));
-            handle.state::<AppState>().set_check_progress(None);
             crate::emit_signed(&handle, "update-result", &result);
         }
         Err(e) => {

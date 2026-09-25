@@ -46,6 +46,41 @@ fn truncate(text: &str, max_chars: usize) -> String {
 }
 
 pub(crate) const APP_REPO: &str = "JeffioZ/dsh-box";
+
+/// 已提交事务的备份目录后台清理：删除整个旧版本目录（node_modules 数十万
+/// 文件）耗时秒级到十秒级，同步执行会把更新弹窗的完成态推迟同样时长
+/// （主界面早已重进 dsh，弹窗仍停留「正在重启服务」）。后台线程删除；
+/// 下一次更新事务开始前 join 等待——连续更新（如降级后立刻升级）必须等
+/// 上一轮备份删完，否则残留备份会被前置检查误判为未完成事务而拒绝。
+static BACKUP_CLEANUP: std::sync::Mutex<Option<std::thread::JoinHandle<()>>> =
+    std::sync::Mutex::new(None);
+
+/// 等待仍在进行中的备份清理完成（无在途清理时立即返回）。 poison 用内部
+/// 状态恢复：删除线程只做纯文件系统操作，panic 不影响此处继续。
+fn await_pending_backup_cleanup() {
+    let mut guard = BACKUP_CLEANUP
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(handle) = guard.take() {
+        let _ = handle.join();
+    }
+}
+
+fn spawn_backup_cleanup(backup: std::path::PathBuf, name: String) {
+    let mut guard = BACKUP_CLEANUP
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(handle) = guard.take() {
+        let _ = handle.join();
+    }
+    *guard = Some(std::thread::spawn(move || {
+        if let Err(e) = std::fs::remove_dir_all(&backup) {
+            crate::logging::log(&format!(
+                "updater: 清理 {name} 备份失败（不影响当前版本）：{e}"
+            ));
+        }
+    }));
+}
 #[cfg(any(windows, test))]
 const APP_WINDOWS_ASSET: &str = "DSHBox-windows-x64.exe";
 
@@ -125,6 +160,10 @@ fn with_directory_transaction<T>(
     prepare: impl FnOnce() -> Result<T, String>,
     install: impl FnOnce(T) -> Result<(), String>,
 ) -> Result<(), String> {
+    // 0) 上一轮已提交更新的备份可能仍在后台删除：先等它结束，避免残留
+    // 备份被下面的前置检查误判为未完成事务（连续更新的场景）
+    await_pending_backup_cleanup();
+
     // 1) 先做本地前置检查；不要在明确存在残留事务时仍先联网下载。
     if backup.exists() || marker.exists() {
         // 残留可能是备份目录、事务标记或两者兼有，文案按实际残留如实描述
@@ -169,8 +208,13 @@ fn with_directory_transaction<T>(
         crate::locale::text("正在停止 dsh 服务…", "Stopping the dsh service…"),
     );
     update_txn::create_marker(marker)?;
+    // 启动页状态行跟随：安装阶段持续数秒，泛化的「正在启动…」会误导
+    // （用户报告：更新时 loading 文案需要审查）
+    let updating_msg =
+        crate::locale::owned(format!("正在更新 {name}…"), format!("Updating {name}…"));
     app.state::<AppState>()
-        .set_phase(BootPhase::Starting, "", "");
+        .set_phase(BootPhase::Starting, &updating_msg, "");
+    crate::emit_status(app, BootPhase::Starting, &updating_msg, "");
     dsh::shutdown(app);
     navigate_to_splash(app);
     std::thread::sleep(Duration::from_millis(800));
@@ -297,11 +341,9 @@ fn with_directory_transaction<T>(
         ));
     }
     if backup.exists() {
-        if let Err(e) = std::fs::remove_dir_all(backup) {
-            crate::logging::log(&format!(
-                "updater: 清理 {name} 备份失败（不影响当前版本）：{e}"
-            ));
-        }
+        // 关键路径之外：主界面已在加载新版本，删除旧目录的秒级耗时不得
+        // 推迟更新弹窗的完成态（见 BACKUP_CLEANUP 注释）
+        spawn_backup_cleanup(backup.to_path_buf(), name.to_string());
     }
     Ok(())
 }

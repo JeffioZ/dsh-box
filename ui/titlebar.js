@@ -222,10 +222,20 @@ function balanceChipState() {
 }
 
 /** 标题栏常驻版本号（DSHBox x.y.z · dsh a.b.c）：dsh 未安装时整段隐藏；
-    完整环境信息（Node/npm/端口/外部服务）收进悬停 title。 */
+    悬停 title 只放**补充信息**（Node/npm/端口/外部服务）——已可见的版本号
+    不重复进 tooltip。缓存 payload 供语言切换时重译 title。 */
+let lastVersionsPayload = null;
 function renderVersions(payload) {
   const el = $('brand-ver');
   if (!el) return;
+  // 迟滞：更新/安装事务中途换目录，package.json 可能瞬间读不到——非终态
+  // （ready/error/cancelled）下保持上次已知版本，避免标题栏版本号在
+  // 隐藏/淡入间抖动（用户报告的局部闪烁）；终态如实清空
+  if (payload && !payload.dsh_version && lastVersionsPayload && lastVersionsPayload.dsh_version
+    && !['ready', 'error', 'cancelled'].includes(payload.phase)) {
+    payload = { ...payload, dsh_version: lastVersionsPayload.dsh_version };
+  }
+  lastVersionsPayload = payload;
   const parts = [];
   if (payload && payload.app_version) parts.push(payload.app_version);
   if (payload && payload.dsh_version) parts.push('dsh ' + payload.dsh_version);
@@ -238,8 +248,6 @@ function renderVersions(payload) {
   // 宽度缓存：分级恢复判定「放回来之后是否仍舒适」用（display:none 时量不到）
   if (!el.hidden) versionWidth = el.offsetWidth || versionWidth;
   const tip = [];
-  if (payload && payload.app_version) tip.push('DSHBox ' + payload.app_version);
-  if (payload && payload.dsh_version) tip.push('dsh ' + payload.dsh_version);
   if (payload && payload.node_version) tip.push('Node ' + payload.node_version);
   if (payload && payload.npm_version) tip.push('npm ' + payload.npm_version);
   if (payload && payload.port) tip.push(dshdT('port', { port: payload.port }));
@@ -410,6 +418,13 @@ async function init() {
       invoke('api_balance').then(onBalance).catch(() => {});
     }
   }).catch(() => {});
+  // 语言切换：命令式设置的 tooltip（版本信息/余额分层提示/最大化按钮）
+  // 不走 data-i18n-title 通道，必须在此重译，否则残留旧语言直到下次事件
+  window.addEventListener('dshd-language-changed', () => {
+    if (lastVersionsPayload) renderVersions(lastVersionsPayload);
+    renderBalance();
+    refreshMaxState();
+  });
   // 窗口焦点状态由 Rust 侧广播（WebView2 子窗口的 window focus/blur
   // 与主窗口焦点不同步），挂载全局函数供 Rust eval 直呼
   window.__dshdSetWindowActive = (active) => {

@@ -34,6 +34,10 @@ let lastUpdateResult = null;
 // 或静默检查发现 dsh 有新版可更——静默检查的“已是最新/检查失败”
 // 在安装进行中弹出来纯属噪音
 let updateCheckRequested = false;
+// 更新进行中：进度事件已到达、结果未返回。此窗口内阶段事件不得用旧的
+// 检查结果重渲染更新信息框——两个写入方在同一段文字上交替（“发现新版本”
+// ↔ “正在安装…”）即用户报告的局部闪烁
+let updateInProgress = false;
 let installCancelRequested = false;
 let installGeneration = 0;
 let installCanCancel = false;
@@ -316,8 +320,9 @@ function renderStatus(payload) {
   installCanCancel = payload.can_cancel === true;
   if (payload.service_mode === 'external' || payload.service_mode === 'external-disconnected') {
     $('update-box').classList.add('hidden');
-  } else if (lastUpdateResult) {
-    // 切回托管服务时按已有结果立即恢复更新区显隐，不等下一次更新事件
+  } else if (lastUpdateResult && !updateInProgress) {
+    // 切回托管服务时按已有结果立即恢复更新区显隐，不等下一次更新事件；
+    // 更新进行中跳过——进度事件是此刻该框的唯一写入方（否则两写者交替闪烁）
     renderUpdate(lastUpdateResult);
   }
   // 语言切换后后端消息快照不会自动刷新（Rust 按旧语言生成）：
@@ -781,6 +786,7 @@ async function init() {
   await dshdListen('update-result', (e) => {
     if (buffering) return; // 缓冲窗口极短（单次 IPC 往返）且静默检查在服务就绪后才跑；
     // 真错过结果时，后续事件与发现新版的弹窗兜底
+    updateInProgress = false;
     renderUpdate(e.payload);
   });
   await dshdListen('update-progress', (e) => {
@@ -788,7 +794,12 @@ async function init() {
       // onboarding 期间不覆盖更新文案（面板显示时更新区不可见，
       // 且 Rust 文本是旧语言快照，语言切换后不重译）
       if (onboardingPendingView()) return;
+      updateInProgress = true;
       $('update-text').textContent = e.payload.message;
+      // 更新执行期间冻结本页更新按钮：误点只会收到“更新失败”并再次
+      // 闪动文案（执行互斥在后端，前端同步禁用避免无意义的错误反馈）
+      $('btn-update-check').disabled = true;
+      $('btn-update-apply').disabled = true;
     }
   });
   await initOnboarding();
