@@ -79,7 +79,10 @@
           const row = document.createElement('div');
           row.className = 'dshd-row';
           row.setAttribute('role', 'note');
-          row.style.opacity = '0.55';
+          // 三级弱化文字色（不用 opacity：与其他弱化微文字同规，见
+          // common.css --dshd-text-faint）；role=note 纯提示行：不参与
+          // .dshd-row 键盘导航（见 menu.js rows()）
+          row.style.color = 'var(--dshd-text-faint)';
           row.style.cursor = 'default';
           row.textContent = dshdT('menuLoadFailed');
           list.append(row);

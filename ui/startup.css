@@ -112,7 +112,7 @@ body.window-inactive .card { opacity: .78; }
 .error-link { background: none; border: none; padding: 2px 6px; color: var(--dshd-text-dim); font-size: var(--dshd-fs-sm); font-family: inherit; cursor: pointer; border-radius: 4px; }
 .error-link:hover { color: var(--dshd-text); background: var(--dshd-hover); }
 .error-link:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
-.error-link-sep { color: var(--dshd-text-dim); opacity: .6; }
+.error-link-sep { color: var(--dshd-text-faint); }
 .service-choice-box {
   width: 100%; margin-top: 18px; padding: 16px;
   display: flex; flex-direction: column; gap: 14px;
@@ -178,7 +178,7 @@ body.window-inactive .card { opacity: .78; }
 .ob-section { display: flex; flex-direction: column; gap: 10px; }
 /* 第二组起带细分隔线（dsh 设置分组语言）：凭据/偏好设置边界一目了然 */
 .ob-section + .ob-section { border-top: 1px solid var(--dshd-line); padding-top: 12px; }
-.ob-sec-label { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); opacity: .85; letter-spacing: .8px; text-transform: uppercase; }
+.ob-sec-label { font-size: var(--dshd-fs-xs); color: var(--dshd-text-faint); letter-spacing: .8px; text-transform: uppercase; }
 .ob-field { display: flex; flex-direction: column; gap: 5px; }
 .ob-label { font-size: var(--dshd-fs-md); color: var(--dshd-text); }
 .ob-input { padding-right: 12px; padding-left: 12px; font-size: var(--dshd-fs-base); }
@@ -190,7 +190,9 @@ body.window-inactive .card { opacity: .78; }
 }
 .ob-switch-row:hover { background: var(--dshd-hover); }
 .ob-switch-row:active { background: var(--dshd-pressed); }
-.ob-switch-row:has(input:disabled) { opacity: .62; cursor: default; }
+/* 行容器禁用档 .8 与控制中心 .srow 同规：行内开关另有自身 .55 档，
+   容器只做轻度弱化（复合后 ≈ .44，仍高于整行压到 .55 的效果） */
+.ob-switch-row:has(input:disabled) { opacity: .8; cursor: default; }
 .ob-switch-row:has(input:disabled):hover { background: transparent; }
 /* 带 hint 描述的开关行（自启/插件）：两行文字顶端对齐 */
 .ob-option-row { align-items: flex-start; }
@@ -224,7 +226,7 @@ body.window-inactive .card { opacity: .78; }
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
   min-width: 140px; margin: 0; padding: 4px; list-style: none;
   border: 1px solid var(--dshd-float-border); border-radius: var(--dshd-r-float);
-  background: var(--dshd-card); color: var(--dshd-text);
+  background: var(--dshd-menu-surface); color: var(--dshd-text);
   box-shadow: var(--dshd-shadow-lv3);
 }
 .dshd-select-list[hidden] { display: none; }

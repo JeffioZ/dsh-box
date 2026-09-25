@@ -32,6 +32,8 @@ body {
 /* 窗口失焦：品牌文字与窗口按钮变暗，与系统窗口失焦标题栏一致；
    class 由 Rust 侧 WindowEvent::Focused 广播驱动 */
 body.window-inactive .brand { color: var(--dshd-chrome-brand-inactive); }
+/* brand-ver 有显式三级弱化色（不再继承 .brand），失焦压暗需单独跟随 */
+body.window-inactive .brand-ver { color: var(--dshd-chrome-brand-inactive); }
 body.window-inactive .tb-btn { color: var(--dshd-chrome-btn-inactive); }
 .titlebar {
   position: relative;
@@ -47,10 +49,12 @@ body.window-inactive .tb-btn { color: var(--dshd-chrome-btn-inactive); }
 }
 .brand { display: inline-flex; align-items: center; gap: 7px; font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: nowrap; }
 .brand-icon { width: 16px; height: 16px; -webkit-user-drag: none; user-drag: none; }
-/* 版本号（DSHBox x.y.z · dsh a.b.c）：品牌文字的弱化延续——小一档、
-   数字等宽（更新时不跳动）；dsh 未安装时整段隐藏（A1）。完整环境信息
-   （Node/npm/端口）收进 title 悬停，标题栏只保留稳定事实 */
-.brand-ver { font-size: var(--dshd-fs-xs); opacity: .82; font-variant-numeric: tabular-nums; }
+/* 版本号（DSHBox x.y.z · dsh a.b.c）：品牌文字的弱化延续——小一档 +
+   三级弱化文字色（禁用 opacity 调弱：浅色下会跌破 AA，见
+   common.css --dshd-text-faint 注释）、数字等宽（更新时不跳动）；
+   dsh 未安装时整段隐藏（A1）。完整环境信息（Node/npm/端口）收进
+   title 悬停，标题栏只保留稳定事实 */
+.brand-ver { font-size: var(--dshd-fs-xs); color: var(--dshd-text-faint); font-variant-numeric: tabular-nums; }
 .drag-space { flex: 1; height: 100%; }
 
 
@@ -62,9 +66,9 @@ body.window-inactive .tb-btn { color: var(--dshd-chrome-btn-inactive); }
      220px，改动需同步两处 */
   position: absolute; top: var(--tb-overlay-top); right: 0; width: 220px;
   box-sizing: border-box; z-index: 10;
-  /* 字体与托盘菜单一致（dsh 菜单条目规格 14px/22px + dsh 字体栈）：
+  /* 字体与托盘菜单一致（dsh 菜单条目规格 fs-base 14px/22px + dsh 字体栈）：
      标题栏页面无基础字号，不显式设置会落到浏览器默认 16px */
-  font: 14px/22px var(--dshd-font);
+  font: var(--dshd-fs-base)/22px var(--dshd-font);
 }
 #main-menu-list { display: flex; flex-direction: column; }
 
@@ -155,7 +159,7 @@ body.window-inactive .bal-chip { opacity: .55; }
 .bal-chip .dot.err { background: var(--dshd-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dshd-error) 16%, transparent); }
 .bal-chip .dot.neutral { background: var(--dshd-text-dim); box-shadow: none; }
 .bal-chip #balance-text { position: relative; top: var(--dshd-text-opt-shift, 0px); }
-.bal-chip.low-warning #balance-text { color: var(--dshd-warning); }
+.bal-chip.low-warning #balance-text { color: var(--dshd-warning-text); }
 .bal-chip.low-critical #balance-text { color: var(--dshd-error-text); }
 
 /* macOS：系统红绿灯悬浮于左侧，标题栏内容让位 */

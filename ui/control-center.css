@@ -63,7 +63,7 @@ body {
 .nav-item svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 /* 与 .dshd-sep 同规格：border-top 技法（相位恒定，见 common.css 注释） */
 .nav-sep { height: 0; margin: 4px 12px; border-top: 1px solid var(--dshd-line); }
-.nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); opacity: .6; }
+.nav-ver { margin-top: auto; padding: 12px 10px 2px; font-size: var(--dshd-fs-xs); color: var(--dshd-text-faint); }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* 每次打开弹窗都会程序化聚焦标题：压掉全部焦点环。标题是非交互的
    落点（aria-labelledby 已保障读屏语境），点击/聚焦闪出蓝框只造成
@@ -152,7 +152,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .about .tag { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); margin-top: -2px; }
 .about .ver-row { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .about #about-check { margin-top: 4px; }
-.about .cp { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); margin-top: 10px; opacity: .7; }
+.about .cp { font-size: var(--dshd-fs-xs); color: var(--dshd-text-faint); margin-top: 10px; }
 
 /* —— 插件管理（统一弹窗内） —— */
 .psearch { display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-end; }
@@ -240,7 +240,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-export-btn { display: inline-flex; align-items: center; gap: 4px; border: none; background: transparent; border-radius: var(--dshd-r-sm); color: var(--dshd-text-dim); cursor: pointer; padding: 2px 8px; font: inherit; font-size: var(--dshd-fs-xs); }
 .usage-export-btn svg { width: 12px; height: 12px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .usage-export-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
-.usage-export-btn:disabled { opacity: .35; cursor: default; }
+.usage-export-btn:disabled { opacity: .55; cursor: default; }
 .usage-export-btn:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
 .usage-export-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .usage-export-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 96px; z-index: 30; }
@@ -273,7 +273,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-month-btn { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; border-radius: var(--dshd-r-sm); color: var(--dshd-text-dim); cursor: pointer; padding: 0; font: inherit; }
 .usage-month-btn.usage-month-today { width: auto; padding: 0 8px; font-size: var(--dshd-fs-xs); }
 .usage-month-btn:hover { background: var(--dshd-hover); color: var(--dshd-text); }
-.usage-month-btn:disabled { opacity: .35; cursor: default; }
+.usage-month-btn:disabled { opacity: .55; cursor: default; }
 .usage-month-btn:disabled:hover { background: transparent; color: var(--dshd-text-dim); }
 .usage-month-btn:focus-visible { outline: 2px solid var(--dshd-accent); outline-offset: -2px; }
 .usage-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--dshd-sp-1); width: 100%; }
@@ -299,12 +299,20 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* 白字压在按数据档着色的填色格上，须恒为白（dsh 无对应令牌） */
 .usage-day.today[data-lv]:not([data-lv="0"]) > span:first-child { color: #fff; }
 @media (prefers-color-scheme: light) {
-  /* 浅色主题：lv1/2 格底色贴近白底，白字对比不足 4.5:1——低热度格改深色
-     文字（对比度规则：浅底深字），lv3/4 蓝底仍用白字 */
+  /* 浅色主题：四档蓝底上的白字对比均不足 4.5:1（lv4 最深也仅 3.9:1）——
+     有热度格一律改深色文字（对比度规则：浅底深字，深色文字 5.3~7.4:1）。
+     选择器须保留 :not([data-lv="0"])：与基础白字规则保持同特异性，
+     靠源顺序取胜（去掉会被基础规则反压） */
   .usage-day[data-lv="1"]:not([data-lv="0"]),
-  .usage-day[data-lv="2"]:not([data-lv="0"]) { color: var(--dshd-text); }
+  .usage-day[data-lv="2"]:not([data-lv="0"]),
+  .usage-day[data-lv="3"]:not([data-lv="0"]),
+  .usage-day[data-lv="4"]:not([data-lv="0"]) { color: var(--dshd-text); }
+  /* 今天落在有热度格上：accent 与蓝底的叠加对比仅 ~3:1 且字重已作冗余
+     通道，颜色回归与邻格一致的正文色（深色主题同理恒白，见基础规则） */
   .usage-day.today[data-lv="1"]:not([data-lv="0"]) > span:first-child,
-  .usage-day.today[data-lv="2"]:not([data-lv="0"]) > span:first-child { color: var(--dshd-accent); }
+  .usage-day.today[data-lv="2"]:not([data-lv="0"]) > span:first-child,
+  .usage-day.today[data-lv="3"]:not([data-lv="0"]) > span:first-child,
+  .usage-day.today[data-lv="4"]:not([data-lv="0"]) > span:first-child { color: var(--dshd-text); }
   /* 浅色下有热度格 hover 改为加深（深色主题为提亮）——两个方向都增强
      与格内文字的对比，而非变浅损失对比度 */
   .usage-day[data-lv]:not([data-lv="0"]):hover { filter: brightness(0.92); }
@@ -395,7 +403,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-acc-bar span { display: block; height: 100%; background: var(--usage-accent); border-radius: 3px; transition: width var(--dshd-m-slow) var(--dshd-ease-out); }
 .usage-acc-wv { min-width: 40px; text-align: right; color: var(--dshd-text-dim); font-variant-numeric: tabular-nums; flex: none; }
 /* 窗口重置时间：与进度条左对齐（44 标签宽 + 6 间距） */
-.usage-acc-wreset { margin: -2px 0 0 50px; font-size: var(--dshd-fs-xs); line-height: 16px; color: var(--dshd-text-dim); opacity: .85; }
+.usage-acc-wreset { margin: -2px 0 0 50px; font-size: var(--dshd-fs-xs); line-height: 16px; color: var(--dshd-text-faint); }
 /* stale / 预警标记行 */
 .usage-acc-flags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--dshd-sp-1) var(--dshd-sp-2); }
 .usage-acc-stale { display: inline-flex; align-items: center; gap: 4px; font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); }
@@ -420,7 +428,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   font-size: var(--dshd-fs-xs); line-height: 16px; white-space: nowrap;
 }
 .usage-acc-warn[data-level="warning"] {
-  color: var(--dshd-warning);
+  color: var(--dshd-warning-text);
   border: 1px solid color-mix(in srgb, var(--dshd-warning) 45%, transparent);
   background: color-mix(in srgb, var(--dshd-warning) 10%, transparent);
 }
@@ -488,7 +496,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 .dshd-seg-opt input:focus-visible + span { outline: 2px solid var(--dshd-accent); outline-offset: 1px; }
 .dshd-seg-opt:has(input:disabled) { cursor: default; }
-.dshd-seg-opt input:disabled + span { opacity: .5; cursor: default; }
+.dshd-seg-opt input:disabled + span { opacity: .55; cursor: default; }
 /* 减弱动态效果：分段控件无过渡 */
 @media (prefers-reduced-motion: reduce) {
   .dshd-seg-opt span { transition: none; }
@@ -586,10 +594,12 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere;
   user-select: text; max-height: 180px; overflow: auto;
 }
-/* 不兼容插件标签：警示色（区别于中性的内置标签），同样单行不折行 */
+/* 不兼容插件标签：警示色（区别于中性的内置标签），同样单行不折行。
+   文字用 warning-text 档、着色底与 .usage-acc-warn 警示 pill 同为 10%
+   （16% 时浅色文字对比再降一档且两处警示底不一致） */
 .pitem .pbadge.warn {
-  background: color-mix(in srgb, var(--dshd-warning) 16%, transparent);
-  color: var(--dshd-warning);
+  background: color-mix(in srgb, var(--dshd-warning) 10%, transparent);
+  color: var(--dshd-warning-text);
 }
 /* 检查更新页插件冲突提示条：警示描边 + 文案与操作按钮同行可换行；
    不复用 .msg，避免被 renderUpdateDone 的首行状态选择器误改写 */
@@ -597,7 +607,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--dshd-warning) 45%, transparent);
-  border-radius: var(--dshd-r-md); font-size: var(--dshd-fs-sm); color: var(--dshd-warning);
+  border-radius: var(--dshd-r-md); font-size: var(--dshd-fs-sm); color: var(--dshd-warning-text);
   overflow-wrap: anywhere;
 }
 .conflict-banner .conflict-text { min-width: 0; flex: 1 1 240px; }

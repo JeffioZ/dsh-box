@@ -16,6 +16,13 @@
   --dshd-chrome-brand-inactive: #5f6068;
   --dshd-chrome-btn-inactive: #5b5c66;
   --dshd-card: #353638;
+  /* 菜单/浮层面板底色：dsh 玻璃的「合成等效实色」。dsh 0.1.7 菜面膜为
+     半透明（Windows 默认档深 rgba(67,69,74,.45) / 浅 rgba(248,249,250,.58)）
+     + backdrop-filter；独立窗口无法模糊页面/桌面（见 .dshd-menu-surface 注释），
+     取膜叠典型背景的合成结果作实色贴齐观感——深色 #353638（=卡片档，落在
+     合成色带 #2a2b2e~#36373b 内）、浅色 #f8f9fa（=膜叠 dsh 浅背景 #f7f8fa 的
+     合成值；纯白会比 dsh 原生菜单「更白」一档） */
+  --dshd-menu-surface: #353638;
   /* dsh 字体栈（dsw-font-family）：系统 UI 优先 + 中文回退。
      唯一定义点——各页面与子 webview 内联样式一律 var(--dshd-font)，
      不再复制字面量栈 */
@@ -34,6 +41,11 @@
   --dshd-text: #f9fafb;
   /* 次级文字：dsh label-secondary（深色 bluish-300 #cfd3d6） */
   --dshd-text-dim: #cfd3d6;
+  /* 三级弱化文字（版本脚注/版权行/占位符/分隔符等「在但不抢眼」的微文字）：
+     深色取次级与卡片底之间的档（卡片 #353638 上 5.2:1、overlay 上 5.8:1）。
+     禁止用「dim 色 + opacity」替代：浅色下次级 #61666b 已是中间灰，
+     叠 opacity 必跌破 4.5:1，弱化档必须是实色（浅色值见浅色块） */
+  --dshd-text-faint: #a6a9af;
   --dshd-border: rgba(255, 255, 255, 0.06);
   --dshd-border-strong: #3a3a46;
   /* 浮层表面描边：dsh border-l2 档（深色白 12% / 浅色黑 10%，两主题对称）。
@@ -85,6 +97,11 @@
   --dshd-success: #22c55e;
   --dshd-success-text: #4ed17e;
   --dshd-warning: #f59e0b;
+  /* 警示文字档：文字一律用 -text 档（与 success-text 同规），点/描边/底用基值。
+     深色与基值同档（amber-500 在深底与 10% 着色底均过 4.5）；浅色取 amber-800
+     ——amber-700 基值在 10% 着色底上仅 3.7:1，按 success-text 先例同色相加深
+     （白底 7.1:1 / 10% 着色底 5.6:1） */
+  --dshd-warning-text: #f59e0b;
   /* 语义浅底面：dsh 无静态对应档，以各主题 warn/error 色为基的低透明度派生 */
   --dshd-warning-subtle: rgba(245, 158, 11, 0.13);
   --dshd-error-subtle: rgba(242, 90, 90, 0.10);
@@ -112,10 +129,12 @@
     0 4px 12px rgba(0, 0, 0, .22), 0 12px 32px rgba(0, 0, 0, .32);
   --dshd-shadow-lv3: var(--dshd-shadow-lv3-cali);
 
-  /* 字号层级：全 UI 唯一字号来源，8 档整步进（禁止半步字号）。
+  /* 字号层级：全 UI 唯一字号来源，8 档整步进（禁止半步字号与字面量，
+     font 简写用 var(--dshd-fs-*) 引用）。
      角色：2xs=微型徽标/日历星期；xs=弱化标注；sm=次级说明；
      md=卡内正文/强调名；base=界面正文基准（菜单/弹窗条目同款）；
-     lg=数值强调；xl=弹窗/导航标题；2xl=页面主标题 */
+     lg=次要强调（关于页应用名）；xl=弹窗/导航标题与大数值强调；
+     2xl=页面主标题 */
   --dshd-fs-2xs: 10px;
   --dshd-fs-xs: 11px;
   --dshd-fs-sm: 12px;
@@ -179,12 +198,17 @@
     --dshd-chrome-brand-inactive: #a6a6b2;
     --dshd-chrome-btn-inactive: #9c9ca8;
     --dshd-card: #ffffff;
+    /* 菜单/浮层面板：玻璃合成等效色，推导见深色块同名 token 注释 */
+    --dshd-menu-surface: #f8f9fa;
     /* 弹窗面板背景：dsh bg-layer-2 浅色 = bluish-00 纯白（不是浅灰）——
        与 dsh 原生设置弹窗一致 */
     --dshd-overlay: #ffffff;
     --dshd-text: #0f1115;
     /* 次级文字：dsh label-secondary（浅色 bluish-700 #61666b） */
     --dshd-text-dim: #61666b;
+    /* 三级弱化文字：AA 校准实色——白底 5.2:1、浅输入底(#f0f1f5) 4.65:1，
+       均过 4.5 文字线（推导依据见深色块同名 token 注释） */
+    --dshd-text-faint: #686d74;
     /* 分隔线 = border-l1 light（4%），输入/开关 hover 描边 = border-l2 light；
        浮层描边同取 l2 档（10%，与深色对称） */
     --dshd-border: rgba(0, 0, 0, 0.04);
@@ -215,12 +239,13 @@
     --dshd-error-text: #ec1313;
     /* 上游底值 green-500/amber-600 在浅底文字仅 2.2/2.7:1，按 WCAG AA 同色相
        加深派生：success 基础档（dot 等非文本）green-600 过 3:1 非文本线、
-       文档次 green-700 与 warning amber-700 均 4.9:1 过文字线；warning 文字
-       与 dot 共用一档，dot 同步达标；error 保持上游 red-600（贴线 4.4:1，
-       有边框/图标/title 冗余，对齐上游优先） */
+       文字档 green-700 过文字线；warning 基础档（dot/描边）amber-700 4.9:1、
+       文字档 amber-800（10% 着色底上 amber-700 仅 3.7:1，见深色块注释）；
+       error 保持上游 red-600（贴线 4.4:1，有边框/图标/title 冗余，对齐上游优先） */
     --dshd-success: #16a34a;
     --dshd-success-text: #15803d;
     --dshd-warning: #b45309;
+    --dshd-warning-text: #92400e;
     --dshd-warning-subtle: rgba(180, 83, 9, 0.13);
     --dshd-error-subtle: rgba(236, 19, 19, 0.05);
     --dshd-error-border: rgba(236, 19, 19, 0.30);
@@ -243,7 +268,7 @@
 
 .dshd-body {
   margin: 0;
-  font: 14px/22px var(--dshd-font);
+  font: var(--dshd-fs-base)/22px var(--dshd-font);
   color: var(--dshd-text);
   user-select: none;
 }
@@ -259,14 +284,18 @@
 /* 标题栏主菜单与独立托盘菜单的共享表面。窗口承载方式不同，但视觉规格
    必须来自同一处，避免圆角、描边、阴影再次分叉。
    背景保持实色卡片：上游 0.1.7 起 Menu 背景改半透明 rgba + backdrop-filter
-   毛玻璃（--dsw-specific-menu），该视觉依赖菜单背后是页面内容可被模糊；
-   本壳菜单是独立窗口，WebView 的 backdrop-filter 不作用于窗口后的桌面，
-   跟随半透明只会得到无模糊的透明面板（文字与桌面内容混叠），故不跟随
-   该值，保持 --dshd-card 实色档。 */
+   毛玻璃（--dsw-specific-menu，Windows 默认档浅 .58/深 .45），该视觉依赖菜单
+   背后是页面内容可被模糊；本壳菜单是独立窗口，WebView 的 backdrop-filter
+   不作用于窗口后的桌面，跟随半透明只会得到无模糊的透明面板（文字与桌面
+   内容混叠），故不跟随该值，保持 --dshd-card 实色档。注入 dsh 页面的右键
+   菜单（context-menu.js）相反——它运行在页面内，blur 有效，须成对跟随
+   「半透明面 + backdrop-filter」（dsh 升级现场教训：只跟颜色令牌不跟玻璃
+   层，菜单变成无模糊的透明面板）。 */
 .dshd-menu-surface {
   box-sizing: border-box;
   padding: 4px;
-  background: var(--dshd-card);
+  /* 玻璃合成等效实色（--dshd-menu-surface）：不跟 dsh 半透明膜的原因见上 */
+  background: var(--dshd-menu-surface);
   border: 1px solid var(--dshd-float-border);
   border-radius: var(--dshd-r-float);
   box-shadow: var(--dshd-shadow-lv3);
@@ -470,7 +499,9 @@
   transition: var(--dshd-anim-state);
   user-select: text;
 }
-.dshd-input::placeholder { color: var(--dshd-text-dim); opacity: .72; }
+/* 占位符：三级弱化文字档（dim+opacity 会在浅色输入底跌破 4.5:1，见
+   --dshd-text-faint 注释） */
+.dshd-input::placeholder { color: var(--dshd-text-faint); }
 .dshd-input:hover:not(:disabled):not(:focus) {
   border-color: var(--dshd-hover-border);
   background: var(--dshd-input-hover);
