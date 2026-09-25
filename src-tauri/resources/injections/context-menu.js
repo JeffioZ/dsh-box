@@ -17,6 +17,11 @@ var css = [
   // 长条目自动撑宽
   '.__dshd_cm{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
   'background:var(--dsw-specific-menu,#353638);',
+  // 毛玻璃层：dsh 0.1.7 起菜单面改半透明（浅 rgba(.58)/深 rgba(.45)），上游
+  // MenuSurface.module.css 配套 backdrop-filter: var(--dsw-menu-backdrop-filter)
+  // （blur(40px) saturate(150%)）。本菜单运行在页面内，可正常模糊页面内容，
+  // 故跟随原生玻璃观感；旧版 dsh 菜单面为实色，blur 无视觉效果，无害
+  'backdrop-filter:var(--dsw-menu-backdrop-filter,blur(40px) saturate(150%));',
   // 描边：基础档沿用 dsh inverted（浅色=透明、深色=白 6%，与改前一致）；
   // dsh 深色主题下升级 border-l2 档——深色下阴影柔光几乎不可见，由描边承担
   // 分离（dsh 上游 elevation 体系结论），浮层落在同色卡片上时白 6% 不够用。
@@ -75,6 +80,8 @@ var css = [
   'padding:6px 10px;border-radius:7px;pointer-events:none;white-space:nowrap;',
   'font:12px/18px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif);',
   'color:var(--dsw-alias-label-primary,#f9fafb);background:var(--dsw-specific-menu,#353638);',
+  // 与菜单面同一玻璃组合（半透明 + backdrop-filter），浮在聊天内容上保持可读
+  'backdrop-filter:var(--dsw-menu-backdrop-filter,blur(40px) saturate(150%));',
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.08));',
   'box-shadow:var(--dsw-shadow-lv2,0 6px 18px rgba(0,0,0,.28));animation:dshd-toast-in .1s ease-out;}',
   '.__dshd_cm_toast.__dshd_cm_error{border-color:var(--dsw-alias-state-error,#e85c5c);}',
