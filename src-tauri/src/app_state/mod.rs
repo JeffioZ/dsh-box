@@ -1126,6 +1126,23 @@ mod tests {
     }
 
     #[test]
+    fn update_done_is_consumed_once_and_clears_progress() {
+        // d90c3fa 的消费制 + 终态清进度：终态一出进度即清（防下一轮轮询把
+        // 终态文案覆盖回旧进度），done 只被读走一次（防检查页反复重建结果区）
+        let state = AppState::new();
+        state.set_check_progress(Some("正在下载…".into()));
+        state.set_update_done(true, Some("更新完成。".into()));
+        assert_eq!(state.check_progress(), None, "终态必须同时清进度");
+        assert_eq!(state.update_done(), Some((true, "更新完成。".to_string())));
+        assert_eq!(state.update_done(), None, "done 只能消费一次");
+        // 新一轮操作重新写进度、再进终态：清进度行为可重复
+        state.set_check_progress(Some("再次下载…".into()));
+        state.set_update_done(false, Some("更新失败".into()));
+        assert_eq!(state.check_progress(), None);
+        assert_eq!(state.update_done(), Some((false, "更新失败".to_string())));
+    }
+
+    #[test]
     fn onboarding_gate_distinguishes_dev_processes_from_internal_navigation() {
         // 开发版无视持久化完成标记，因此每次新进程仍可测试首次设置。
         assert!(onboarding_required_for(true, false, true));

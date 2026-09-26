@@ -214,7 +214,9 @@ fn precreate_sized(app: &AppHandle, size: (f64, f64), initial_pos: Option<(f64, 
             WebviewUrl::App("control-center.html".into()),
         )
         .title(crate::APP_TITLE)
-        .inner_size(dialog_w, dialog_h);
+        .inner_size(dialog_w, dialog_h)
+        // 剪贴板直通（同主窗口）：设置输入框的右键「粘贴」不弹权限框
+        .enable_clipboard_access();
         if let Some((dx, dy)) = initial_pos {
             builder = builder.position(dx, dy);
         }
@@ -890,7 +892,15 @@ pub fn apply_update(app: &AppHandle, which: &str) {
         };
         handle
             .state::<AppState>()
-            .set_update_done(ok, Some(message));
+            .set_update_done(ok, Some(message.clone()));
+        // 终态事件补发：启动页的更新按钮冻结由 update-progress 置位、只听
+        // update-result（dsh 检查路径专属）复位——npm/pwsh/node/node-switch
+        // 只走 done 状态通道，不补发会把启动页按钮冻到页面被导航离开
+        crate::emit_signed(
+            &handle,
+            "update-done",
+            &serde_json::json!({ "ok": ok, "message": message }),
+        );
         // 即时生效的组件（npm/pwsh/node 更新完即运行在新版上）：延迟让
         // 用户读完完成文案后自动重查一次，刷新版本行——否则版本号停在
         // 旧检查快照上，与「已完成」并存成过时信息。需重启生效的

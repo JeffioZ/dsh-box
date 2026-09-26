@@ -441,7 +441,10 @@ pub fn check(app: &AppHandle) -> CheckResult {
     // node：检测“当前实际使用的 Node”（DSHBox 便携优先，其次系统安装的 Node）。
     let node_cfg = config.clone();
     let node_handle = std::thread::spawn(move || {
-        let managed = node_cfg.node_exe().exists();
+        // 真探测而非裸文件存在：解压中断的半成品目录（node.exe 在但缺依赖）
+        // 不算“已在使用”——否则会话内安装失败后「改用内置 Node」入口消失，
+        // 只能重启应用才可达。探测按文件身份缓存，开销可忽略。
+        let managed = runtime::inspect_runtime(node_cfg.node_exe()).is_some();
         let installed = runtime::current_node_version(&node_cfg);
         let (latest_lts, latest_error) = match runtime::latest_lts() {
             Ok(version) => (Some(version), None),
@@ -492,7 +495,7 @@ pub fn check(app: &AppHandle) -> CheckResult {
                 (
                     Some(VersionInfo {
                         installed: installed.unwrap_or_default(),
-                        portable_node: npm_cfg.node_exe().exists(),
+                        portable_node: runtime::inspect_runtime(npm_cfg.node_exe()).is_some(),
                         latest: latest.clone(),
                         update_available,
                         latest_error: None,

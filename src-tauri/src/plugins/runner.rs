@@ -21,16 +21,17 @@ pub(super) static MARKET_PNPM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 /// 调用 dsh CLI 的 plugin 子命令（阻塞至完成，5 分钟超时）。
 fn run_dsh_plugin(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     let config = app.state::<AppState>().config();
-    // 便携 Node 优先，其次系统 Node（与 dsh 服务启动的运行时选择一致）
-    let node = if config.node_exe().exists() {
-        config.node_exe()
-    } else {
-        crate::runtime::find_system_node().ok_or_else(|| {
+    // 便携 Node 优先，其次系统 Node（与 dsh 服务启动的运行时选择一致：
+    // 真探测而非裸文件存在——node-switch 解压中断的半成品目录不该被
+    // spawn；探测按文件身份缓存，CLI 场景开销可忽略）
+    let node = match crate::runtime::inspect_runtime(config.node_exe()) {
+        Some(runtime) => runtime.executable,
+        None => crate::runtime::find_system_node().ok_or_else(|| {
             crate::locale::text(
                 "Node.js 运行时未就绪。",
                 "The Node.js runtime is not ready.",
             )
-        })?
+        })?,
     };
     let mut cmd = std::process::Command::new(&node);
     cmd.arg(config.dsh_entry())

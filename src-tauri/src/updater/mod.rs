@@ -383,6 +383,18 @@ pub fn apply(app: &AppHandle, which: &str) -> Result<(), String> {
         )
         .into());
     }
+    // node-switch / npm 只在服务确实跑着（Ready）时有意义；非 Ready 相位下
+    // 执行，InstallingNode 的相位写入会把启动页从错误/重试视图永久劫持成
+    // 安装视图（boot_loop 阻塞等重试信号，这两个流程结束时无任何相位
+    // 恢复），只能重启应用脱困——dsh/node 更新不受此限（停服-重启的完整
+    // 周期会自行走完相位机）。
+    if matches!(which, "node-switch" | "npm") && state.phase() != BootPhase::Ready {
+        return Err(crate::locale::text(
+            "服务未在运行，请先恢复服务后再执行这项操作。",
+            "The service is not running. Restore it before running this operation.",
+        )
+        .into());
+    }
     if !state.try_begin_update() {
         let msg = crate::locale::text(
             "启动或更新流程正在进行，请稍后再试。",
@@ -640,9 +652,31 @@ fn remap_service_url(url: &str, port: u16) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_app_release_asset, parse_pwsh_metadata, parse_releases_atom, remap_service_url,
-        windows_replace_script, RollbackRecoveryNote,
+        await_pending_backup_cleanup, parse_app_release_asset, parse_pwsh_metadata,
+        parse_releases_atom, remap_service_url, spawn_backup_cleanup, windows_replace_script,
+        RollbackRecoveryNote,
     };
+
+    #[test]
+    fn backup_cleanup_joins_to_completion() {
+        // join-before-next 承诺的可测面：await 返回时删除已实际执行完。
+        // BACKUP_CLEANUP 是进程级单例，全测试组只有本用例触碰它。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-backup-cleanup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("deep")).unwrap();
+        std::fs::write(root.join("deep/file.txt"), b"x").unwrap();
+        spawn_backup_cleanup(root.clone(), "test".to_string());
+        await_pending_backup_cleanup();
+        assert!(!root.exists(), "join 后备份目录必须已删除");
+        // 再次 await（无在途清理）立即返回且不 panic
+        await_pending_backup_cleanup();
+    }
 
     #[test]
     fn rollback_recovery_notes_preserve_distinct_promises() {

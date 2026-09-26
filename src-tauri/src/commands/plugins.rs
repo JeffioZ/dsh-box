@@ -185,7 +185,18 @@ pub fn plugin_resolve_update_conflict(
     let handle = app.clone();
     std::thread::spawn(move || match crate::plugins::remove(&handle, &package) {
         Ok(()) => crate::updater::apply_dsh_update(&handle),
-        Err(e) => handle.state::<AppState>().set_update_done(false, Some(e)),
+        Err(e) => {
+            handle
+                .state::<AppState>()
+                .set_update_done(false, Some(e.clone()));
+            // 终态事件与 control_center 的更新终态同口径：启动页按钮冻结
+            // 只听事件复位，状态通道到不了它
+            crate::emit_signed(
+                &handle,
+                "update-done",
+                &serde_json::json!({ "ok": false, "message": e }),
+            );
+        }
     });
     Ok(())
 }

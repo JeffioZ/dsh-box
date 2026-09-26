@@ -592,6 +592,18 @@ pub(crate) fn install_node_from_archive(
         .into());
     }
 
+    // 安装后真探测：node.exe 存在 ≠ 可运行（归档损坏/拍平错位只会留下空
+    // 壳）。switch/更新路径没有事务重启里 ensure_node 的兜底探测，坏产物
+    // 会以「重启后生效」静默报成功，重启后被隔离回落系统 Node——在这里
+    // 就把真实失败报给用户（新装文件身份必变，探测缓存不会命中旧值）。
+    if inspect_runtime(config.node_exe()).is_none() {
+        return Err(crate::locale::text(
+            "Node.js 安装校验失败：可执行文件无法运行",
+            "Node.js verification failed: the executable does not run",
+        )
+        .into());
+    }
+
     Ok(config.node_exe())
 }
 
