@@ -74,8 +74,11 @@ if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').match
     });
     // 观察目标必须是 document：本段在文档创建时刻执行，彼时
     // documentElement 还是 null（observe 抛错会中止整个初始化脚本——
-    // 2026-09-25 探针实证，浅色主题下深色预设分支才走到这里）
-    dsDarkObs.observe(document, { childList: true });
+    // 2026-09-25 探针实证，浅色主题下深色预设分支才走到这里）。
+    // 且必须带 subtree：body 是 html 的后代，对 document 的无 subtree
+    // childList 观察只能看到 html 本身的插入（彼时 body 仍为 null），
+    // 回调此后不再触发、深色预设永不生效——被遮罩掩盖的静默失效
+    dsDarkObs.observe(document, { childList: true, subtree: true });
   }
 }
 "#;
@@ -158,8 +161,64 @@ fn injected_language() -> String {
     serde_json::to_string(crate::locale::code()).unwrap_or_default()
 }
 
+/// 组装 dsh 页面完整增强脚本（各段注入 + 独立 try 隔离）。独立成函数是
+/// 为了让语法防御测试能对**组装产物**做 node --check——逐段校验测不出
+/// 组装层的破坏（2026-09-26：`//` 注释进入 `\` 续行模板后被拼成单行，
+/// 注释吞掉 try{ 与首段首行，整段 eval 语法错误——恰是 09-19「所有注入
+/// 全灭」故障模式的复刻）。**模板内只能用 `/* */` 块注释**：Rust 的行续行
+/// 不产生换行，`//` 注释会吞到下一段内容为止。
+fn combined_injection_script(
+    protocol_token: &str,
+    language: &str,
+    title: &str,
+    hide_tools: &str,
+) -> String {
+    format!(
+        "(() => {{ \
+         if (window.__dshdInit === 'loading' || window.__dshdInit === 'ready') return; \
+         window.__dshdInit = 'loading'; \
+         window.__dshdProtocolToken = {protocol_token}; \
+         window.__DSHD_LANG = {language}; \
+         try {{ \
+           const t = {title}; \
+           let dshSessionTitle = ''; \
+           const fix = () => {{ \
+             const current = document.title; \
+             const split = current.lastIndexOf(' — '); \
+             if (split > 0) dshSessionTitle = current.slice(0, split); \
+             if (current !== t) document.title = t; \
+           }}; \
+           fix(); \
+           try {{ \
+             const el = document.querySelector('head > title'); \
+             if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
+           }} catch (e) {{}} \
+           /* 每段独立隔离：一段的运行时抛错不得中止同块后续段（09-19 教训 \
+           的运行时补全——node --check 只防语法；外层 catch 会删 \
+           __dshdInit 触发整段重试，对确定性运行时错误同样无效） */ \
+           try {{ {boot_continue} }} catch (e) {{}} \
+           try {{ {edit_context} }} catch (e) {{}} \
+           try {{ {menu} }} catch (e) {{}} \
+           try {{ {heartbeat} }} catch (e) {{}} \
+           try {{ {hide_tools} }} catch (e) {{}} \
+           window.__dshdInit = 'ready'; \
+         }} catch (error) {{ \
+           delete window.__dshdInit; \
+           throw error; \
+         }} finally {{ \
+           delete window.__dshdProtocolToken; \
+         }} \
+         }})();",
+        boot_continue = boot_continue_inject(),
+        edit_context = EDIT_CONTEXT_INJECT,
+        menu = MENU_INJECT,
+        heartbeat = HEARTBEAT_INJECT,
+    )
+}
+
 /// 构造并注入 dsh 页面完整增强脚本。由 page-load 主路径与 navigate 定时
-/// 兜底共用；脚本内部以 __dshdInit 保证同一 document 只安装一次监听器。
+/// 兜底共用；脚本内部以 __dshdInit 保证同一 document 只安装一次监听器，
+/// 各注入段独立 try 隔离——一段运行时抛错不灭后续段。
 pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Result<(), String> {
     let config = app.state::<AppState>().config();
     let url = webview.url().map_err(|error| error.to_string())?;
@@ -177,38 +236,7 @@ pub(crate) fn inject_dsh_page(app: &AppHandle, webview: &tauri::Webview) -> Resu
     } else {
         ""
     };
-    let script = format!(
-        "(() => {{ \
-         if (window.__dshdInit === 'loading' || window.__dshdInit === 'ready') return; \
-         window.__dshdInit = 'loading'; \
-         window.__dshdProtocolToken = {protocol_token}; \
-         window.__DSHD_LANG = {language}; \
-         try {{ \
-           const t = {title}; \
-           let dshSessionTitle = ''; \
-           const fix = () => {{ \
-             const current = document.title; \
-             const split = current.lastIndexOf(' — '); \
-             if (split > 0) dshSessionTitle = current.slice(0, split); \
-             if (current !== t) document.title = t; \
-           }}; \
-           fix(); \
-           const el = document.querySelector('head > title'); \
-           if (el) new MutationObserver(fix).observe(el, {{ childList: true }}); \
-           {boot_continue} {edit_context} {menu} {heartbeat} {hide_tools} \
-           window.__dshdInit = 'ready'; \
-         }} catch (error) {{ \
-           delete window.__dshdInit; \
-           throw error; \
-         }} finally {{ \
-           delete window.__dshdProtocolToken; \
-         }} \
-         }})();",
-        boot_continue = boot_continue_inject(),
-        edit_context = EDIT_CONTEXT_INJECT,
-        menu = MENU_INJECT,
-        heartbeat = HEARTBEAT_INJECT,
-    );
+    let script = combined_injection_script(&protocol_token, &language, &title, hide_tools);
     webview.eval(script).map_err(|error| error.to_string())
 }
 
@@ -248,8 +276,8 @@ pub fn navigate(app: &AppHandle, url: &str) {
         let navigating_to_dsh = is_dsh_url(&u, &app.state::<AppState>().config());
         if navigating_to_dsh {
             // 即使首次注入完全失败，也让心跳监视在超时后触发一次 reload 自愈，
-            // 避免 last_heartbeat=None 导致永久不检查。（版本信息常驻标题栏，
-            // 页面交接的 window.name 只承载进度条相位，由启动页在旧文档内自写）
+            // 避免 last_heartbeat=None 导致永久不检查。（版本信息常驻标题栏；
+            // 进度条不做页面交接——window.name 跨站点被清空，机制已移除）
             app.state::<AppState>().set_heartbeat();
         }
         if let Err(error) = wv.navigate(u) {
@@ -297,25 +325,28 @@ pub fn navigate_to_splash(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        boot_continue_inject, injected_language, is_local_app_url, local_app_entry_url,
-        EDIT_CONTEXT_INJECT, MENU_INJECT,
+        boot_continue_inject, combined_injection_script, injected_language, is_local_app_url,
+        local_app_entry_url, EDIT_CONTEXT_INJECT, HEARTBEAT_INJECT, HIDE_TOOLS_APPLY, MENU_INJECT,
+        PAGE_INIT_SCRIPT,
     };
 
     /// 注入脚本的语法防御：任一段落语法坏会让整段 eval 解析失败——
-    /// 右键菜单、心跳、标题修正、统计隐藏全部静默丢失（2026-09-19 内联
-    /// 多行 SVG 进单引号字符串即此类回归，静默存活四天才定位）。有 node
-    /// 可用时对每段生成物与注入资源做 --check；无 node 的环境跳过（CI
-    /// 与开发机都有 node）。
+    /// 右键菜单、心跳、标题修正等全部静默丢失（2026-09-19 内联多行 SVG
+    /// 进单引号字符串即此类回归，静默存活四天才定位）。有 node 可用时对
+    /// 每段生成物与注入资源做 --check（含内联 r#"…"# 模板段——同属该
+    /// 故障模式）；无 node 的环境跳过（CI 与开发机都有 node）。
     #[test]
     fn injection_scripts_pass_node_syntax_check() {
         let Some(node) = find_node() else {
             eprintln!("node 不可用，跳过注入脚本语法校验");
             return;
         };
-        let segments: [(&str, String); 3] = [
+        let segments: [(&str, String); 5] = [
             ("boot-continue", boot_continue_inject().to_string()),
             ("menu", MENU_INJECT.to_string()),
             ("edit-context", EDIT_CONTEXT_INJECT.to_string()),
+            ("page-init", PAGE_INIT_SCRIPT.to_string()),
+            ("heartbeat", HEARTBEAT_INJECT.to_string()),
         ];
         for (name, script) in segments {
             let file = std::env::temp_dir().join(format!("dshbox-inject-check-{name}.js"));
@@ -343,6 +374,43 @@ mod tests {
             .map(|_| std::path::PathBuf::from("node"))
     }
 
+    /// 组装产物的语法防御：逐段校验测不出组装层的破坏（2026-09-26 现场：
+    /// `//` 注释进入 `\` 续行模板，Rust 行续行不产生换行，注释吞掉 try{ 与
+    /// 首段首行，整段 eval 语法错误——菜单/心跳/遮罩/标题修正全部静默
+    /// 全灭）。对真实组装函数的产物做 --check，模板今后任何拼接层回归
+    /// （注释、括号、占位符错位）都在此处拦截。
+    #[test]
+    fn combined_injection_passes_node_syntax_check() {
+        let Some(node) = find_node() else {
+            eprintln!("node 不可用，跳过注入脚本语法校验");
+            return;
+        };
+        // 两个变体都过：hide_tools 关（空串）/开（样式段进入 try 块）
+        for (name, script) in [
+            (
+                "combined-hide-off",
+                combined_injection_script("\"t\"", "\"zh\"", "\"DSHBox\"", ""),
+            ),
+            (
+                "combined-hide-on",
+                combined_injection_script("\"t\"", "\"zh\"", "\"DSHBox\"", HIDE_TOOLS_APPLY),
+            ),
+        ] {
+            let file = std::env::temp_dir().join(format!("dshbox-inject-check-{name}.js"));
+            std::fs::write(&file, &script).unwrap();
+            let status = std::process::Command::new(&node)
+                .arg("--check")
+                .arg(&file)
+                .status()
+                .unwrap();
+            let _ = std::fs::remove_file(&file);
+            assert!(
+                status.success(),
+                "组装脚本 {name} 语法错误：整段 eval 会静默失效"
+            );
+        }
+    }
+
     /// 内联 SVG 必须是单行：占位符落在 JS 单引号字符串里，跨行即语法
     /// 错误（node --check 防御的第一道快断言，无 node 也生效）。
     #[test]
@@ -364,6 +432,12 @@ mod tests {
 
     fn nospace(text: &str) -> String {
         text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// 比色归一：去空白 + 压掉逗号后的前导零（`rgba(0,0,0,0.1)` 与
+    /// `rgba(0,0,0,.1)` 是同一颜色，两侧书写不同档）。
+    fn css_norm(text: &str) -> String {
+        nospace(text).replace(",0.", ",.")
     }
 
     /// 从 CSS 文本解析 `--token: value;`（取首个匹配）。
@@ -446,6 +520,61 @@ mod tests {
             "遮罩渐变代码漂移"
         );
         assert!(mask.contains("'#191a1f'") && mask.contains("'#edeef4'"));
+
+        // 进度条配色逐值对账：两主题的 accent/accent-hover/border-strong
+        // 令牌 ↔ 遮罩调色板 a1/a2/track（浅色 a2 曾漂移成深色档 #679efe，
+        // 切换瞬间进度条变色，本对账即其拦截器）
+        for css in [&COMMON_CSS[..light_at], &COMMON_CSS[light_at..]] {
+            let accent = css_norm(&css_var(css, "dshd-accent"));
+            let hover = css_norm(&css_var(css, "dshd-accent-hover"));
+            assert!(
+                mask_n.contains(&format!("a1:'{accent}',a2:'{hover}'")),
+                "遮罩进度条渐变端点与令牌漂移：a1 {accent} / a2 {hover}"
+            );
+            let track = css_norm(&css_var(css, "dshd-border-strong"));
+            assert!(
+                mask_n.contains(&format!("track:'{track}'")),
+                "遮罩进度条轨道色与 --dshd-border-strong 漂移：{track}"
+            );
+        }
+        // 启动页侧引用同名令牌（.bar 轨道 / .bar-fill 渐变）——令牌改动须
+        // 双侧联动，这里钉住引用本身
+        assert!(
+            startup_n.contains("background:var(--dshd-border-strong)"),
+            "启动页 .bar 轨道不再引用 --dshd-border-strong"
+        );
+        assert!(
+            startup_n
+                .contains("linear-gradient(90deg,var(--dshd-accent),var(--dshd-accent-hover))"),
+            "启动页 .bar-fill 渐变令牌引用漂移"
+        );
+
+        // 进度条动画逐值：关键帧四停靠点（nospace 后同形）与 1.4s 周期
+        // 双侧对齐（进度条无相位交接——window.name 跨站点被清空，机制已
+        // 移除；两侧周期不一致才是要拦的漂移）。遮罩侧是 JS 源码里两个字面量
+        // 拼接，中缝为 `'+`，按源码形态匹配
+        let css_stops = "0%{transform:translateX(-167%);opacity:0;}".to_string()
+            + "14%{opacity:1;}86%{opacity:1;}"
+            + "100%{transform:translateX(917%);opacity:0;}";
+        let mask_stops = "0%{transform:translateX(-167%);opacity:0;}'+'".to_string()
+            + "14%{opacity:1;}86%{opacity:1;}"
+            + "100%{transform:translateX(917%);opacity:0;}}";
+        assert!(mask_n.contains(&mask_stops), "遮罩 slide 关键帧漂移");
+        assert!(startup_n.contains(&css_stops), "启动页 slide 关键帧漂移");
+        assert!(mask_n.contains("1.4slinearinfinite"), "遮罩进度条周期漂移");
+        assert!(
+            startup_n.contains("slide1.4slinearinfinite"),
+            "启动页进度条周期漂移"
+        );
+
+        // 进度条几何：轨道高 5px / 行程宽 12%
+        assert!(
+            mask_n.contains("height:5px;width:100%"),
+            "遮罩进度条轨道几何漂移"
+        );
+        assert!(mask_n.contains("width:12%"), "遮罩进度条行程宽度漂移");
+        assert!(startup_n.contains("height:5px"), "启动页进度条轨道高度漂移");
+        assert!(startup_n.contains("width:12%"), "启动页进度条行程宽度漂移");
 
         // 末帧/首帧文案逐字一致（i18n.js loading 键 ↔ 遮罩字面量）
         assert!(

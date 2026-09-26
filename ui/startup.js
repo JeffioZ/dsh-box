@@ -201,15 +201,10 @@ function setStatus(phaseOrPayload, message, detail) {
     const fill = $('bar-fill');
     fill.classList.remove('determinate', 'done', 'err');
     fill.style.width = '';
-    // 相位交接：动画当前相位 + 时间戳写入 window.name（旧文档内同步写，
-    // 无竞态；跨导航跨源保留），遮罩以负 animation-delay 续播同一周期，
-    // 进度条从启动页到 dsh 是同一根条。失败静默：退化为遮罩从头播
-    try {
-      const anim = document.getAnimations().find((a) => a.animationName === 'slide');
-      const barPhase = anim && Number.isFinite(anim.currentTime)
-        ? Math.round(anim.currentTime % 1400) : 0;
-      window.name = JSON.stringify({ barPhase, t: Date.now() });
-    } catch (e) { /* 相位交接失败不影响导航 */ }
+    // 进度条不做相位交接（曾以 window.name 传递动画相位，但跨站点导航会
+    // 清空 window.name——启动页与 dsh 恒跨站点，机制从未生效；遮罩从头
+    // 播放 1.4s 周期条在加载过渡中不可辨）。勿用 URL 查询传相位：dsh 的
+    // token 交换只接受精确 GET /?token=，附加参数会破坏鉴权
     window.__TAURI__.core.invoke('startup_transition_done').catch(() => {});
   }
 }
@@ -788,6 +783,17 @@ async function init() {
     // 真错过结果时，后续事件与发现新版的弹窗兜底
     updateInProgress = false;
     renderUpdate(e.payload);
+  });
+  // 非 dsh 组件（npm/pwsh/node/node-switch）的终态只走 done 状态通道，
+  // 不发 update-result——没有本监听时启动页按钮会被 update-progress 冻住
+  // 直到页面被导航离开
+  await dshdListen('update-done', (e) => {
+    if (buffering) return;
+    updateInProgress = false;
+    $('btn-update-check').disabled = false;
+    $('btn-update-apply').disabled = false;
+    const msg = e.payload && e.payload.message;
+    if (msg && !onboardingPendingView()) $('update-text').textContent = msg;
   });
   await dshdListen('update-progress', (e) => {
     if (!buffering && e.payload && e.payload.message) {

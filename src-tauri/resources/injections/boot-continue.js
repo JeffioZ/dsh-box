@@ -1,6 +1,6 @@
 // dsh 文档引导期续接遮罩：dsh 服务就绪后导航切换到的新文档在 JS 引导期是
 // 裸 #root（上游 index.html 无加载壳），整页只有窗口底色。本遮罩复刻启动页
-// boot 态视觉（几何/渐变/文案/进度条相位逐值衔接），dsh 真实应用挂载后
+// boot 态视觉（几何/渐变/文案逐值衔接），dsh 真实应用挂载后
 // 自动退场，观感为同一段加载的帧级延续（启动页就绪不淡出，WebView 跨源
 // 导航保留旧帧直到本遮罩首帧）。
 //
@@ -50,37 +50,12 @@
     return false;
   }
 
-  // 进度条相位交接：启动页就绪放行前把自己的动画相位 + 时间戳写入
-  // window.name（旧文档内同步写，无竞态；跨导航跨源保留）。跨源导航的旧
-  // 文档会持续渲染到新文档首帧才被替换（实测：以响应到达为锚会「往回走」
-  // 一段 CSS 加载时长），因此主锚点是新文档的首次渲染机会——rAF 回调先
-  // 于首帧 paint 执行，以当下时刻重算 delay，误差收敛到一帧以内且只会
-  // 微微超前；内联初值用 performance 的 timeOrigin+responseStart 只作
-  // rAF 未执行时的兜底。数据缺失时退化为从头播放，无新故障面。
-  function barResumeDelay(anchor) {
-    try {
-      var raw = window.name;
-      if (!raw || raw.charAt(0) !== '{') return null;
-      var info = JSON.parse(raw);
-      if (typeof info.barPhase !== 'number' || typeof info.t !== 'number') return null;
-      var elapsed = Math.max(0, anchor - info.t);
-      return -((info.barPhase + elapsed) % 1400);
-    } catch (e) { return null; }
-  }
-
-  // 兜底锚点：最终响应到达时刻（含 303 交换链），≈ commit；仅在 rAF
-  // 不可用时作为内联初值使用
-  function barResponseAnchor() {
-    try {
-      var nav = performance.getEntriesByType
-        && performance.getEntriesByType('navigation')[0];
-      if (nav && typeof nav.responseStart === 'number' && nav.responseStart >= 0
-        && typeof performance.timeOrigin === 'number' && performance.timeOrigin > 0) {
-        return performance.timeOrigin + nav.responseStart;
-      }
-    } catch (e) {}
-    return Date.now();
-  }
+  // 进度条不做相位交接：跨站点导航清空 window.name（WHATWG 2021 起，
+  // Chromium 已实现），启动页（tauri.localhost/localhost:4321）与 dsh
+  // （127.0.0.1:port）恒跨站点——经 window.name 传递动画相位的机制从未
+  // 生效，已于 2026-09-26 整体移除。遮罩进度条从头播放 1.4s 周期，回卷
+  // 在加载过渡中不可辨。勿经 URL 查询传相位（dsh token 交换只接受精确
+  // GET /?token=），如确需交接只能用 URL fragment 通道。
 
   function install() {
     if (document.getElementById(ID)) return;
@@ -94,12 +69,12 @@
       a1: '#5686fe', a2: '#679efe', g1: '#191a1f',
     } : {
       bg: '#f7f8fa', text: '#0f1115', dim: '#61666b', track: 'rgba(0,0,0,.1)',
-      a1: '#4176e6', a2: '#679efe', g1: '#edeef4',
+      // 浅色 a2 是 --dshd-accent-hover 浅色档（#3d63c8），不是深色档的
+      // #679efe——遮罩渐变尾色漂移曾靠 mask_splash_parity_holds 扩面拦截
+      a1: '#4176e6', a2: '#3d63c8', g1: '#edeef4',
     };
     var font = '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",'
       + '"Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif';
-    var barDelayMs = barResumeDelay(barResponseAnchor());
-    var barDelayCss = barDelayMs !== null ? 'animation-delay:' + barDelayMs + 'ms;' : '';
     // 关键帧与 ui/startup.css 的 slide 逐值一致，注入目标文档没有这些定义，
     // 需随遮罩自带
     var style = document.createElement('style');
@@ -138,8 +113,7 @@
       + ';border-radius:999px;overflow:hidden;">'
       + '<div style="height:100%;width:12%;border-radius:999px;'
       + 'background:linear-gradient(90deg,' + c.a1 + ',' + c.a2 + ');'
-      // 相位续接：从启动页进度条的当前周期位置接着走（见 barResumeDelay）
-      + (reduced ? '' : 'animation:__dshd_bc_slide 1.4s linear infinite;' + barDelayCss)
+      + (reduced ? '' : 'animation:__dshd_bc_slide 1.4s linear infinite;')
       + '"></div></div>'
       // 明细行（18px）与按钮行（28px）占位：等高于启动页 .status-detail 的
       // min-height 与 .install-actions 的 dshd-hold——卡片总高与启动页全等，
@@ -148,20 +122,6 @@
       + '<div style="height:28px;width:100%;"></div></div>';
     el.append(card);
     document.body.append(el);
-    // 首帧前校准（主锚点）：rAF 回调先于本遮罩的首次 paint 执行，用当下
-    // 时刻重算 delay——旧文档恰好渲染到这一刻被替换，误差一帧以内且只会
-    // 微微超前（不可察觉）；rAF 未执行时保留内联兜底初值
-    if (!reduced && barDelayMs !== null) {
-      requestAnimationFrame(function () {
-        try {
-          var calibrated = barResumeDelay(Date.now());
-          if (calibrated !== null) {
-            var fill = card.querySelector('[style*="__dshd_bc_slide"]');
-            if (fill) fill.style.animationDelay = calibrated + 'ms';
-          }
-        } catch (e) { /* 校准失败保留兜底初值 */ }
-      });
-    }
     scheduleRemoval(el, card);
   }
 
@@ -270,9 +230,9 @@
     // 触发，按 readyState 直接补判。
     var judgeAfterLoad = function () {
       setTimeout(function () {
-        var root = document.getElementById('root');
-        var stale = !root || root.childElementCount === 0 || bootMounted() === false;
-        if (stale) healStaleDocument();
+        // bootMounted 对「无 #root / 空 #root / 只有 boot 页」都返回 false，
+        // 无需再并列前两项
+        if (!bootMounted()) healStaleDocument();
       }, 2500);
     };
     if (document.readyState === 'complete') judgeAfterLoad();
