@@ -12,7 +12,8 @@
 //!
 //! 本模块按已安装 dsh 的版本选择存储位置（旧版仍读写 settings.yaml，
 //! 向后累积兼容）；写入只落 profile 级（与 dsh 设置表单同层，不钉死用户
-//! 后续在 dsh 界面里的修改）。DSHBox 在 dsh 首启前预写 profile patch 是
+//! 后续在 dsh 界面里的修改；home 级已覆盖同 entry 时显式拒绝，与上游
+//! 设置表单同判）。DSHBox 在 dsh 首启前预写 profile patch 是
 //! 安全的：上游 `initProfile` 幂等，`cordis.patch.yml` 已存在时不覆盖。
 
 use crate::app_state::Config;
@@ -35,10 +36,15 @@ const PATCH_FILENAME: &str = "cordis.patch.yml";
 /// 比较含预发布（`0.1.7-alpha.1` 即算新版）：用户 alpha/next 渠道先于
 /// 正式版拿到新存储，按旧版写入会落到已废除的 settings.yaml。
 pub(crate) fn uses_patch_settings(config: &Config) -> bool {
+    installed_dsh_version(config).is_some_and(|v| is_patch_settings_version(&v))
+}
+
+/// 本地已安装 dsh 的自述版本（包缺失或版本非法 → None）。
+fn installed_dsh_version(config: &Config) -> Option<semver::Version> {
     let pkg = config
         .dsh_dir()
         .join("node_modules/@deepseek-ai/dsh/package.json");
-    let version = std::fs::read_to_string(pkg)
+    std::fs::read_to_string(pkg)
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|json| {
@@ -46,9 +52,23 @@ pub(crate) fn uses_patch_settings(config: &Config) -> bool {
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         })
-        .and_then(|v| semver::Version::parse(&v).ok());
-    let requirement = semver::VersionReq::parse(">=0.1.7-0").expect("static version requirement");
-    version.is_some_and(|v| requirement.matches(&v))
+        .and_then(|v| semver::Version::parse(&v).ok())
+}
+
+/// 新存储的版本地板。必须用 `Version` 的 Ord 比较，不能走
+/// `VersionReq::matches`：semver 的匹配规则限定带预发布的版本只匹配
+/// 同 major.minor.patch 三元组的比较子，`>=0.1.7-0` 会漏掉
+/// `0.1.8-alpha.1`、`0.2.0-rc.1` 等更高版本的预发布（alpha 渠道真实
+/// 存在），届时三路全部误判回已废除的 settings.yaml。
+fn patch_settings_floor() -> semver::Version {
+    static FLOOR: std::sync::OnceLock<semver::Version> = std::sync::OnceLock::new();
+    FLOOR
+        .get_or_init(|| semver::Version::parse("0.1.7-0").expect("static floor version"))
+        .clone()
+}
+
+fn is_patch_settings_version(v: &semver::Version) -> bool {
+    v >= &patch_settings_floor()
 }
 
 /// profile 级 patch 文档路径（dsh 设置表单的写入位置）。
@@ -65,6 +85,16 @@ pub(crate) fn save_profile_patch_field(
     field: &str,
     value: &Value,
 ) -> Result<(), String> {
+    // home 级已有同 entry 的非 insert 行时，profile 级写入在组合上必然被
+    // 覆盖（上游设置表单同场景显式 throw）——报错而不是静默写一个不生效
+    // 的值，否则外壳与 dsh 界面双向漂移且零提示。
+    if home_overrides_entry(config, entry) {
+        return Err(crate::locale::text(
+            "该项设置已被 dsh home 级补丁覆盖（$DSH_HOME/cordis.patch.yml），请在该文件中修改。",
+            "This setting is overridden by the dsh home-level patch ($DSH_HOME/cordis.patch.yml); edit it there.",
+        )
+        .into());
+    }
     let path = profile_patch_path(config);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -72,6 +102,23 @@ pub(crate) fn save_profile_patch_field(
     crate::app_state::update_text_file(&path, |text| {
         patch_set_entry_field(&text, entry, field, value)
     })
+}
+
+/// home 级 patch 文档中是否存在同 entry 的非 insert 行（insert 行的
+/// config 不参与组合，不构成覆盖）。
+fn home_overrides_entry(config: &Config, entry: &str) -> bool {
+    std::fs::read_to_string(home_patch_path(config))
+        .ok()
+        .and_then(|text| serde_saphyr::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value.as_array().map(|rows| {
+                rows.iter().any(|row| {
+                    row.get("insert").is_none()
+                        && row.get("id").and_then(|id| id.as_str()) == Some(entry)
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// home 级 patch 文档路径（组合优先级高于 profile 级）。
@@ -104,16 +151,20 @@ pub(crate) fn entry_config(config: &Config, entry: &str) -> Option<Value> {
 }
 
 /// 从 patch 文档文本提取 `- id: <entry>` 元素的 `config` 子树。
-/// 顶层不是数组、entry 缺失或 config 不是映射时返回 None。
+/// 定位与上游 config-editor 一致：末条非 insert 的同 id 行生效（组合时
+/// 按序整体替换、末行胜；insert 行的 config 不参与组合）。顶层不是
+/// 数组、entry 缺失或 config 不是映射时返回 None。
 pub(crate) fn patch_entry_config(text: &str, entry: &str) -> Option<Value> {
     if text.trim().is_empty() {
         return None;
     }
     let value: Value = serde_saphyr::from_str(text).ok()?;
-    value
-        .as_array()?
-        .iter()
-        .find(|element| element.get("id").and_then(|id| id.as_str()) == Some(entry))?
+    let rows = value.as_array()?;
+    let index = rows.iter().rposition(|element| {
+        element.get("insert").is_none()
+            && element.get("id").and_then(|id| id.as_str()) == Some(entry)
+    })?;
+    rows[index]
         .get("config")
         .filter(|config| config.is_object())
         .cloned()
@@ -204,6 +255,9 @@ type Fields = Spanned<BTreeMap<String, Spanned<Value>>>;
 struct EntryFields {
     id: Option<String>,
     config: Option<Fields>,
+    /// 带 `insert` 键的行是插入指令，其 `config` 不参与组合、不可编辑
+    /// （上游 config-editor 定位同样排除 insert 行）。
+    insert: bool,
 }
 
 impl<'de> serde::Deserialize<'de> for EntryFields {
@@ -222,16 +276,21 @@ impl<'de> Visitor<'de> for EntryFieldsVisitor {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
         let mut id = None;
         let mut config = None;
+        let mut insert = false;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "id" => id = map.next_value()?,
                 "config" => config = map.next_value()?,
+                "insert" => {
+                    insert = true;
+                    let _: IgnoredAny = map.next_value()?;
+                }
                 _ => {
                     let _: IgnoredAny = map.next_value()?;
                 }
             }
         }
-        Ok(EntryFields { id, config })
+        Ok(EntryFields { id, config, insert })
     }
 }
 
@@ -251,12 +310,15 @@ impl<'de> Visitor<'de> for TargetEntry<'_> {
         f.write_str("a patch entry array")
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        // 末条非 insert 的同 id 行生效（上游 findLastIndex 语义）：重复 id
+        // 时改首行会「写成功但组合无效」且无任何报错。
+        let mut found: Option<Spanned<EntryFields>> = None;
         while let Some(element) = seq.next_element::<Spanned<EntryFields>>()? {
-            if element.value.id.as_deref() == Some(self.0) {
-                return Ok(Some(element));
+            if !element.value.insert && element.value.id.as_deref() == Some(self.0) {
+                found = Some(element);
             }
         }
-        Ok(None)
+        Ok(found)
     }
 }
 
@@ -349,10 +411,12 @@ fn validate(
         serde_saphyr::from_str(original).map_err(|_| invalid())?
     };
     let rows = expected.as_array_mut().ok_or_else(invalid)?;
-    match rows
-        .iter_mut()
-        .find(|element| element.get("id").and_then(|id| id.as_str()) == Some(entry))
-    {
+    // 期望构造与写入定位同一语义：改末条非 insert 行；不存在则追加新行。
+    let target = rows.iter().rposition(|element| {
+        element.get("insert").is_none()
+            && element.get("id").and_then(|id| id.as_str()) == Some(entry)
+    });
+    match target.map(|index| &mut rows[index]) {
         Some(element) => {
             let object = element.as_object_mut().ok_or_else(invalid)?;
             match object
@@ -491,7 +555,78 @@ mod tests {
             entry_config(&config, "ui-theme").unwrap()["preference"],
             json!("system")
         );
+        // home 级覆盖后再写 profile 级：显式报错而非静默写一个不生效的值；
+        // 未被覆盖的 entry 照常可写。
+        assert!(
+            save_profile_patch_field(&config, "ui-theme", "preference", &json!("dark")).is_err()
+        );
+        save_profile_patch_field(&config, "locale", "preference", &json!("en")).unwrap();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn version_matrix_for_patch_settings() {
+        let old = ["0.1.6", "0.1.6-alpha.1", "0.1.5"];
+        let new = [
+            "0.1.7",
+            "0.1.7-0",
+            "0.1.7-alpha.1",
+            "0.1.7-rc.1",
+            // 更高版本的预发布也走新存储——VersionReq 的预发布匹配限定
+            // 同三元组，曾把 0.1.8-alpha.1 误判回旧存储（alpha 渠道真实存在）
+            "0.1.8",
+            "0.1.8-alpha.1",
+            "0.1.9-rc.2",
+            "0.2.0-beta.3",
+            "1.0.0",
+        ];
+        for v in old {
+            let v = semver::Version::parse(v).unwrap();
+            assert!(!is_patch_settings_version(&v), "不应判为新存储：{v}");
+        }
+        for v in new {
+            let v = semver::Version::parse(v).unwrap();
+            assert!(is_patch_settings_version(&v), "不应判为旧存储：{v}");
+        }
+    }
+
+    #[test]
+    fn last_non_insert_row_wins_for_read_and_write() {
+        // 手工编辑可能产生重复 id：组合语义末行胜，读写都定位末条
+        let text = "\
+- id: ui-theme
+  config:
+    preference: light
+- id: ui-theme
+  config:
+    preference: dark
+";
+        assert_eq!(
+            patch_entry_config(text, "ui-theme").unwrap()["preference"],
+            json!("dark")
+        );
+        let next = patch_set_entry_field(text, "ui-theme", "preference", &json!("system")).unwrap();
+        // 末条被改写（带引号的写入产物），首条原样保留
+        assert!(next.contains("preference: light\n"));
+        assert!(next.contains("preference: \"system\"\n"));
+        assert_eq!(
+            patch_entry_config(&next, "ui-theme").unwrap()["preference"],
+            json!("system")
+        );
+    }
+
+    #[test]
+    fn insert_rows_are_skipped_and_appended() {
+        // insert 行的 config 不参与组合：读路径视为不存在
+        let text = "- id: ui-theme\n  insert: after\n  config:\n    preference: dark\n";
+        assert!(patch_entry_config(text, "ui-theme").is_none());
+        // 写路径新建独立行，insert 行原样保留
+        let next = patch_set_entry_field(text, "ui-theme", "preference", &json!("light")).unwrap();
+        assert!(next.contains("insert: after"));
+        assert_eq!(
+            patch_entry_config(&next, "ui-theme").unwrap()["preference"],
+            json!("light")
+        );
     }
 
     #[test]

@@ -324,29 +324,37 @@ pub fn start_follow_dsh_settings(app: AppHandle) {
             .to_string(),
     );
     std::thread::spawn(move || {
-        let mut last_mtime = None;
+        let mut last_fingerprint: Vec<Option<std::time::SystemTime>> = Vec::new();
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // 1s 轮询：无变化时每轮只是两次 metadata stat（零解析开销不变），
+            // 把「dsh 界面切主题 → 外壳标题栏/窗口跟随」的最差延迟从 3s
+            // 压到 1s——dsh 自身 HMR 即时生效，3s 轮询让壳层显得明显迟滞
+            std::thread::sleep(std::time::Duration::from_secs(1));
             let state = app.state::<AppState>();
             if state.is_quitting() {
                 return;
             }
             if state.service_ownership().is_external() {
-                last_mtime = None;
+                last_fingerprint.clear();
                 continue;
             }
             let config = state.config();
             // mtime 门控：设置文件集合（按 dsh 版本选择）任一变化才读取解析。
             // 每轮重算路径，dsh 运行中升级（存储迁移）后无需重启外壳。
-            let latest = crate::dsh_settings::watch_paths(&config)
+            // 指纹按「每路径各自 mtime」比对而非取 max：低 mtime 一侧的
+            // 变化（时钟回拨、备份还原）不抬高 max，会漏跟一拍。
+            let fingerprint = crate::dsh_settings::watch_paths(&config)
                 .iter()
-                .filter_map(|path| std::fs::metadata(path).ok())
-                .filter_map(|meta| meta.modified().ok())
-                .max();
-            if last_mtime == latest {
+                .map(|path| {
+                    std::fs::metadata(path)
+                        .ok()
+                        .and_then(|meta| meta.modified().ok())
+                })
+                .collect::<Vec<_>>();
+            if last_fingerprint == fingerprint {
                 continue;
             }
-            last_mtime = latest;
+            last_fingerprint = fingerprint;
             let h = app.clone();
             let _ = app.run_on_main_thread(move || check_dsh_settings_now(&h));
         }
