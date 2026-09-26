@@ -43,12 +43,11 @@ The Windows executable is written to `dist\DSHBox.exe`. For macOS and Linux requ
 |---|---|
 | Works out of the box | Detects or installs Node.js and dsh, and guides Windows users through WebView2 setup when missing |
 | Service lifecycle | OS-assigned port fallback, safe external-dsh attachment, child-process cleanup, watchdog recovery, and page heartbeat restoration |
-| Desktop experience | Custom title/status bars, tray, notifications, window-state persistence, Windows 11 snap-layout flyout (with a Windows 10 fallback), light/dark themes, and Chinese/English UI |
+| Desktop experience | Custom title bar (with balance chip), tray, notifications, window-state persistence, Windows 11 snap-layout flyout (with a Windows 10 fallback), light/dark themes, and Chinese/English UI |
 | Secure updates | Transactional dsh/Node updates with interruption recovery; Windows app updates require an exact release tag and SHA-256 digest verification |
 | Local file menu | Default open, VS Code/Notepad open, reveal in file manager, copy path, and copy UTF-8 contents |
 | Plugin management | Search, install, uninstall, and update through the official `dsh plugin` CLI; first-run built-in plugins are explicitly optional |
 | Usage and balance | Per-day/per-model token aggregation, month heatmap, recent 14 days with model drill-down; provider balance and subscription cards with background monitoring, stale-on-error retention, and low-balance warnings |
-| Model configuration | Typed validation and import/export of custom `llm-pi-ai` routes, with credentials stored separately from settings |
 | Portable mode | Place `portable.txt` next to the Windows exe to keep the shell configuration and runtime in an adjacent `data/` directory; dsh sessions and credentials still use `$DSH_HOME` |
 
 ## Platforms
@@ -69,14 +68,14 @@ Download the matching artifact from [Releases](https://github.com/JeffioZ/dsh-bo
 - macOS: drag the app into Applications. If Gatekeeper blocks it, Control-click the app and choose "Open", or allow it under "System Settings → Privacy & Security".
 - Linux: unpack and run `DSHBox`; install your distribution's WebKitGTK 4.1 dependencies first.
 
-The first launch prepares the runtime (the installation can be cancelled at any time without exiting the app) and then shows the first-run setup page. Every choice can be left at its default or skipped—the DeepSeek API key can also be left blank, and everything can be changed later in Settings:
+The first launch prepares the runtime (the installation can be cancelled at any time without exiting the app) and then shows the first-run setup page. Every choice can be left at its default or skipped—the DeepSeek API key can also be left blank and filled in later in dsh's own settings:
 
 1. The API key is written to dsh's `$DSH_HOME/.credentials.yaml` and never copied into DSHBox's `config.json`.
-2. Language and theme are written to dsh's `settings.yaml`, shared with the official CLI/Web UI.
+2. Language and theme are written to dsh's settings storage (`cordis.patch.yml` on new dsh versions, `settings.yaml` on older ones, selected automatically by the installed version), shared with the official CLI/Web UI.
 3. Launch-at-login uses each platform's native mechanism.
 4. "Install built-in plugins" is checked by default but can be unchecked; when unchecked, nothing is installed automatically.
 
-The key can later be replaced or cleared under "Settings → Service → DeepSeek API key"; when an environment variable provides the key, that section is read-only and marked as externally managed.
+To replace or clear the key later, use dsh's official interface (web settings or CLI); DSHBox's settings dialog does not collect the API key.
 
 ## Configuration and data
 
@@ -109,8 +108,6 @@ Default data root:
   "api_base": "https://api.deepseek.com",
   "language": "zh-CN",
   "hide_tool_calls": false,
-  "hide_stats_line": true,
-  "hide_statusbar": false,
   "hide_balance": false,
   "auto_update_plugins": true,
   "task_notifications": true,
@@ -190,8 +187,9 @@ desktop/
 ├─ ui/                             # bundler-free built-in pages, shared styles, bilingual copy
 │  ├─ index.html + startup.*       # startup page and first-run setup
 │  ├─ control-center.*             # balance/updates/plugins/settings/about
-│  ├─ titlebar.* / statusbar.*     # main-window sub-webviews
+│  ├─ titlebar.*                    # main-window sub-webview (with balance chip)
 │  ├─ tray-menu.html + menu.js     # tray and menu interaction
+│  ├─ edit-context.js              # edit menu for built-in page inputs (undo/redo, clipboard)
 │  └─ common.* + i18n.js           # shared utilities, design tokens, copy
 ├─ src-tauri/
 │  ├─ resources/                   # built-in plugin manifest and page-injection resources
@@ -203,8 +201,7 @@ desktop/
 │     ├─ dsh.rs                    # dsh service start, external attach, watchdog
 │     ├─ updater/                  # checks, platform updates, transactional recovery
 │     ├─ plugins/                  # CLI execution, maintenance policy, manual actions
-│     ├─ model_config/             # model-route parsing, import and export
-│     ├─ usage/                    # usage and balance aggregation, cache, statusbar stats
+│     ├─ usage/                    # usage and balance aggregation, cache, account monitoring
 │     ├─ tray.rs / tray_menu.rs    # system tray and tray-menu window
 │     ├─ webview/                  # navigation boundary, custom protocol, injection
 │     └─ platform/windows/         # Windows-specific WebView2 preflight and snap layout
@@ -219,7 +216,7 @@ For dependency directions and the startup sequence, see the [architecture docume
 DSHBox cooperates with dsh through only three channels:
 
 1. Injecting restricted initialization/menu scripts into the official web page.
-2. Reading session logs and line-level merging writes to `$DSH_HOME/settings.yaml` and `.credentials.yaml`.
+2. Reading session logs and line-level merging writes to dsh's settings storage (`cordis.patch.yml` on new dsh versions, `settings.yaml` on older ones) and `.credentials.yaml`.
 3. Invoking `dsh web` and `dsh plugin ...`.
 
 It does not fork dsh, patch npm packages, change the session format, or reimplement the official web UI. For the full reasoning, see [why a desktop shell](docs/why-desktop.md).

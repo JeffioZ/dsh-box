@@ -30,8 +30,8 @@
 
 ## API Key 或余额不可用
 
-- 在“设置 → 服务管理 → DeepSeek API Key”中填写以 `sk-` 开头的密钥。
-- 环境变量的优先级高于凭据文件。若设置页显示由环境变量管理，请修改 `DSH_BOX_API_KEY` 或 `DEEPSEEK_API_KEY`，然后重启应用。
+- DeepSeek API Key 在首次配置引导时填写，或之后在 dsh 官方界面（Web 设置 / CLI）中配置与更换；DSHBox 的设置弹窗不收取密钥。
+- 环境变量的优先级高于凭据文件。若设置了 `DSH_BOX_API_KEY` 或 `DEEPSEEK_API_KEY`，请修改对应变量后重启应用。
 - 瞬时网络错误会保留上一次余额并标记刷新失败；无效或缺失的密钥不会继续显示旧余额。
 
 ## Windows

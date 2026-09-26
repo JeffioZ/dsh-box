@@ -189,6 +189,7 @@ desktop/
 │  ├─ control-center.*             # 余额/更新/插件/设置/关于
 │  ├─ titlebar.*                    # 主窗口子 WebView（含余额 chip）
 │  ├─ tray-menu.html + menu.js     # 托盘与菜单交互
+│  ├─ edit-context.js              # 内置页输入框编辑菜单（撤销/重做/剪贴板）
 │  └─ common.* + i18n.js           # 共享工具、设计 token、文案
 ├─ src-tauri/
 │  ├─ resources/                   # 内置插件清单与页面注入资源
