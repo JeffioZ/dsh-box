@@ -265,11 +265,12 @@ pub(crate) fn supported_generation(path: &Path) -> bool {
         .is_none_or(|version| version <= MAX_SUPPORTED_GENERATION)
 }
 
-#[cfg(test)]
 /// 按会话 id 定位其真实日志路径（递归枚举，支持嵌套分组目录）。
 ///
-/// 供 `live.rs`（实时 tok/s）与 `notify.rs`（任务完成通知）复用，避免各自
-/// 用 `sessions/<id>/session.jsonl.zstd` 拼接路径而在嵌套目录下失效。
+/// 状态栏移除后仅测试使用（生产侧 notify.rs 走 `usage::list_session_logs`
+/// 枚举）；保留是为了钉住「嵌套分组目录不能直接拼 sessions/<id>/… 路径」
+/// 这个陷阱。
+#[cfg(test)]
 pub(crate) fn session_log_path(config: &Config, session_id: &str) -> Option<PathBuf> {
     list_sessions(config)
         .into_iter()

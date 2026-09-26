@@ -12,10 +12,10 @@ use std::time::Duration;
 use crate::app_state::Config;
 
 /// localhost RPC 专用 Agent（连接复用；无需 TLS）。
-static STATS_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+static RPC_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
 
-fn stats_agent() -> &'static ureq::Agent {
-    STATS_AGENT.get_or_init(|| {
+fn rpc_agent() -> &'static ureq::Agent {
+    RPC_AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(2)))
             .timeout_recv_response(Some(Duration::from_secs(3)))
@@ -63,13 +63,13 @@ fn rpc_once(
     cookie: Option<&str>,
 ) -> RpcReply {
     let url = format!("http://127.0.0.1:{}/api/{method}", config.port);
-    let mut request = stats_agent().post(&url);
+    let mut request = rpc_agent().post(&url);
     if let Some(cookie) = cookie {
         request = request.header("cookie", cookie);
     }
     let resp = match request.send_json(serde_json::json!({
         "type": "client-request",
-        "rpcId": format!("dshd-stats-{}", rpc_seq()),
+        "rpcId": format!("dshd-rpc-{}", rpc_seq()),
         "method": method,
         "payload": payload,
     })) {
@@ -212,8 +212,8 @@ fn rpc_session_list(config: &Config) -> Option<serde_json::Value> {
 /// 空白会话（`sessionListMetadata.blank`，dsh 首启/新开页自动创建、从未
 /// 有用户活动）的 updatedAt 会反超真实会话——dsh 0.1.5 升级首启后正是它
 /// 劫持了兜底选择。因此同级内非空白绝对优先；全部空白
-/// 时保持旧行为（选谁都无统计）。running 仍是最高优先：正在运行的空白
-/// 会话就是用户正在交互的当前会话。
+/// 时保持旧行为（选谁都无用户活动可跟随）。running 仍是最高优先：正在
+/// 运行的空白会话就是用户正在交互的当前会话。
 fn pick_session_item(value: &serde_json::Value) -> Option<&serde_json::Value> {
     let items = value.get("items")?.as_array()?;
     let blank = |item: &serde_json::Value| {

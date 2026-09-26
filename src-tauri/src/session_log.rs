@@ -9,7 +9,7 @@ const MAX_FRAME_DECOMPRESSED: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_DECOMPRESSED: usize = 32 * 1024 * 1024;
 
 /// 返回最近若干个可解码帧（从新到旧）。通知扫描多帧，避免 turn/end 后又
-/// 追加一个很小的状态帧时漏报；实时速率只取第一个即可。
+/// 追加一个很小的状态帧时漏报。
 pub(crate) fn read_tail_frames(path: &Path, limit: usize) -> Result<Vec<String>, String> {
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
     let len = file.metadata().map_err(|error| error.to_string())?.len();
