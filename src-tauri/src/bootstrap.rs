@@ -174,6 +174,12 @@ pub(crate) fn run() {
             // 会停摆（首次设置停留后"卡住不动、恢复时一闪而过"），
             // 标题栏等实时更新的子页面也会滞后
             .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
+            // 原生壳的剪贴板直通：wry 对 clipboard=true 的 webview 自动允许
+            // WebView2 的 CLIPBOARD_READ 权限——注入右键菜单的「粘贴」
+            // （navigator.clipboard.readText）不再弹浏览器式权限确认框，
+            // 也修复了权限被拒后粘贴静默失败（原生应用不应出现该提示，
+            // 2026-09-26 现场反馈）
+            .enable_clipboard_access()
             // Windows 上默认的 drag-drop handler 会禁用页面 HTML5 拖放
             // （破坏 dsh 页面自身的拖放与文件上传插件），显式关闭
             .disable_drag_drop_handler()
@@ -185,8 +191,8 @@ pub(crate) fn run() {
                 }
                 allowed
             })
-            // 完整注入必须跟随每次页面加载：reload 不经过 navigate()，若这里只
-            // 补 hide-stats，右键菜单、标题修正与心跳都会在重载后永久丢失。
+            // 完整注入必须跟随每次页面加载：reload 不经过 navigate()，若这里
+            // 只补单项注入，右键菜单、标题修正与心跳都会在重载后永久丢失。
             // 注入脚本自身幂等，navigate() 的定时重试仅作为加载竞态兜底。
             .on_page_load(move |_window, _payload| {
                 if let Some(webview) = crate::main_webview(&page_load_app) {

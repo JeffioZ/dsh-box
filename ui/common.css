@@ -283,14 +283,15 @@
 
 /* 标题栏主菜单与独立托盘菜单的共享表面。窗口承载方式不同，但视觉规格
    必须来自同一处，避免圆角、描边、阴影再次分叉。
-   背景保持实色卡片：上游 0.1.7 起 Menu 背景改半透明 rgba + backdrop-filter
-   毛玻璃（--dsw-specific-menu，Windows 默认档浅 .58/深 .45），该视觉依赖菜单
-   背后是页面内容可被模糊；本壳菜单是独立窗口，WebView 的 backdrop-filter
-   不作用于窗口后的桌面，跟随半透明只会得到无模糊的透明面板（文字与桌面
-   内容混叠），故不跟随该值，保持 --dshd-card 实色档。注入 dsh 页面的右键
-   菜单（context-menu.js）相反——它运行在页面内，blur 有效，须成对跟随
-   「半透明面 + backdrop-filter」（dsh 升级现场教训：只跟颜色令牌不跟玻璃
-   层，菜单变成无模糊的透明面板）。 */
+   背景不跟随 dsh 玻璃层：上游 0.1.7 起 Menu 背景改半透明 rgba +
+   backdrop-filter 毛玻璃（--dsw-specific-menu，Windows 默认档浅 .58/深
+   .45），该视觉依赖菜单背后是页面内容可被模糊；本壳菜单是独立窗口，
+   WebView 的 backdrop-filter 不作用于窗口后的桌面，跟随半透明只会得到
+   无模糊的透明面板（文字与桌面内容混叠），故改用玻璃合成等效实色
+   （--dshd-menu-surface：半透明膜叠典型底的合成结果，观感与上游玻璃
+   菜单一致）。注入 dsh 页面的右键菜单（context-menu.js）相反——它运行
+   在页面内，blur 有效，须成对跟随「半透明面 + backdrop-filter」（dsh
+   升级现场教训：只跟颜色令牌不跟玻璃层，菜单变成无模糊的透明面板）。 */
 .dshd-menu-surface {
   box-sizing: border-box;
   padding: 4px;

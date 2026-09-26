@@ -114,7 +114,9 @@ body.hover-suspended .tb-btn.close:hover {
    式描边在奇数物理宽按钮里必然跨列发虚，这是整条链的根治 */
 .tb-icon path { vector-effect: non-scaling-stroke; stroke-width: 1.3333px; }
 
-body.window-inactive .bal-chip { opacity: .55; }
+/* 失焦与同排按钮（.tb-btn）同口径用 chrome 失焦实色 token；不用 opacity
+   压暗——浅色下会跌破 4.5:1（弱化文字禁 dim+opacity 的同款约束） */
+body.window-inactive .bal-chip { color: var(--dshd-chrome-btn-inactive); }
 /* 右侧聚簇：chip（覆盖层）+ 菜单 + 窗控。chip 以 absolute right:100% 浮在
    聚簇左缘（拖拽区右端），不参与 flex 布局——数据晚到/宽度变化都不再推移
    右侧按钮（曾致按钮随机时点右跳）；聚簇 relative 同时是 chip 的锚 */

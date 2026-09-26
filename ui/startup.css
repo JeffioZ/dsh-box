@@ -101,7 +101,7 @@ body.window-inactive .card { opacity: .78; }
 .error-msg {
   margin-top: 8px; padding: 8px 10px; border-radius: var(--dshd-r-md); background: rgba(0, 0, 0, .12);
   /* 等宽场景：栈见 common.css --dshd-font-mono（dsh 上游同款，含中文尾防宋体） */
-  font: 12px/1.5 var(--dshd-font-mono);
+  font: var(--dshd-fs-sm)/1.5 var(--dshd-font-mono);
   color: var(--dshd-text-dim); white-space: pre-wrap; overflow-wrap: anywhere;
   max-height: 112px; overflow: auto; user-select: text;
 }

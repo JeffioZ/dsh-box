@@ -16,29 +16,40 @@ var css = [
   // 最小宽 168：比 dsh 卡宽（218）窄，短条目与快捷键列之间的留白更协调，
   // 长条目自动撑宽
   '.__dshd_cm{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
-  'background:var(--dsw-specific-menu,#353638);',
-  // 毛玻璃层：dsh 0.1.7 起菜单面改半透明（浅 rgba(.58)/深 rgba(.45)），上游
+  // 菜单圆角 14px（偏离上游现值 20：同心圆要求 面板半径 − 内边距 = 条目
+  // 半径，14 − 4 = 10 与条目 r10 严格同心，全部菜单统一取舍）
+  // + 字体跟随 dsh（--dsw-font-family）：右键菜单与 dsh 自家浮层同屏出现，
+  // 字体必须与 dsh 原生一致；令牌缺失时回退 dsh 同款系统栈
+  'border-radius:14px;',
+  'font:14px/22px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);',
+  'color:var(--dsw-alias-label-primary,#f9fafb);user-select:none;',
+  'animation:dshd-cm-in .11s ease-out;}',
+  // 玻璃材料层必须下沉到伪元素，不能挂在菜单本体：非 none 的
+  // backdrop-filter 会让元素成为其 fixed/absolute 后代的包含块，而子菜单
+  // （.__dshd_cm_sub 复用本类、position:fixed）挂在菜单内按视口坐标定位，
+  // 挂本体会让它的 fixed 改按菜单盒解析而大幅错位（上游 MenuSurface 同样
+  // 把玻璃下沉到 .material 子层）。::before 已被子菜单悬停桥占用，用 ::after。
+  // z-index:-1：伪元素是最后一个子节点，z-index:auto 的定位盒按树序绘制会
+  // 盖住条目；负 z-index 绘制在普通流内容之下，且菜单本体（fixed +
+  // z-index:2147483000）是 stacking context，-1 不会逃逸到菜单之外。
+  '.__dshd_cm::after{content:"";position:absolute;inset:0;box-sizing:border-box;z-index:-1;',
+  'border-radius:inherit;pointer-events:none;',
+  // 毛玻璃面：dsh 0.1.7 起菜单面改半透明（浅 rgba(.58)/深 rgba(.45)），上游
   // MenuSurface.module.css 配套 backdrop-filter: var(--dsw-menu-backdrop-filter)
   // （blur(40px) saturate(150%)）。本菜单运行在页面内，可正常模糊页面内容，
   // 故跟随原生玻璃观感；旧版 dsh 菜单面为实色，blur 无视觉效果，无害
+  'background:var(--dsw-specific-menu,#353638);',
   'backdrop-filter:var(--dsw-menu-backdrop-filter,blur(40px) saturate(150%));',
   // 描边：基础档沿用 dsh inverted（浅色=透明、深色=白 6%，与改前一致）；
   // dsh 深色主题下升级 border-l2 档——深色下阴影柔光几乎不可见，由描边承担
   // 分离（dsh 上游 elevation 体系结论），浮层落在同色卡片上时白 6% 不够用。
   // 无 dsh 令牌时回退白 12%（内置页菜单同档）
   'border:1px solid var(--dsw-alias-border-inverted,rgba(255,255,255,.06));',
-  // 菜单圆角 14px（偏离上游现值 20：同心圆要求 面板半径 − 内边距 = 条目
-  // 半径，14 − 4 = 10 与条目 r10 严格同心，全部菜单统一取舍）+ shadow-lv3
-  // + 字体跟随 dsh（--dsw-font-family）：右键菜单与 dsh 自家浮层同屏出现，
-  // 字体必须与 dsh 原生一致；令牌缺失时回退 dsh 同款系统栈
-  'border-radius:14px;box-shadow:var(--dsw-shadow-lv3,0 0 1px rgba(0,0,0,.2),0 0 4px rgba(0,0,0,.02),0 12px 32px rgba(0,0,0,.08));',
-  'font:14px/22px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif);',
-  'color:var(--dsw-alias-label-primary,#f9fafb);user-select:none;',
-  'animation:dshd-cm-in .11s ease-out;}',
+  'box-shadow:var(--dsw-shadow-lv3,0 0 1px rgba(0,0,0,.2),0 0 4px rgba(0,0,0,.02),0 12px 32px rgba(0,0,0,.08));}',
   // 深色主题描边升级（必须是独立顶层规则：拼在基础规则块内会被 CSS 嵌套
   // 解析成 & 后代选择器而永不匹配）；body[data-ds-dark-theme] 与 dsh 自家
   // 样式表的深色钩子一致，主题切换时自动跟随
-  'body[data-ds-dark-theme] .__dshd_cm{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.12));}',
+  'body[data-ds-dark-theme] .__dshd_cm::after{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.12));}',
   '@keyframes dshd-cm-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}',
   '.__dshd_cm_i{min-height:40px;padding:8px 10px;border-radius:10px;cursor:default;white-space:nowrap;',
   'display:flex;align-items:center;gap:8px;box-sizing:border-box;',
