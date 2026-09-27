@@ -1,18 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 512 512" role="img" aria-label="dshbox app icon">
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="dshbox app icon">
   <defs>
-    <linearGradient id="dshd-ic-background" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+    <linearGradient id="background" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
       <stop stop-color="#5275F5"/>
       <stop offset="1" stop-color="#354BCB"/>
     </linearGradient>
-    <linearGradient id="dshd-ic-stem-shade" x1="0" y1="148" x2="0" y2="287" gradientUnits="userSpaceOnUse">
+    <linearGradient id="stem-shade" x1="0" y1="148" x2="0" y2="287" gradientUnits="userSpaceOnUse">
       <stop stop-color="#FFFFFF"/>
       <stop offset="1" stop-color="#E9EEFF"/>
     </linearGradient>
-    <linearGradient id="dshd-ic-fold-shade" x1="166" y1="407" x2="287" y2="346" gradientUnits="userSpaceOnUse">
+    <linearGradient id="fold-shade" x1="166" y1="407" x2="287" y2="346" gradientUnits="userSpaceOnUse">
       <stop stop-color="#FFFFFF"/>
       <stop offset="1" stop-color="#E9EEFF"/>
     </linearGradient>
-    <clipPath id="dshd-ic-loop-clip"><path d="M 260 322 L 314 370
+    <clipPath id="loop-clip"><path d="M 260 322 L 314 370
 C 279.333 408 248.667 432 200.667 432
 C 132 432 78 382.667 78 320
 C 78 254 134 200 200.667 200
@@ -27,8 +28,8 @@ C 150 338 170.667 358 197.333 358
 C 220.667 358 240 342.667 260 322 Z"/></clipPath>
   </defs>
   <!-- Brand D: blue-indigo background, editable cubic Bezier geometry. -->
-  <rect id="dshd-ic-tile" width="512" height="512" rx="120" fill="url(#dshd-ic-background)"/>
-  <path id="dshd-ic-loop" d="M 260 322 L 314 370
+  <rect id="tile" width="512" height="512" rx="120" fill="url(#background)"/>
+  <path id="loop" d="M 260 322 L 314 370
 C 279.333 408 248.667 432 200.667 432
 C 132 432 78 382.667 78 320
 C 78 254 134 200 200.667 200
@@ -41,8 +42,8 @@ C 212 262.667 199.333 260 184.667 266
 C 162.667 272.667 150 289.333 150 311.333
 C 150 338 170.667 358 197.333 358
 C 220.667 358 240 342.667 260 322 Z" fill="#FFFFFF"/>
-  <path id="dshd-ic-fold" d="M 151 306 C 140 341 142 377 162 402 C 178 421 191 430 205 432 C 248 430 280 407 314 370 L 260 322 C 243 341 219 358 198 358 C 170 358 150 338 150 313 Z" fill="url(#dshd-ic-fold-shade)" clip-path="url(#dshd-ic-loop-clip)"/>
-  <path id="dshd-ic-stem" d="M 388.667 71.333
+  <path id="fold" d="M 151 306 C 140 341 142 377 162 402 C 178 421 191 430 205 432 C 248 430 280 407 314 370 L 260 322 C 243 341 219 358 198 358 C 170 358 150 338 150 313 Z" fill="url(#fold-shade)" clip-path="url(#loop-clip)"/>
+  <path id="stem" d="M 388.667 71.333
 C 396.667 66 406 68 406 79.333
 L 406 244
 C 406 260.667 401.333 274.667 391.333 285.333
@@ -50,5 +51,5 @@ L 320.667 224
 C 314.667 219.333 312 213.333 312 205.333
 L 312 159.333
 C 312 136.667 320 120.667 339.333 106.667
-L 388.667 71.333 Z" fill="url(#dshd-ic-stem-shade)"/>
+L 388.667 71.333 Z" fill="url(#stem-shade)"/>
 </svg>

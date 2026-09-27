@@ -4,7 +4,11 @@ fn main() {
     // 图标文件来源是 tauri.conf.json 的 bundle.icon（bundle 已激活：CI 用
     // `tauri bundle` 打 macOS dmg；tauri-build 也从中取 .ico 嵌入 exe），列表不能删除。
     println!("cargo:rerun-if-changed=icons/icon.ico");
-    println!("cargo:rerun-if-changed=../assets/brand/deepseek-mark.svg");
+    // 品牌源三件套（应用主图标 + 黑/白托盘单色版）：跟踪源头保链路可追溯，
+    // 产物 PNG/ICO 的重嵌由各自 include/include_bytes 路径自动跟踪
+    println!("cargo:rerun-if-changed=../assets/brand/dshbox-app-icon.svg");
+    println!("cargo:rerun-if-changed=../assets/brand/dshbox-tray-black.svg");
+    println!("cargo:rerun-if-changed=../assets/brand/dshbox-tray-white.svg");
     // tauri-codegen 嵌入 frontendDist（../ui）资源时同样没有跟踪声明：
     // 补上目录级跟踪，改 UI 文件后 release 构建自动重新嵌入资源
     println!("cargo:rerun-if-changed=../ui");

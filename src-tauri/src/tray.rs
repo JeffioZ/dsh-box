@@ -361,40 +361,160 @@ pub fn start_follow_dsh_settings(app: AppHandle) {
     });
 }
 
-/// 按显示器 DPI 选择托盘图标：物理尺寸 1:1 映射
-/// （100%→16px、125%→20px、150%→24px、200%→32px），避免系统缩放导致模糊。
-/// 图标风格与应用图标一致（蓝底圆角方块+白鲸），深浅任务栏均清晰。
+/// 系统任务栏/菜单栏当前是否浅色：决定托盘单色图标用黑版（浅底）还是
+/// 白版（深底）。品牌图标为透明底纯黑/纯白两版，颜色必须跟随**系统**
+/// 主题而非 dsh 应用主题（任务栏底色与 dsh 明暗设定无关）。
+/// - Windows：HKCU Themes\Personalize 的 SystemUsesLightTheme（任务栏跟
+///   系统主题，AppsUseLightTheme 只管应用窗口）；
+/// - macOS：`defaults read -g AppleInterfaceStyle`（键不存在 = 浅色）；
+/// - Linux：gsettings color-scheme 含 dark 则深色。
+///
+/// 任何失败按浅色兜底（黑图标）。运行中的系统主题 / DPI 变化由
+/// start_follow_icon_context 轮询热切，无需重启。
+#[cfg(windows)]
+fn system_taskbar_light() -> bool {
+    use windows_sys::core::w;
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut data as *mut u32 as *mut _,
+            &mut size,
+        )
+    };
+    // 读失败（< Win10 1809 无该键、注册表异常）按浅色兜底，与 macOS/Linux
+    // 分支一致；旧版 Windows 本就只有浅色任务栏，黑标是正确选择
+    rc != ERROR_SUCCESS || data == 1
+}
+
+#[cfg(target_os = "macos")]
+fn system_taskbar_light() -> bool {
+    // 浅色模式无 AppleInterfaceStyle 键（命令失败），深色输出 "Dark"
+    std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .map(|o| {
+            !String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .eq_ignore_ascii_case("dark")
+        })
+        .unwrap_or(true)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn system_taskbar_light() -> bool {
+    // GNOME/兼容 gsettings 的桌面可探明；其余桌面按浅色兜底（黑图标）
+    std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .map(|o| {
+            !String::from_utf8_lossy(&o.stdout)
+                .to_ascii_lowercase()
+                .contains("dark")
+        })
+        .unwrap_or(true)
+}
+
+/// DPI → 托盘物理像素档（100%→16px、125%→20px、150%→24px、200%→32px），
+/// 1:1 映射避免系统缩放导致模糊
+fn tray_size_for_scale(scale: f64) -> u32 {
+    if scale >= 2.0 {
+        32
+    } else if scale >= 1.5 {
+        24
+    } else if scale >= 1.25 {
+        20
+    } else {
+        16
+    }
+}
+
+/// 「任务栏明暗 × 物理尺寸」→ 内嵌图标字节（浅底黑版 / 深底白版，
+/// 透明底单色 SVG 直出，见 scripts/gen-icons.mjs）
+fn tray_bytes(light: bool, size: u32) -> &'static [u8] {
+    match (light, size) {
+        (true, 32) => include_bytes!("../icons/tray-black-32.png"),
+        (true, 24) => include_bytes!("../icons/tray-black-24.png"),
+        (true, 20) => include_bytes!("../icons/tray-black-20.png"),
+        (true, 16) => include_bytes!("../icons/tray-black-16.png"),
+        (false, 32) => include_bytes!("../icons/tray-white-32.png"),
+        (false, 24) => include_bytes!("../icons/tray-white-24.png"),
+        (false, 20) => include_bytes!("../icons/tray-white-20.png"),
+        (false, 16) => include_bytes!("../icons/tray-white-16.png"),
+        _ => unreachable!("size 由 tray_size_for_scale 产生，恒为 16/20/24/32"),
+    }
+}
+
+/// 按显示器 DPI 与系统任务栏明暗选择托盘图标（create() 装配时用一次；
+/// 后续变化由 start_follow_icon_context 热切）。
 fn pick_tray_image(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
+    let light = system_taskbar_light();
     let scale = app
         .get_window(crate::MAIN_WINDOW)
         .and_then(|w| w.scale_factor().ok())
         .unwrap_or(1.0);
-    let bytes: &'static [u8] = if scale >= 2.0 {
-        include_bytes!("../icons/tray-32.png")
-    } else if scale >= 1.5 {
-        include_bytes!("../icons/tray-24.png")
-    } else if scale >= 1.25 {
-        include_bytes!("../icons/tray-20.png")
-    } else {
-        include_bytes!("../icons/tray-16.png")
-    };
-    let size = if scale >= 2.0 {
-        "32"
-    } else if scale >= 1.5 {
-        "24"
-    } else if scale >= 1.25 {
-        "20"
-    } else {
-        "16"
-    };
-    crate::logging::log(&format!("托盘: 图标 {size}px（scale={scale:.2}）"));
-    match tauri::image::Image::from_bytes(bytes) {
+    let size = tray_size_for_scale(scale);
+    let tone = if light { "black" } else { "white" };
+    crate::logging::log(&format!("托盘: 图标 {tone} {size}px（scale={scale:.2}）"));
+    match tauri::image::Image::from_bytes(tray_bytes(light, size)) {
         Ok(image) => Some(image),
         Err(e) => {
-            crate::logging::log(&format!("托盘: 图标 {size}px 解码失败：{e}"));
+            crate::logging::log(&format!("托盘: 图标 {tone} {size}px 解码失败：{e}"));
             None
         }
     }
+}
+
+/// 托盘图标热切：后台复核「系统任务栏明暗 × 主窗口 DPI」，任一变化即换
+/// 图标。选轮询而非系统事件：Windows 的 WM_SETTINGCHANGE 需要自建窗口
+/// 过程，macOS/Linux 无等价广播，而仓库已有 start_follow_dsh_settings 的
+/// 「低频轮询 + 变化才动作」模式可循。Windows 间隔 2s（单次注册表读，
+/// 微秒级），其余平台 5s（defaults/gsettings 子进程查询较贵）。首拍只记录
+/// 不换图——图标已由 create() 按同一输入装好。
+pub fn start_follow_icon_context(app: AppHandle) {
+    std::thread::spawn(move || {
+        let interval = if cfg!(windows) { 2 } else { 5 };
+        let mut last: Option<(bool, u32)> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+            if app.state::<AppState>().is_quitting() {
+                return;
+            }
+            let light = system_taskbar_light();
+            let size = tray_size_for_scale(
+                app.get_window(crate::MAIN_WINDOW)
+                    .and_then(|w| w.scale_factor().ok())
+                    .unwrap_or(1.0),
+            );
+            if last == Some((light, size)) {
+                continue;
+            }
+            let is_initial = last.is_none();
+            last = Some((light, size));
+            if is_initial {
+                continue;
+            }
+            crate::logging::log(&format!(
+                "托盘: 环境变化（任务栏{}、{size}px）→ 换图标",
+                if light { "浅色" } else { "深色" }
+            ));
+            if let Ok(image) = tauri::image::Image::from_bytes(tray_bytes(light, size)) {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Some(tray) = handle.tray_by_id("main-tray") {
+                        let _ = tray.set_icon(Some(image));
+                    }
+                });
+            }
+        }
+    });
 }
 
 fn open_browser(app: &AppHandle) {
@@ -538,4 +658,22 @@ fn quit(app: &AppHandle) {
     // 命令共用 bootstrap::quit_sequence）
     let handle = app.clone();
     std::thread::spawn(move || crate::bootstrap::quit_sequence(&handle));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tray_size_for_scale;
+
+    /// DPI 分档边界：档位值与阈值两侧的落档都必须稳定（热切与装配共用）
+    #[test]
+    fn tray_size_maps_dpi_tiers() {
+        assert_eq!(tray_size_for_scale(1.0), 16);
+        assert_eq!(tray_size_for_scale(1.24), 16);
+        assert_eq!(tray_size_for_scale(1.25), 20);
+        assert_eq!(tray_size_for_scale(1.49), 20);
+        assert_eq!(tray_size_for_scale(1.5), 24);
+        assert_eq!(tray_size_for_scale(1.99), 24);
+        assert_eq!(tray_size_for_scale(2.0), 32);
+        assert_eq!(tray_size_for_scale(2.5), 32);
+    }
 }
