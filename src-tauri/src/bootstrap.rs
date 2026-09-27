@@ -458,7 +458,11 @@ pub(crate) fn run() {
             window::start_save_settle(3000);
 
             match tray::create(app.handle()) {
-                Ok(()) => logging::log("托盘: 已创建"),
+                Ok(()) => {
+                    logging::log("托盘: 已创建");
+                    // 托盘图标热切：跟随系统任务栏明暗与 DPI（低频复核，变化即换）
+                    tray::start_follow_icon_context(app.handle().clone());
+                }
                 Err(e) => logging::log(&format!("托盘: 创建失败：{e}")),
             }
             Ok(())

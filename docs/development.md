@@ -52,13 +52,13 @@ GitHub Actions 在 Windows x64、macOS arm64、Linux x64/arm64 原生任务上�
 
 ## 图标
 
-唯一品牌源是 `assets/brand/deepseek-mark.svg`。修改后运行：
+品牌源三件套在 `assets/brand/`：`dshbox-app-icon.svg`（应用主图标，自带底板与渐变）、`dshbox-tray-black.svg` / `dshbox-tray-white.svg`（浅底/深底托盘单色版）。修改后运行：
 
 ```powershell
 npm run icons
 ```
 
-生成物包括 Tauri PNG/ICO/ICNS、托盘图标和 `ui/assets/app-icon.svg`。不要单独手改某个生成图标。
+生成物包括 Tauri PNG/ICO/ICNS、黑白托盘各 DPI 档和 `ui/assets/app-icon.svg`（含 id 前缀与内在尺寸加工，供 `<img>` 与引导遮罩内联共用）。不要单独手改某个生成图标，也不要给源 SVG 套底板或复用旧缩放参数。
 
 ## 版本与发布
 

@@ -17,7 +17,7 @@ DSHBox 自身采用 MIT License。仓库、构建工具、编译产物和运行�
 
 ## 品牌资源
 
-`assets/brand/deepseek-mark.svg` 是生成应用与托盘图标的品牌源。DeepSeek 名称、标志及相关商标归其权利人所有；本项目的 MIT License 不授予第三方商标权。再分发或改名发行前，应自行确认品牌使用授权与政策。
+应用与托盘图标使用本仓库自有品牌源（`assets/brand/dshbox-app-icon.svg` 与黑白托盘单色版，方案 D · 蓝—靛蓝）。DeepSeek 名称、标志及相关商标归其权利人所有；本项目的 MIT License 不授予第三方商标权。再分发或改名发行前，应自行确认品牌使用授权与政策。
 
 ## dsh-usage-stats
 

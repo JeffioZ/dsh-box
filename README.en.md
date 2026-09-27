@@ -1,7 +1,7 @@
 # DSHBox
 
 <p align="center">
-  <img src="assets/brand/deepseek-mark.svg" width="96" alt="DSHBox" />
+  <img src="assets/brand/dshbox-app-icon.svg" width="96" alt="DSHBox" />
 </p>
 
 <p align="center">

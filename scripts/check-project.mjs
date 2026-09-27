@@ -579,10 +579,14 @@ const pngExpectations = new Map([
   ['src-tauri/icons/128x128.png', [128, 128]],
   ['src-tauri/icons/128x128@2x.png', [256, 256]],
   ['src-tauri/icons/256x256.png', [256, 256]],
-  ['src-tauri/icons/tray-16.png', [16, 16]],
-  ['src-tauri/icons/tray-20.png', [20, 20]],
-  ['src-tauri/icons/tray-24.png', [24, 24]],
-  ['src-tauri/icons/tray-32.png', [32, 32]],
+  ['src-tauri/icons/tray-black-16.png', [16, 16]],
+  ['src-tauri/icons/tray-black-20.png', [20, 20]],
+  ['src-tauri/icons/tray-black-24.png', [24, 24]],
+  ['src-tauri/icons/tray-black-32.png', [32, 32]],
+  ['src-tauri/icons/tray-white-16.png', [16, 16]],
+  ['src-tauri/icons/tray-white-20.png', [20, 20]],
+  ['src-tauri/icons/tray-white-24.png', [24, 24]],
+  ['src-tauri/icons/tray-white-32.png', [32, 32]],
 ]);
 // 图标产物缺失时给可读 fail 项（提示重新生成），而不是 ENOENT 栈
 const readBinaryExisting = (file) => {
@@ -603,8 +607,12 @@ for (const [file, [expectedWidth, expectedHeight]] of pngExpectations) {
     fail(`${file}: PNG 规格异常 (${width}x${height})`);
   }
 }
-if (!read('scripts/gen-icons.mjs').includes("assets', 'brand', 'deepseek-mark.svg")) {
-  fail('图标生成脚本未使用统一品牌源 assets/brand/deepseek-mark.svg');
+// 品牌源三件套（应用主图标 + 黑/白托盘单色版）必须各自由 gen-icons.mjs
+// 读取，不允许退回单一鲸鱼源派生全部图标的旧管线
+for (const brand of ['dshbox-app-icon.svg', 'dshbox-tray-black.svg', 'dshbox-tray-white.svg']) {
+  if (!read('scripts/gen-icons.mjs').includes(`assets', 'brand', '${brand}'`)) {
+    fail(`图标生成脚本未使用品牌源 assets/brand/${brand}`);
+  }
 }
 const ico = readBinaryExisting('src-tauri/icons/icon.ico');
 if (ico !== null && ico.subarray(0, 4).toString('hex') !== '00000100') fail('src-tauri/icons/icon.ico: ICO 文件头异常');
