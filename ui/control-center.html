@@ -14,7 +14,7 @@
   <div id="card" class="dshd-card">
   <nav id="nav" data-i18n-aria-label="navLabel"></nav>
   <div id="main">
-    <div class="dshd-head" data-tauri-drag-region="deep"><h1 class="title" id="dialog-title" tabindex="-1"></h1><button type="button" class="dshd-refresh hidden" id="btn-refresh" data-i18n-title="usageRefresh" data-i18n-aria-label="usageRefresh"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></button><button type="button" class="dshd-x" id="btn-x" data-i18n-title="close" data-i18n-aria-label="close"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div>
+    <div class="dshd-head" data-tauri-drag-region="deep"><h1 class="title" id="dialog-title" tabindex="-1"></h1><!-- btn-refresh 的 title/aria-label 由 JS 动态管理（用量页=刷新，检查页=重新检查/冷却倒计时），不挂 data-i18n-*：语言切换重放静态 i18n 会把倒计时 title 覆写回固定文案 --><button type="button" class="dshd-refresh hidden" id="btn-refresh"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg></button><button type="button" class="dshd-x" id="btn-x" data-i18n-title="close" data-i18n-aria-label="close"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div>
     <div class="body dshd-scroll" id="body"></div>
   </div>
   </div>

@@ -281,6 +281,9 @@ pub(crate) struct Inner {
     check_progress: Option<String>,
     update_done_ok: bool,
     update_done: Option<String>,
+    /// 手动检查更新的冷却戳（检查完成时刻, 检查时的 dsh 通道）。冷却按通道
+    /// 比对豁免：切换通道后的首次手动检查不受上一次冷却限制。
+    check_cooldown: Option<(std::time::Instant, String)>,
     /// 弹窗打开时是否禁用了主窗口（关闭时恢复）。
     main_disabled: bool,
     /// 弹窗生命周期代次：打开/关闭时 +1，挂起的延迟动作据此判断是否过期。
@@ -398,6 +401,7 @@ impl AppState {
             check_progress: None,
             update_done_ok: false,
             update_done: None,
+            check_cooldown: None,
             main_disabled: false,
             dialog_gen: 0,
             pwsh_pending: false,
@@ -1029,6 +1033,15 @@ impl AppState {
     }
     pub fn check_progress(&self) -> Option<String> {
         self.lock_inner().check_progress.clone()
+    }
+    /// 记录手动检查冷却戳（检查完成时刻 + 检查时的 dsh 通道）。
+    pub fn set_check_cooldown(&self, channel: String) {
+        self.lock_inner().check_cooldown = Some((std::time::Instant::now(), channel));
+    }
+    /// 当前冷却戳（检查完成时刻, 检查时的通道）。
+    pub fn check_cooldown(&self) -> Option<(std::time::Instant, String)> {
+        // Instant 是 Copy、String 不是：整元组非 Copy，不能从 MutexGuard 后移出
+        self.lock_inner().check_cooldown.clone()
     }
     pub fn set_update_done(&self, ok: bool, message: Option<String>) {
         let mut g = self.lock_inner();

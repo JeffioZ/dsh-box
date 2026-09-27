@@ -14,6 +14,10 @@ pub struct CheckResult {
     /// 应用自身更新（GitHub Releases）。
     pub app: Option<VersionInfo>,
     pub error: Option<String>,
+    /// 本次检查完成时刻（Unix 秒）。由检查发起方在提交结果时写入，供检查
+    /// 更新页展示「上次检查」；非检查性写入（如更新失败的错误载体）不带。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -340,7 +344,14 @@ pub(crate) fn apply_dsh_update(app: &AppHandle) {
                 .state::<AppState>()
                 .set_update_done(true, Some(done_msg.into()));
             handle.state::<AppState>().set_check_progress(None);
-            let result = check(&handle);
+            let mut result = check(&handle);
+            // 真实检查完成：写入完成时刻并按结果记录手动冷却戳
+            let channel = handle.state::<AppState>().config().dsh_update_channel;
+            crate::control_center::commit_check_result(
+                &handle.state::<AppState>(),
+                &mut result,
+                &channel,
+            );
             handle
                 .state::<AppState>()
                 .set_last_check(Some(result.clone()));

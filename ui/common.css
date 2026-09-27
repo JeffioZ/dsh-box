@@ -658,8 +658,10 @@
 }
 .dshd-toast.enter { opacity: 0; transform: translateY(8px); }
 .dshd-toast.leave { opacity: 0; transform: translateY(-6px); }
-/* 类型不做视觉区分（统一默认文字色）：错误仅以更长的停留时间与
-   关闭按钮体现，避免多色文字观感杂乱 */
+/* 类型不做文字颜色区分（统一默认文字色，避免多色文字观感杂乱）；错误以
+   语义描边 + 常驻停留 + 关闭按钮三通道体现——扫视时描边即错误信号，
+   而文字仍保持中性可读（描边档与 .conflict-banner 的 45% 配方同源） */
+.dshd-toast.err { border-color: color-mix(in srgb, var(--dshd-error-text) 45%, transparent); }
 .dshd-toast-body {
   flex: 1;
   min-width: 0;

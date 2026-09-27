@@ -9,6 +9,14 @@ let currentOpen = null;
 let lastCheckResult = null;
 // 更新源已切换标记：切到检查更新页时强制重查（不用关弹窗重开）
 let dshChannelChanged = false;
+// —— 检查更新页刷新按钮状态（Rust 侧冷却裁决，轮询为权威数据源）——
+// 检查在途（按钮转圈禁用）；冷却剩余秒数（0 = 可查，禁用不转圈）
+let checkBtnChecking = false;
+let checkCooldownLeft = 0;
+// 一次手动检查请求在途：点击到 invoke 返回之间若恰有轮询落点把
+// checkBtnChecking 拉回 false（Rust 尚未写入 progress），按钮会短暂回到
+// 可点态——不拦住连点会借代次机制触发第二次网络检查
+let checkReqPending = false;
 const esc = dshdEsc;
 const $ = (id) => document.getElementById(id);
 const cur = (c) => esc(dshdCurrency(c)) + ' ';
@@ -385,6 +393,19 @@ function localDayKey(ms) {
 // 本地 HH:MM（updated_at 为秒级时间戳；「更新于」与 stale 标记共用）
 function fmtClockTime(sec) {
   return new Date(sec * 1000).toLocaleTimeString(dshdLocale(), { hour: '2-digit', minute: '2-digit' });
+}
+
+// 「上次检查」时间：今天显示 HH:MM，跨天补短日期——裸时分对昨天的检查
+// 会误导成今天（checked_at 为秒级时间戳，来自 Rust 侧 CheckResult）
+function fmtCheckTime(sec) {
+  const date = new Date(sec * 1000);
+  const time = fmtClockTime(sec);
+  if (localDayKey(date.getTime()) === localDayKey(Date.now())) return time;
+  try {
+    return date.toLocaleDateString(dshdLocale(), { month: 'short', day: 'numeric' }) + ' ' + time;
+  } catch (e) {
+    return time;
+  }
 }
 
 // 最近 14 天行日期：今天/昨天语义化，其余本地短日期
@@ -950,6 +971,13 @@ function verHtml(cur, latest, available) {
   }
   return esc(cur) + '<span class="v-ok">' + dshdT('upToDate') + '</span>';
 }
+// 检查错误横幅：conflict-banner 的几何配方换 error 语义色（描边 45% +
+// 语义文字），图标形状与颜色双通道表意
+function checkBannerHtml(text) {
+  return '<div class="check-banner" role="alert">' +
+    dshdIcon('alertOctagon', 'aria-hidden="true"') +
+    '<span class="check-banner-text">' + text + '</span></div>';
+}
 // 通道标签复用设置页文案（稳定版/预览版/尝鲜版），key 缺失时兜底显示 dist-tag 名
 const DSH_CHANNEL_LABEL_KEYS = {
   latest: 'settingsChannelLatest',
@@ -1064,8 +1092,10 @@ function renderCheckResult(r) {
       '<div class="ver" data-trunc-tip' + hint + '>' + esc(installed) + verLabel + '</div></div>' +
       '<span id="u-app"></span></div>';
   }
-  if (r.error) html += '<div class="msg error" role="alert">' + esc(r.error) + '</div>';
-  if (!r.dsh && !r.node && !r.pwsh && !r.app && !r.error) html += '<div class="msg error" role="alert">' + dshdT('checkFailedRetry') + '</div>';
+  // 错误横幅：独立类名 check-banner，绝不复用 .msg——renderProgress/
+  // renderUpdateDone 都以 body.querySelector('.msg') 抢占首行
+  if (r.error) html += checkBannerHtml(esc(r.error));
+  else if (!r.dsh && !r.node && !r.pwsh && !r.app) html += checkBannerHtml(esc(dshdT('checkFailedRetry')));
   body.innerHTML = html;
   if (r.dsh && r.dsh.update_available) updBtn('u-dsh', dshdT('update'), 'dsh', true);
   else if (r.dsh && r.dsh.downgrade_available) updBtn('u-dsh', dshdT('switchVersion', { version: r.dsh.latest }), 'dsh', true);
@@ -1095,14 +1125,28 @@ function renderCheckResult(r) {
   }
   if (r.app && r.app.update_available) updBtn('u-app', dshdT('updateApp'), 'app', false);
   const any = (r.dsh && (r.dsh.update_available || r.dsh.downgrade_available || r.dsh.other_channel)) || (r.node && r.node.update_available) || (r.pwsh && r.pwsh.update_available) || (r.npm && r.npm.update_available) || (r.app && r.app.update_available);
-  if (!any && !r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
-    const message = document.createElement('div');
-    message.className = 'msg';
-    message.setAttribute('role', 'status');
-    // r.app 为空 = GitHub 查询失败：其余全最新也不能宣称「没有可用更新」，
-    // 明确区分部分检查未完成（DSHBox 行内已标注「暂无法获取版本信息」）
-    message.textContent = r.app ? dshdT('noUpdates') : dshdT('noUpdatesPartial');
-    body.append(message);
+  if (!r.error && (r.dsh || r.node || r.pwsh || r.npm || r.app)) {
+    const metaHtml = r.checked_at
+      ? '<span class="check-meta">' + esc(dshdT('checkLastAt', { time: fmtCheckTime(r.checked_at) })) + '</span>'
+      : '';
+    if (!any) {
+      // r.app 为空 = GitHub 查询失败：其余全最新也不能宣称「没有可用更新」，
+      // 明确区分部分检查未完成（DSHBox 行内已标注「暂无法获取版本信息」）
+      const partial = !r.app;
+      const foot = document.createElement('div');
+      foot.className = 'check-foot ' + (partial ? 'warn' : 'ok');
+      foot.setAttribute('role', 'status');
+      foot.innerHTML = dshdIcon(partial ? 'warning' : 'circleCheck', 'aria-hidden="true"') +
+        '<span class="check-foot-text">' + esc(partial ? dshdT('noUpdatesPartial') : dshdT('noUpdates')) + '</span>' + metaHtml;
+      body.append(foot);
+    } else if (metaHtml) {
+      // 有更新可用：行内箭头已说明一切，状态行只保留「上次检查」元信息
+      const foot = document.createElement('div');
+      foot.className = 'check-foot';
+      foot.setAttribute('role', 'status');
+      foot.innerHTML = metaHtml;
+      body.append(foot);
+    }
   }
   // 右上角关闭已够，右下角不再放纯关闭按钮（dsh 原生设置同）
   // 无底部操作区（dsh 设置弹窗无 footer）
@@ -1131,6 +1175,11 @@ function renderPluginConflictBanner() {
   box.id = 'plugin-conflict';
   box.dataset.name = name;
   box.setAttribute('role', 'alert');
+  // 图标 + 文字双通道表意（与 .usage-acc-warn 同约定，不只靠颜色）
+  const icon = document.createElement('span');
+  icon.className = 'conflict-ic';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = dshdIcon('warning', 'focusable="false"');
   const text = document.createElement('span');
   text.className = 'conflict-text';
   text.textContent = dshdT('pluginConflictBanner', { name });
@@ -1167,7 +1216,7 @@ function renderPluginConflictBanner() {
       renderUpdateDone({ ok: false, message: dshdT('operationNotStarted', { message: e }) });
     });
   });
-  box.append(text, btn);
+  box.append(icon, text, btn);
   body.append(box);
 }
 let lastProgress = '';
@@ -1181,6 +1230,9 @@ function renderProgress(message) {
   if (message.lastIndexOf('更新失败', 0) === 0 || message.lastIndexOf('Update failed', 0) === 0) return;
   lastProgress = message;
   const body = $('body');
+  // 重查/更新进行中：结论行与错误横幅随之隐藏（新结果重建时恢复）——
+  // 旧结论与新 spinner 同屏会自相矛盾
+  body.querySelectorAll('.check-foot, .check-banner').forEach((el) => { el.hidden = true; });
   const line = body.querySelector('.msg');
   if (line) {
     // 进度文案更新只改文字节点：innerHTML 重建会销毁 .spin 元素、
@@ -1206,6 +1258,9 @@ function renderUpdateDone(p) {
   // 更新流程结束：此后按钮按结果复位
   updateRunning = false;
   renderNav(openKind);
+  // 终态一出即允许下一轮进度文案渲染：更新后 2s 的自动重查可能复用相同
+  // 的「正在检查更新…」文案，不重置会被 lastProgress 去重拦下
+  lastProgress = '';
   const body = $('body');
   // UAC 预告块（文案 +“继续”）使命已随本次更新结束而完成：移除，
   // 不让禁用态确认按钮残留在结果区下方
@@ -1273,6 +1328,87 @@ function renderUpdateDone(p) {
       box.append(toggle, detail);
     }
   }
+}
+
+// —— 检查更新页刷新按钮（Rust 强制冷却，前端只做状态呈现）——
+// title/aria-label 动态维护：用量页=「刷新」，检查页=「重新检查」/冷却
+// 倒计时（HTML 上不挂 data-i18n-*，语言切换重放静态 i18n 会覆写倒计时）
+function syncRefreshChrome() {
+  const button = $('btn-refresh');
+  if (!button) return;
+  let label = dshdT('usageRefresh');
+  if (openKind === 'check') {
+    if (updateRunning) {
+      // 更新执行中禁用：title 说明原因（复用导航禁用的同款文案）
+      label = dshdT('navUpdateRunning');
+    } else if (checkCooldownLeft > 0 && !checkBtnChecking) {
+      label = dshdT('checkCooldown', { n: checkCooldownLeft });
+    } else {
+      label = dshdT('checkRecheck');
+    }
+  }
+  button.title = label;
+  button.setAttribute('aria-label', label);
+}
+// 按钮四态：更新执行中 > 检查中（转圈）> 冷却（禁用不转圈）> 空闲。
+// checkBtnChecking/checkCooldownLeft 的权威来源是 1.5s 轮询；点击/打开的
+// 乐观值只在轮询到达前桥接
+function applyCheckRefreshButton() {
+  syncRefreshChrome();
+  const button = $('btn-refresh');
+  if (!button) return;
+  if (openKind !== 'check') {
+    // 检查页的冷却/检查态不得泄漏到其它视图：disabled 会吞掉点击，残留
+    // 会让用量页刷新整体失效（含关窗重开路径——__dshdReset 只复位变量不
+    // 动按钮 DOM）。非检查视图一律清除；用量页自身的刷新忙态
+    // （setUsageRefreshBusy 管理的禁用/转圈）不在此处覆盖
+    if (openKind !== 'usage' || !usageRefreshBusy) {
+      button.classList.remove('refreshing');
+      button.removeAttribute('aria-busy');
+      button.disabled = false;
+    }
+    return;
+  }
+  const busy = updateRunning || checkBtnChecking;
+  const cooling = !busy && checkCooldownLeft > 0;
+  button.disabled = busy || cooling;
+  button.classList.toggle('refreshing', checkBtnChecking && !updateRunning);
+  button.toggleAttribute('aria-busy', checkBtnChecking && !updateRunning);
+}
+// 请求一次手动检查并同步按钮（刷新按钮点击与导航触发共用）：
+// 乐观置忙 → 命令返回值即时校正（冷却被拒不转圈、直接进倒计时），
+// 之后由轮询接管（进度到达=真检查中，结果提交=回到冷却/空闲）
+function requestCheckRefresh() {
+  const button = $('btn-refresh');
+  if (button && button.disabled) return;
+  if (checkReqPending) return;
+  checkReqPending = true;
+  checkBtnChecking = true;
+  checkCooldownLeft = 0;
+  // 进度文案与上一轮检查相同（「正在检查更新…」）：不重置会被
+  // renderProgress 的 lastProgress 去重拦下，重查的 spinner 行不出现、
+  // 旧结论行也不隐藏
+  lastProgress = '';
+  applyCheckRefreshButton();
+  invoke('app_dialog_run_check').then((r) => {
+    checkReqPending = false;
+    if (openKind !== 'check') return;
+    if (r && r.status === 'cooldown') {
+      // 冷却被拒：未发起网络请求，直接进倒计时（不转圈）
+      checkBtnChecking = false;
+      checkCooldownLeft = Math.max(1, Math.floor(Number(r.remaining_secs) || 0));
+    } else if (r && r.status === 'updating') {
+      // 更新执行中：禁用交给 updateRunning（轮询 s.updating 置位），不出假转圈
+      checkBtnChecking = false;
+    }
+    // started：保持忙态，轮询以 progress 维持
+    applyCheckRefreshButton();
+  }).catch(() => {
+    checkReqPending = false;
+    if (openKind !== 'check') return;
+    checkBtnChecking = false;
+    applyCheckRefreshButton();
+  });
 }
 
 // —— 关于 ——
@@ -1573,9 +1709,9 @@ function renderCurrent(opts) {
   const k = openKind;
   // 切换视图即清空旧页面的瞬态提示（toast 挂在 document.body，不随内容区销毁）
   dshdToastClearAll();
-  // 刷新按钮仅用量页显示（旧余额页已合并进用量页）
+  // 刷新按钮：用量页与检查更新页共用（检查页带冷却四态，见 applyCheckRefreshButton）
   const refresh = $('btn-refresh');
-  if (refresh) refresh.classList.toggle('hidden', k !== 'usage');
+  if (refresh) refresh.classList.toggle('hidden', k !== 'usage' && k !== 'check');
   if (k === 'usage') {
     renderUsagePage();
   }
@@ -1590,14 +1726,21 @@ function renderCurrent(opts) {
       // 仅导航进入时触发检查（applyOpen 时 Rust 已触发，避免重复网络请求）
       renderCheckLoading();
       dshChannelChanged = false;
-      if (opts && opts.triggerCheck) invoke('app_dialog_run_check').catch(() => {});
+      if (opts && opts.triggerCheck) requestCheckRefresh();
     }
+    // 进入即补拉一轮检查状态（异步，不阻塞渲染）：轮询只在 check 视图拉
+    // 检查数据，在其它视图停留期间的按钮冷却到期/后台重查结果要靠这次
+    // 补拉立即可见——否则首帧用陈旧的冷却值渲染，最长要等 1.5s 才校正
+    pollDialogState();
   } else if (k === 'about') renderAbout((currentOpen && currentOpen.initial) || {});
   else if (k === 'update-prompt') renderUpdatePrompt((currentOpen && currentOpen.initial) || {});
   else if (k === 'app-restart') renderAppRestartConfirm((currentOpen && currentOpen.initial) || {});
   else if (k === 'notice') renderNotice((currentOpen && currentOpen.initial) || {});
   else if (k === 'plugins') renderPlugins();
   else if (k === 'settings') renderSettings();
+  // 刷新按钮 title 随视图刷新（usage/check 两视图都需；check 另含四态，
+  // 非 check 视图 applyCheckRefreshButton 在 title 同步后即返回）
+  applyCheckRefreshButton();
 }
 // 导航切换的内容过渡：旧内容先退场（上浮淡出），再换内容并入场
 // （下浮淡入）。快速连点时重置退场定时器，旧内容重新起退场，不叠加。
@@ -1718,6 +1861,18 @@ function applyOpen(p) {
   // “更新应用”确认弹窗取消返回时，前端残留的 updateRunning=true
   // 会让更新按钮永久卡在禁用（后台并无更新在进行）
   if (p.kind === 'check' && !(p.initial && p.initial.updating)) updateRunning = false;
+  if (p.kind === 'check' && p.initial) {
+    // SWR：载荷携带检查发起前的既有结果——冷却期内的重开直接呈现旧结果，
+    // 不再整页 spinner。仅接受不旧于当前缓存的数据：可见性恢复路径的载荷
+    // 是打开时快照，旧快照不得倒灌覆盖轮询已渲染的新结果
+    const seeded = p.initial.last_check;
+    if (seeded && (!lastCheckResult
+      || Number(seeded.checked_at || 0) >= Number(lastCheckResult.checked_at || 0))) {
+      lastCheckResult = seeded;
+    }
+    checkBtnChecking = !!p.initial.checking;
+    checkCooldownLeft = Math.max(0, Math.floor(Number(p.initial.cooldown_remaining_secs) || 0));
+  }
   document.body.classList.toggle('update-prompt-mode', p.kind === 'update-prompt' || p.kind === 'app-restart' || p.kind === 'notice');
   applyTruncationTips(document);
   renderNav(p.kind);
@@ -1762,6 +1917,8 @@ window.__dshdReset = () => {
   checkStamp = '';
   pwshPromptShown = false;
   updateRunning = false;
+  checkBtnChecking = false;
+  checkCooldownLeft = 0;
   renderNav(openKind);
   pluginApplyStamp = '';
   // 标题由 renderNav 写导航顶部；此处仅清空残留
@@ -1823,6 +1980,12 @@ async function pollDialogState() {
     if (openKind === 'check') {
       const s = await invoke('app_dialog_check_get');
       if (openKind !== 'check') return;
+      // 刷新按钮态每轮刷新（冷却倒计时 title 在此步进）；轮询是
+      // checkBtnChecking/checkCooldownLeft 的权威数据源，点击的乐观值只桥接
+      // 到下一轮（更新执行中的禁用由 updateRunning/s.updating 路径叠加）
+      checkBtnChecking = !!(s && s.progress);
+      checkCooldownLeft = s ? Math.max(0, Math.floor(Number(s.cooldown_remaining_secs) || 0)) : 0;
+      applyCheckRefreshButton();
       const key = JSON.stringify(s);
       if (key !== checkStamp) {
         checkStamp = key;
@@ -1889,11 +2052,11 @@ async function pollDialogState() {
 setInterval(pollDialogState, 1500);
 
 $('btn-x').addEventListener('click', close);
-// 用量页刷新（唯一刷新入口）：先触发 Rust 账户后台全量刷新（失败静默），
-// 再原位重载（旧内容保留作加载占位，数据到达后同任务换装，不整页重建）；
-// 转圈至 usage-accounts-updated 事件到达（至少 900ms 防抖），成功收尾出
-// 轻量确认 toast；命令失败立即静默收尾，事件丢失或后台异常时 30s 超时
-// 兜底（行内提示），期间禁用防连点。
+// 刷新按钮两视图共用：检查更新页=重新检查（Rust 冷却裁决）；用量页=先触发
+// Rust 账户后台全量刷新（失败静默），再原位重载（旧内容保留作加载占位，
+// 数据到达后同任务换装，不整页重建）；转圈至 usage-accounts-updated 事件
+// 到达（至少 900ms 防抖），成功收尾出轻量确认 toast；命令失败立即静默
+// 收尾，事件丢失或后台异常时 30s 超时兜底（行内提示），期间禁用防连点。
 let usageRefreshBusy = false;
 let usageRefreshTimer = null;
 let usageRefreshStart = 0;
@@ -1946,6 +2109,11 @@ function finishUsageRefresh(timedOut, silent) {
   }, wait);
 }
 $('btn-refresh').addEventListener('click', () => {
+  // 检查更新页：点击=重新检查（冷却在 Rust 裁决；禁用态已由四态逻辑兜底）
+  if (openKind === 'check') {
+    requestCheckRefresh();
+    return;
+  }
   if (usageRefreshBusy) return;
   setUsageRefreshBusy(true);
   usageRefreshStart = Date.now();

@@ -758,22 +758,124 @@ pub fn open_check(app: &AppHandle) {
         state.set_last_check(None);
         state.set_update_done(false, None);
     }
+    // SWR 载荷：检查发起前的既有结果随载荷下发——冷却期内的重开直接呈现
+    // 旧结果（前端不再整页 spinner）；checking 表示本次打开是否真的发起了
+    // 网络检查，冷却剩余供刷新按钮首帧即处于正确的禁用态。
+    let last = if updating {
+        None
+    } else {
+        app.state::<AppState>().last_check()
+    };
+    let start = if updating {
+        CheckStart::Updating
+    } else {
+        run_check(app)
+    };
+    let cooldown_secs = match start {
+        CheckStart::Cooldown { remaining_secs } => remaining_secs,
+        _ => 0,
+    };
     show(
         app,
         crate::locale::text("检查更新", "Check for updates"),
         "check",
-        serde_json::json!({ "updating": updating }),
+        serde_json::json!({
+            "updating": updating,
+            "last_check": last,
+            "checking": matches!(start, CheckStart::Started),
+            "cooldown_remaining_secs": cooldown_secs,
+        }),
     );
-    if !updating {
-        run_check(app);
+}
+
+/// 手动检查更新的冷却窗口：分钟级内重复手动检查没有信息增量，且每次检查
+/// 并发请求 npm registry / nodejs.org / GitHub atom 多个端点。
+const CHECK_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// run_check 的启动结果：前端刷新按钮据此即时同步状态，不必等 1.5s 轮询。
+#[derive(serde::Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum CheckStart {
+    /// 已开始（或已并入在途检查的最新代次，完成后按最新配置重跑）。
+    Started,
+    /// 手动冷却中：本次未发起网络请求，既有结果原样保留；
+    /// remaining_secs 后可再次手动检查。
+    Cooldown { remaining_secs: u64 },
+    /// 更新执行中，不允许检查。
+    Updating,
+}
+
+/// 冷却判定（纯逻辑，供单测）：同一通道且未过窗口才有剩余；无戳、通道已
+/// 切换、已过期一律放行（通道豁免让「切通道后重查」不受冷却误拦）。
+pub(crate) fn cooldown_remaining(
+    stamped: Option<(std::time::Instant, String)>,
+    now: std::time::Instant,
+    current_channel: &str,
+) -> std::time::Duration {
+    match stamped {
+        Some((at, channel)) if channel == current_channel => {
+            CHECK_COOLDOWN.saturating_sub(now.saturating_duration_since(at))
+        }
+        _ => std::time::Duration::ZERO,
+    }
+}
+
+/// 检查结果是否计入手动冷却（纯逻辑，供单测）：整体失败（携带 error 或未
+/// 产出任何组件行）不冷却——失败后应允许立即重试。
+fn check_counts_for_cooldown(result: &crate::updater::CheckResult) -> bool {
+    result.error.is_none()
+        && (result.dsh.is_some()
+            || result.node.is_some()
+            || result.pwsh.is_some()
+            || result.npm.is_some()
+            || result.app.is_some())
+}
+
+fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// 提交一次真实检查的完成态：写入完成时刻；结果可用时记录手动冷却戳。
+/// run_check 与 dsh 更新后的版本复核共用（dsh 路径不经 run_check）。
+pub(crate) fn commit_check_result(
+    state: &AppState,
+    result: &mut crate::updater::CheckResult,
+    channel: &str,
+) {
+    result.checked_at = Some(now_epoch_secs());
+    if check_counts_for_cooldown(result) {
+        state.set_check_cooldown(channel.to_string());
     }
 }
 
 /// 触发一次更新检查（导航切到"检查更新"页时调用；弹窗内不重复 show）。
 /// 更新执行中不重置状态、不并发检查（与 open_check 行为一致）。
-pub fn run_check(app: &AppHandle) {
-    if app.state::<AppState>().is_updating() {
-        return;
+/// 手动冷却在一切状态复位之前判定：冷却中的重开/重查保留既有结果与
+/// 时间戳，检查更新页直接呈现旧结果（stale-while-revalidate）。
+pub fn run_check(app: &AppHandle) -> CheckStart {
+    let state = app.state::<AppState>();
+    if state.is_updating() {
+        return CheckStart::Updating;
+    }
+    let channel = state.config().dsh_update_channel;
+    let remaining = cooldown_remaining(state.check_cooldown(), std::time::Instant::now(), &channel);
+    if !remaining.is_zero() {
+        return CheckStart::Cooldown {
+            remaining_secs: remaining.as_secs(),
+        };
+    }
+    run_check_forced(app)
+}
+
+/// 免冷却检查：更新成功后的版本行复核专用（npm/pwsh/node 更新完即运行在
+/// 新版上，必须重查刷新行项——冷却若拦住会让旧版本号与「已完成」并存）。
+pub fn run_check_forced(app: &AppHandle) -> CheckStart {
+    let state = app.state::<AppState>();
+    if state.is_updating() {
+        return CheckStart::Updating;
     }
     // 每次请求都推进代次。已有检查不并发启动，但完成后会发现代次变化并按
     // 最新配置重跑；旧通道的晚到结果因此既不会覆盖，也不会让新请求丢失。
@@ -785,15 +887,19 @@ pub fn run_check(app: &AppHandle) {
         crate::locale::text("正在检查更新…", "Checking for updates…").into(),
     ));
     if CHECKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
+        return CheckStart::Started;
     }
     std::thread::spawn(move || {
         loop {
             let generation = CHECK_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
-            let result = crate::updater::check(&handle);
+            // 检查使用的 dsh 通道在发起时定格：检查期间切换通道时，结果属于
+            // 旧通道，冷却戳也记旧通道——之后按新通道发起的检查被通道比对豁免
+            let channel = handle.state::<AppState>().config().dsh_update_channel;
+            let mut result = crate::updater::check(&handle);
             if CHECK_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 continue;
             }
+            commit_check_result(&handle.state::<AppState>(), &mut result, &channel);
             handle.state::<AppState>().set_last_check(Some(result));
             handle.state::<AppState>().set_check_progress(None);
             CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -810,6 +916,7 @@ pub fn run_check(app: &AppHandle) {
             ));
         }
     });
+    CheckStart::Started
 }
 
 /// 弹窗内点击“更新/安装”：后台执行并写入结果状态。
@@ -908,7 +1015,9 @@ pub fn apply_update(app: &AppHandle, which: &str) {
         // 还会冲掉重启指引
         if ok && matches!(which.as_str(), "npm" | "pwsh" | "node") {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            run_check(&handle);
+            // 免冷却：更新后的版本行复核必须执行，手动冷却若拦住会让旧
+            // 版本号与「已完成」并存（这正是本重查要修的问题）
+            run_check_forced(&handle);
         }
     });
 }
@@ -1143,6 +1252,68 @@ mod tests {
     fn dialog_card_keeps_dsh_size_on_roomy_viewports() {
         assert_eq!(fit_card_width(1280.0), 800.0);
         assert_eq!(fit_card_height(900.0), 800.0);
+    }
+
+    #[test]
+    fn check_cooldown_blocks_same_channel_until_window_ends() {
+        let now = std::time::Instant::now();
+        let stamped = || Some((now, "latest".to_string()));
+        assert_eq!(cooldown_remaining(stamped(), now, "latest"), CHECK_COOLDOWN);
+        // 窗口过半：剩余 = 窗口 − 已耗
+        assert_eq!(
+            cooldown_remaining(
+                stamped(),
+                now + std::time::Duration::from_secs(30),
+                "latest"
+            ),
+            std::time::Duration::from_secs(30)
+        );
+        // 窗口结束即放行
+        assert_eq!(
+            cooldown_remaining(stamped(), now + CHECK_COOLDOWN, "latest"),
+            std::time::Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn check_cooldown_exempt_without_stamp_or_after_channel_switch() {
+        let now = std::time::Instant::now();
+        assert_eq!(
+            cooldown_remaining(None, now, "latest"),
+            std::time::Duration::ZERO
+        );
+        // 通道切换即豁免（戳记录的是检查时的通道，切通道后的首查不受拦）
+        assert_eq!(
+            cooldown_remaining(Some((now, "latest".to_string())), now, "alpha"),
+            std::time::Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn failed_check_result_does_not_start_cooldown() {
+        use crate::updater::CheckResult;
+        // 整体失败（携带 error）：允许立即重试
+        let errored = CheckResult {
+            error: Some("network down".into()),
+            ..Default::default()
+        };
+        assert!(!check_counts_for_cooldown(&errored));
+        // 未产出任何组件行：同样视为失败
+        assert!(!check_counts_for_cooldown(&CheckResult::default()));
+        // 任一组件行存在即计入（组件级 latest_error 不影响整体判定）
+        let usable = CheckResult {
+            app: Some(crate::updater::VersionInfo {
+                installed: "1.4.0".into(),
+                latest: String::new(),
+                update_available: false,
+                latest_error: Some("query failed".into()),
+                downgrade_available: false,
+                portable_node: false,
+                other_channel: None,
+            }),
+            ..Default::default()
+        };
+        assert!(check_counts_for_cooldown(&usable));
     }
 
     #[test]

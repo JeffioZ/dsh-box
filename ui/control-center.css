@@ -146,6 +146,43 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 /* UAC 预告（pwsh 更新）：“继续”按钮与上方文案的纵向间隔沿用 .msg 的
    12px 节奏（相邻可点目标 ≥8px 最低间隔规则）；整块在更新结束时移除 */
 .pwsh-uac .dshd-btn { margin-top: 12px; }
+/* —— 检查更新页状态区 ——
+   独立类名，绝不复用 .msg：renderProgress/renderUpdateDone 都以
+   body.querySelector('.msg') 抢占正文首行，撞名会被进度行覆写。 */
+/* 结论行：图标 + 文案 + 「上次检查」元信息；有更新可用时仅剩元信息段。
+   [hidden] 显式声明：flex 布局会盖过 UA 的 hidden 默认 display:none */
+.check-foot {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 12px; font-size: var(--dshd-fs-sm); line-height: 18px;
+  color: var(--dshd-text-dim);
+}
+.check-foot[hidden] { display: none; }
+.check-foot svg {
+  flex: none; width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* 结论语义色（图标与文字同色，双通道表意）；部分完成走警示档 */
+.check-foot.ok { color: var(--dshd-success-text); }
+.check-foot.warn { color: var(--dshd-warning-text); }
+/* 元信息恒为弱化实色档（不随结论语义变色） */
+.check-foot .check-meta { color: var(--dshd-text-faint); font-variant-numeric: tabular-nums; }
+/* 错误横幅：conflict-banner 的几何配方换 error 语义（45% 描边 + 语义文字）；
+   图标顶对齐首行（多行文案时不错位） */
+.check-banner {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-top: 12px; padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--dshd-error-text) 45%, transparent);
+  border-radius: var(--dshd-r-md);
+  font-size: var(--dshd-fs-sm); line-height: 18px;
+  color: var(--dshd-error-text); overflow-wrap: anywhere;
+}
+.check-banner[hidden] { display: none; }
+.check-banner svg {
+  flex: none; width: 14px; height: 14px; margin-top: 2px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
 .about { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; max-width: 380px; margin: 4px auto 0; }
 .about .about-logo { display: block; }
 .about .nm { font-size: var(--dshd-fs-lg); font-weight: 600; }
@@ -612,6 +649,12 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 }
 .conflict-banner .conflict-text { min-width: 0; flex: 1 1 240px; }
 .conflict-banner .dshd-btn { flex: none; }
+.conflict-banner .conflict-ic { flex: none; display: inline-flex; margin-top: 1px; }
+.conflict-banner .conflict-ic svg {
+  width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
 /* 危险操作按钮（还原等）：语义危险色并与其他按钮分离。
    三档色阶由 --dshd-error 派生（color-mix），深浅主题各自取语义红 */
 .dshd-btn.danger {

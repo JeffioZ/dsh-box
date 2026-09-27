@@ -121,6 +121,8 @@ const DSHD_ICON_PATHS = {
   restart: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path>',
   warning: '<path d="m10.29 3.86 8 13.86a2 2 0 0 1-1.73 3H3.44a2 2 0 0 1-1.73-3l8-13.86a2 2 0 0 1 3.46 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
   clock: '<circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path>',
+  // 检查更新「没有可用更新」结论行：lucide circle-check
+  circleCheck: '<circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path>',
   chevronDown: '<path d="m6 9 6 6 6-6"></path>',
   // —— 菜单条目图标（menu.js ICONS 经 dshdIcon 引用；与 Rust 侧菜单模型
   //    的 icon 字符串耦合的是 ICONS 的键名，不是这里的注册键名）——

@@ -25,6 +25,10 @@ use app::update_app_exe;
 use app::{parse_app_release_asset, windows_replace_script};
 pub(crate) use check::apply_dsh_update;
 pub use check::{check, check_and_report, silent_check, start_periodic_check, CheckResult};
+// VersionInfo 仅测试代码按完整路径引用（CheckResult 公共字段类型），非测试
+// 构建无消费者，门控重导出避免 unused import
+#[cfg(test)]
+pub use check::VersionInfo;
 use dsh_update::update_dsh;
 use node::{switch_to_portable_node, update_node};
 #[cfg(test)]

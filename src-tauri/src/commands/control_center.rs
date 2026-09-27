@@ -216,7 +216,8 @@ pub fn app_dialog_get(
     Ok(app.state::<AppState>().last_dialog())
 }
 
-/// 检查更新弹窗轮询拉取：进度文案 + 检查结果 + 更新完成文案 + UAC 确认状态。
+/// 检查更新弹窗轮询拉取：进度文案 + 检查结果 + 更新完成文案 + UAC 确认状态
+/// + 手动检查冷却剩余（刷新按钮禁用态与倒计时 title 的数据源）。
 #[tauri::command]
 pub fn app_dialog_check_get(
     app: AppHandle,
@@ -225,6 +226,12 @@ pub fn app_dialog_check_get(
     ensure_local_origin(&webview)?;
     let state = app.state::<AppState>();
     let done = state.update_done();
+    let channel = state.config().dsh_update_channel;
+    let cooldown_remaining = crate::control_center::cooldown_remaining(
+        state.check_cooldown(),
+        std::time::Instant::now(),
+        &channel,
+    );
     Ok(serde_json::json!({
         "progress": state.check_progress(),
         "result": state.last_check(),
@@ -232,6 +239,7 @@ pub fn app_dialog_check_get(
         "pwsh_pending": state.pwsh_pending(),
         "updating": state.is_updating(),
         "plugin_conflict": crate::plugins::plugin_update_conflict(&state.config()),
+        "cooldown_remaining_secs": cooldown_remaining.as_secs(),
     }))
 }
 
@@ -256,10 +264,12 @@ pub fn app_dialog_pwsh_cancel(app: AppHandle, webview: tauri::Webview) -> Result
 
 /// 弹窗内导航切到"检查更新"时触发一次检查（不重复 show）。
 #[tauri::command]
-pub fn app_dialog_run_check(app: AppHandle, webview: tauri::Webview) -> Result<(), String> {
+pub fn app_dialog_run_check(
+    app: AppHandle,
+    webview: tauri::Webview,
+) -> Result<crate::control_center::CheckStart, String> {
     ensure_local_origin(&webview)?;
-    crate::control_center::run_check(&app);
-    Ok(())
+    Ok(crate::control_center::run_check(&app))
 }
 
 /// 弹窗关闭（✕/Esc/关闭按钮）。
