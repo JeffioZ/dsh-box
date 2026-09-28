@@ -33,7 +33,7 @@ DSHBox 是本机单用户桌面外壳，不是把不可信网页隔离成沙箱�
 ## 更新与分发
 
 - dsh 与 Node.js 更新使用备份、事务标记和中断恢复；Node.js 归档按 SHASUMS256 校验完整性：校验清单始终优先取自 Node.js 官方（仅几 KB）；mirror 模式下官方清单不可达时才降级使用镜像清单（npmmirror，此时完整性锚点为镜像，与官方校验分属不同信任域），official 仍为默认推荐。首次安装可以取消，已写入的未完成归档会删除。
-- Windows 应用更新从精确版本 tag 读取唯一 Release asset，限制下载地址和大小，写入 `.part`，并在替换前校验 GitHub 提供的 SHA-256 digest。
+- Windows 应用更新从精确版本 tag 解析 Release asset：优先读 release 附带的 sidecar 摘要资产（CI 生成，发布前与 GitHub 计算的 digest 交叉校验；github.com 主机，不受未认证 API 限流影响），缺失时回退 GitHub API 元数据（被限流时提示重置时间与手动下载）。下载地址与大小受限，写入 `.part`，并在替换前校验 SHA-256 digest。
 - digest 能发现传输损坏和附件错配，但它与附件来自同一 GitHub Release 信任域，不能替代代码签名。当前发布产物未签名，Windows SmartScreen、macOS Gatekeeper 或 Linux 策略可能要求用户手动放行。
 - WebView2 缺失时下载微软官方 HTTPS 引导安装器，并检查大小与 PE 文件头；当前尚未额外验证 Authenticode 发布者签名。
 

@@ -17,13 +17,130 @@ struct AppReleaseAsset {
     sha256: String,
 }
 
-/// 从精确 tag 的 GitHub Release 元数据中取 Windows 资产 URL 与平台生成的摘要。
-/// 版本查询仍走 Atom；只有确有更新并准备下载时才调用 API，避免日常检查消耗限额。
+/// 取 Windows 更新目标：优先读 release 附带的 sidecar 摘要资产（github.com
+/// 主机，与版本检查的 atom 同源，不受未认证 API 60 次/小时/IP 配额影响
+/// ——2026-09-28 实测共享出口 IP 配额常被打满，交互更新 403）；sidecar
+/// 缺失（旧 release 未附带）或不可达时回退 api.github.com，被限流时给出
+/// 带重置时间的可操作错误。版本查询仍走 Atom；只有确有更新并准备下载时
+/// 才发起本请求，避免日常检查消耗限额。
 #[cfg(windows)]
 fn fetch_app_release_asset(version: &str) -> Result<AppReleaseAsset, String> {
+    match fetch_app_release_sidecar(version) {
+        Ok(asset) => Ok(asset),
+        Err(sidecar_error) => {
+            crate::logging::log(&format!(
+                "updater: sidecar 摘要不可用，回退 GitHub API（{sidecar_error}）"
+            ));
+            fetch_app_release_asset_api(version)
+        }
+    }
+}
+
+/// 从 release 的 sidecar 摘要资产（`<资产名>.sha256`，sha256sum 格式）构造
+/// 更新目标：下载 URL 为确定性常量（与 API 返回的 browser_download_url
+/// 逐字相同）；sidecar 由 CI 生成，并在发布闸门与 GitHub 计算的 digest
+/// 交叉校验后上传（见 build.yml 的「Verify Windows updater metadata」）。
+#[cfg(windows)]
+fn fetch_app_release_sidecar(version: &str) -> Result<AppReleaseAsset, String> {
+    let tag = format!("v{version}");
+    let base = format!("https://github.com/{APP_REPO}/releases/download/{tag}");
+    let url = format!("{base}/{APP_WINDOWS_ASSET}.sha256");
+    let response = runtime::check_client()
+        .get(&url)
+        .header("User-Agent", "DSHBox")
+        .call()
+        .map_err(|e| {
+            crate::locale::error(
+                "读取 Release 摘要失败",
+                "Failed to fetch the release digest",
+                e,
+            )
+        })?;
+    let mut text = String::new();
+    response
+        .into_body()
+        .into_reader()
+        .take(4096)
+        .read_to_string(&mut text)
+        .map_err(|e| {
+            crate::locale::error(
+                "读取 Release 摘要失败",
+                "Failed to read the release digest",
+                e,
+            )
+        })?;
+    let sha256 = parse_sidecar_sha256(&text, APP_WINDOWS_ASSET)?;
+    Ok(AppReleaseAsset {
+        version: version.to_string(),
+        url: format!("{base}/{APP_WINDOWS_ASSET}"),
+        sha256,
+    })
+}
+
+/// 解析 sidecar 摘要文件（sha256sum 格式 `<64 位 hex>␣␣<文件名>`，容忍
+/// 二进制标记 `*` 与 CRLF）：恰好一行、hex 合法、文件名精确匹配——把
+/// 摘要与资产名绑死，错配即拒。
+#[cfg(any(windows, test))]
+pub(super) fn parse_sidecar_sha256(text: &str, expected_name: &str) -> Result<String, String> {
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let format_error = |zh: &str, en: &str| crate::locale::text(zh, en).to_string();
+    let Some(line) = lines.next() else {
+        return Err(format_error(
+            "Release 摘要文件为空。",
+            "The release digest file is empty.",
+        ));
+    };
+    if lines.next().is_some() {
+        return Err(format_error(
+            "Release 摘要文件内容异常。",
+            "The release digest file has unexpected content.",
+        ));
+    }
+    let Some((hex, name)) = line.split_once(' ') else {
+        return Err(format_error(
+            "Release 摘要文件格式错误。",
+            "The release digest file is malformed.",
+        ));
+    };
+    if name.trim_start_matches([' ', '*']) != expected_name
+        || hex.len() != 64
+        || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(format_error(
+            "Release 摘要与 Windows 程序资产不匹配。",
+            "The release digest does not match the Windows executable asset.",
+        ));
+    }
+    Ok(hex.to_ascii_lowercase())
+}
+
+/// API 路径专用客户端：关闭「非 2xx → Err」的默认转换，才能读取限流响应
+/// 头（X-RateLimit-Reset / Retry-After）生成可操作的错误；其余配置与
+/// runtime::check_client 一致。不可改共享的 check_client——那会波及所有
+/// 检查类请求的错误语义。
+#[cfg(windows)]
+fn release_api_client() -> ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::Agent::config_builder()
+                .tls_config(crate::default_tls_config())
+                .timeout_connect(Some(std::time::Duration::from_secs(5)))
+                .timeout_recv_response(Some(std::time::Duration::from_secs(8)))
+                .timeout_recv_body(Some(std::time::Duration::from_secs(8)))
+                .http_status_as_error(false)
+                .build()
+                .new_agent()
+        })
+        .clone()
+}
+
+/// 从精确 tag 的 GitHub Release API 元数据中取 Windows 资产 URL 与摘要。
+#[cfg(windows)]
+fn fetch_app_release_asset_api(version: &str) -> Result<AppReleaseAsset, String> {
     let tag = format!("v{version}");
     let url = format!("https://api.github.com/repos/{APP_REPO}/releases/tags/{tag}");
-    let response = runtime::check_client()
+    let response = release_api_client()
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2026-03-10")
@@ -36,6 +153,26 @@ fn fetch_app_release_asset(version: &str) -> Result<AppReleaseAsset, String> {
                 e,
             )
         })?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        return Err(describe_api_rejection(&classify_api_rejection(
+            status,
+            header("x-ratelimit-remaining"),
+            header("x-ratelimit-reset"),
+            header("retry-after"),
+            now,
+        )));
+    }
     let mut text = String::new();
     response
         .into_body()
@@ -62,6 +199,86 @@ fn fetch_app_release_asset(version: &str) -> Result<AppReleaseAsset, String> {
         url: asset_url,
         sha256,
     })
+}
+
+/// GitHub API 拒绝的分类（纯逻辑，便于单测）：仅对 403/429 生效——主限流
+/// （`x-ratelimit-remaining: 0`）带重置倒计时，次级限流（`retry-after`）
+/// 带等待倒计时，其余原样保留状态码。minutes 为 0 表示重置时间缺失或已过。
+#[cfg(any(windows, test))]
+pub(super) enum ApiRejection {
+    RateLimit { minutes: u64 },
+    RetryAfter { minutes: u64 },
+    Status(u16),
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn classify_api_rejection(
+    status: u16,
+    remaining: Option<&str>,
+    reset: Option<&str>,
+    retry_after: Option<&str>,
+    now_unix: u64,
+) -> ApiRejection {
+    if matches!(status, 403 | 429) {
+        if remaining == Some("0") {
+            let minutes = reset
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|reset| reset.saturating_sub(now_unix))
+                .map(|until| until.div_ceil(60))
+                .unwrap_or(0);
+            return ApiRejection::RateLimit { minutes };
+        }
+        if let Some(minutes) = retry_after
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|secs| secs.div_ceil(60))
+        {
+            return ApiRejection::RetryAfter { minutes };
+        }
+    }
+    ApiRejection::Status(status)
+}
+
+/// 把拒绝分类转成可操作的双语文案：三档都带发布页手动下载逃生口。
+#[cfg(any(windows, test))]
+pub(super) fn describe_api_rejection(rejection: &ApiRejection) -> String {
+    let release_page = format!("https://github.com/{APP_REPO}/releases");
+    let manual_zh = format!("，或到发布页手动下载：{release_page}");
+    let manual_en = format!(", or download manually from the release page: {release_page}");
+    let wait = |minutes: u64| {
+        if minutes > 0 {
+            crate::locale::owned(
+                format!("约 {minutes} 分钟后重试"),
+                format!("retry in about {minutes} minutes"),
+            )
+        } else {
+            crate::locale::text("请稍后重试", "retry later").to_string()
+        }
+    };
+    match rejection {
+        ApiRejection::RateLimit { minutes } => crate::locale::owned(
+            format!(
+                "GitHub API 限流（未认证配额 60 次/小时/IP 已用尽），{}{manual_zh}",
+                wait(*minutes)
+            ),
+            format!(
+                "GitHub API rate limit reached (unauthenticated quota of 60 per hour per IP), {}{manual_en}",
+                wait(*minutes)
+            ),
+        ),
+        ApiRejection::RetryAfter { minutes } => crate::locale::owned(
+            format!("GitHub 次级限流，{}{manual_zh}", wait(*minutes)),
+            format!(
+                "GitHub secondary rate limit, {}{manual_en}",
+                wait(*minutes)
+            ),
+        ),
+        ApiRejection::Status(status) => crate::locale::owned(
+            format!("GitHub 拒绝了元数据请求（HTTP {status}），请稍后重试{manual_zh}"),
+            format!(
+                "GitHub rejected the metadata request (HTTP {status}), retry later{manual_en}"
+            ),
+        ),
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -714,7 +931,8 @@ fn prompt_apply_prefetched(app: &AppHandle, version: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_applied_update_in, drain_replace_error, plan_app_apply, AppApplyPlan,
+        classify_api_rejection, cleanup_applied_update_in, describe_api_rejection,
+        drain_replace_error, parse_sidecar_sha256, plan_app_apply, ApiRejection, AppApplyPlan,
         PENDING_APPLY_MARKER,
     };
     use crate::updater::check::VersionInfo;
@@ -791,6 +1009,72 @@ mod tests {
         assert_eq!(drain_replace_error(&dir), None);
         assert!(!dir.join("replace-error.log").exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sidecar_digest_parses_sha256sum_format_only() {
+        const NAME: &str = "DSHBox-windows-x64.exe";
+        let hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        // 标准格式 + 尾随换行
+        assert_eq!(
+            parse_sidecar_sha256(&format!("{hex}  {NAME}\n"), NAME).as_deref(),
+            Ok(hex)
+        );
+        // 二进制标记与 CRLF 容忍；大写 hex 归一为小写
+        assert_eq!(
+            parse_sidecar_sha256(&format!("{} *{NAME}\r\n", hex.to_ascii_uppercase()), NAME)
+                .as_deref(),
+            Ok(hex)
+        );
+        // 文件名不匹配：摘要与资产未绑定，拒绝
+        assert!(parse_sidecar_sha256(&format!("{hex}  other.exe"), NAME).is_err());
+        // hex 畸形 / 内容多行 / 空文件
+        assert!(parse_sidecar_sha256("0123  DSHBox-windows-x64.exe", NAME).is_err());
+        assert!(parse_sidecar_sha256(&format!("{hex}  {NAME}\nextra\n"), NAME).is_err());
+        assert!(parse_sidecar_sha256("\n", NAME).is_err());
+    }
+
+    #[test]
+    fn api_rejection_classifies_rate_limit_tiers() {
+        // 主限流：remaining=0 + 未来重置时间 → 向上取整的分钟数
+        assert!(matches!(
+            classify_api_rejection(403, Some("0"), Some("1000120"), None, 1_000_000),
+            ApiRejection::RateLimit { minutes: 2 }
+        ));
+        // 重置时间已过（时钟偏差）或缺失 → 0 分钟（文案回落为"请稍后重试"）
+        assert!(matches!(
+            classify_api_rejection(403, Some("0"), Some("999999"), None, 1_000_000),
+            ApiRejection::RateLimit { minutes: 0 }
+        ));
+        assert!(matches!(
+            classify_api_rejection(429, Some("0"), None, None, 0),
+            ApiRejection::RateLimit { minutes: 0 }
+        ));
+        // 次级限流：retry-after（秒）→ 分钟
+        assert!(matches!(
+            classify_api_rejection(403, Some("42"), None, Some("60"), 0),
+            ApiRejection::RetryAfter { minutes: 1 }
+        ));
+        // 普通拒绝（配额未耗尽、无 retry-after）→ 原样状态码
+        assert!(matches!(
+            classify_api_rejection(404, Some("42"), Some("1000120"), None, 0),
+            ApiRejection::Status(404)
+        ));
+        // 限流分类只对 403/429 生效
+        assert!(matches!(
+            classify_api_rejection(500, Some("0"), Some("1000120"), Some("60"), 0),
+            ApiRejection::Status(500)
+        ));
+    }
+
+    #[test]
+    fn api_rejection_text_always_offers_manual_download() {
+        // 不锚定具体语言（测试环境随系统语言），只锚定逃生口与状态码
+        assert!(
+            describe_api_rejection(&ApiRejection::RateLimit { minutes: 22 })
+                .contains("JeffioZ/dsh-box/releases")
+        );
+        assert!(describe_api_rejection(&ApiRejection::Status(403)).contains("403"));
     }
 
     #[test]
