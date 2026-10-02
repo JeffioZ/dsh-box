@@ -23,8 +23,10 @@ concurrency:
 jobs:
   # 发布前置：格式检查与项目一致性（含六处版本号同步）都在这个单 job 跑一次
   # （cargo fmt 与平台无关）；此处只额外校验 tag 格式与 tag ↔ 项目版本一致性。
+  # runner pin ubuntu-24.04：2026-10-19 起 ubuntu-latest 迁往 Ubuntu 26 镜像，
+  # 收尾期不跟随迁移，避免发布链路撞上未实测镜像。
   version-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +77,7 @@ jobs:
             cross: x86_64-apple-darwin
             cross-asset: macos-x64
             timeout: 90
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             name: linux-x64
             asset: linux-x64
             target: x86_64-unknown-linux-gnu
@@ -210,7 +212,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build, version-check]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

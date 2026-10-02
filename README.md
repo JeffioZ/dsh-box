@@ -186,7 +186,7 @@ desktop/
 ├─ assets/brand/                   # 唯一品牌 SVG 源
 ├─ ui/                             # 无打包器的内置页面、共享样式与双语文案
 │  ├─ index.html + startup.*       # 启动页与首次配置
-│  ├─ control-center.*             # 余额/更新/插件/设置/关于
+│  ├─ control-center.*             # 用量与余额/更新/插件/设置/关于（统一弹窗）
 │  ├─ titlebar.*                    # 主窗口子 WebView（含余额 chip）
 │  ├─ tray-menu.html + menu.js     # 托盘与菜单交互
 │  ├─ edit-context.js              # 内置页输入框编辑菜单（撤销/重做/剪贴板）
@@ -199,6 +199,8 @@ desktop/
 │     ├─ commands/                 # 仅做 IPC 来源校验与转发
 │     ├─ runtime/                  # Node 与 dsh 运行时的检测、安装与就绪
 │     ├─ dsh.rs                    # dsh 服务启动、外部接入与看门狗
+│     ├─ control_center.rs         # 统一自绘弹窗（用量/插件/设置/更新/关于）
+│     ├─ titlebar.rs               # 标题栏子 WebView 的创建与扩展控制
 │     ├─ updater/                  # 检查、平台更新与事务恢复
 │     ├─ plugins/                  # CLI 执行、维护策略与手动操作
 │     ├─ usage/                    # 用量与余额聚合、缓存与账户监测
