@@ -471,9 +471,10 @@ fn shell_execute(verb: &str, path: &Path, params: Option<&str>) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        dangerous_extension, is_potentially_executable, normalize_user_path, open_with_app, reveal,
-    };
+    use super::{dangerous_extension, is_potentially_executable, normalize_user_path};
+    // 引号拒绝测试仅 Windows 编译：导入随测试一起门控，非 Windows 不悬空
+    #[cfg(windows)]
+    use super::{open_with_app, reveal};
     use std::path::Path;
 
     #[test]
