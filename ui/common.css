@@ -180,15 +180,8 @@
   --dshd-anim-state: background-color var(--dshd-m-fast) var(--dshd-ease-out),
     color var(--dshd-m-fast) var(--dshd-ease-out),
     border-color var(--dshd-m-fast) var(--dshd-ease-out);
-  /* 弹窗/菜单这类浮层：入场（温和缩放渐入）/退场（淡出） */
-  --dshd-anim-pop-in: opacity .18s var(--dshd-ease-out),
-    transform .18s var(--dshd-ease-out);
-  --dshd-anim-pop-out: opacity var(--dshd-menu-exit-duration) var(--dshd-ease-in);
   /* 循环动画：旋转/进度 */
   --dshd-anim-spin: .8s linear infinite;
-  /* 错误/提示浮现 */
-  --dshd-anim-reveal: opacity .11s var(--dshd-ease-out),
-    transform .11s var(--dshd-ease-out);
 }
 
 @media (prefers-color-scheme: light) {
@@ -429,9 +422,10 @@
   overflow: auto;
 }
 
-/* 系统“减弱动态效果”：关闭 hover 过渡 */
+/* 系统“减弱动态效果”：关闭 hover 过渡与开关滑块位移 */
 @media (prefers-reduced-motion: reduce) {
   .dshd-row, .dshd-btn, .dshd-x, .dshd-input { transition: none; }
+  .sswitch, .sswitch::before { transition: none; }
 }
 
 /* 分隔线用 border-top 而非填充背景：Skia 对边框做确定性的整设备像素

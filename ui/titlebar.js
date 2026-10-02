@@ -367,12 +367,6 @@ async function init() {
       $('btn-menu').focus();
     }
   });
-  window.addEventListener('dshd-language-changed', () => {
-    applyMaxState($('btn-max').classList.contains('maximized'));
-    applyCloseBehavior(closeBehavior);
-    refreshMainMenu();
-    renderBalance();
-  });
   dshdListen('settings-changed', (event) => {
     applyCloseBehavior(event.payload && event.payload.close_behavior);
     hideBalance = !!(event.payload && event.payload.hide_balance);
@@ -419,9 +413,13 @@ async function init() {
     }
   }).catch(() => {});
   // 语言切换：命令式设置的 tooltip（版本信息/余额分层提示/最大化按钮）
-  // 不走 data-i18n-title 通道，必须在此重译，否则残留旧语言直到下次事件
+  // 不走 data-i18n-title 通道，必须在此重译，否则残留旧语言直到下次事件。
+  // 唯一的语言变更监听：菜单文案、关闭行为提示、余额与版本 chip、最大化
+  // 态（refreshMaxState 查后端真值，覆盖 class 推断）全部在此刷新
   window.addEventListener('dshd-language-changed', () => {
     if (lastVersionsPayload) renderVersions(lastVersionsPayload);
+    applyCloseBehavior(closeBehavior);
+    refreshMainMenu();
     renderBalance();
     refreshMaxState();
   });
