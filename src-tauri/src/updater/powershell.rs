@@ -99,9 +99,11 @@ fn github_latest_stable() -> Result<String, String> {
         .call()
         .map_err(|e| format!("GitHub Releases: {e}"))?;
     let mut text = String::new();
+    // atom 正常仅数十 KB：截断读取防御异常超大响应（与 check.rs 口径一致）
     response
         .into_body()
         .into_reader()
+        .take(256 * 1024)
         .read_to_string(&mut text)
         .map_err(|e| format!("GitHub Releases: {e}"))?;
     latest_stable_tag(&parse_releases_atom(&text)).ok_or_else(|| {

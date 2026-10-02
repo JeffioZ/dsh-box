@@ -126,6 +126,8 @@ pub(crate) fn download_client() -> ureq::Agent {
 }
 
 /// 读取一个小 URL 到字符串（供版本检查等使用；短超时快速失败）。
+/// 截断上限 8MB：Node 索引约 1MB、DSH_PACKAGE_META 全量包元数据可达
+/// MB 级，超出此限的响应按错误处理（防御异常超大响应）。
 fn get_text(url: &str) -> Result<String, String> {
     let resp = check_client().get(url).call().map_err(|e| {
         format!(
@@ -133,14 +135,17 @@ fn get_text(url: &str) -> Result<String, String> {
             crate::locale::text("网络请求失败", "Network request failed")
         )
     })?;
-    let mut reader = resp.into_body().into_reader();
+    let reader = resp.into_body().into_reader();
     let mut s = String::new();
-    reader.read_to_string(&mut s).map_err(|e| {
-        format!(
-            "{}: {e}",
-            crate::locale::text("读取响应失败", "Failed to read the response")
-        )
-    })?;
+    reader
+        .take(8 * 1024 * 1024)
+        .read_to_string(&mut s)
+        .map_err(|e| {
+            format!(
+                "{}: {e}",
+                crate::locale::text("读取响应失败", "Failed to read the response")
+            )
+        })?;
     Ok(s)
 }
 
