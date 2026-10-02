@@ -184,6 +184,21 @@ pub fn reinstallable_builtins(app: &AppHandle) -> Vec<maintenance::Reinstallable
     maintenance::reinstallable_builtin_plugins(&config, &installed)
 }
 
+/// npm 搜索并标注已安装状态（`plugin_search` 命令的实现）：搜索结果与
+/// 本机已装清单合并，命中者带版本号。
+pub fn search_with_installed(app: &AppHandle, query: &str) -> Result<Vec<PluginInfo>, String> {
+    let installed: std::collections::HashMap<String, String> = list(app)
+        .into_iter()
+        .filter_map(|plugin| plugin.installed.map(|version| (plugin.name, version)))
+        .collect();
+    search(query).map(|mut found| {
+        for plugin in &mut found {
+            plugin.installed = installed.get(&plugin.name).cloned();
+        }
+        found
+    })
+}
+
 /// npm registry 搜索 dsh 插件。
 pub fn search(query: &str) -> Result<Vec<PluginInfo>, String> {
     let query = query.trim();
@@ -703,6 +718,57 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_user_removal_intent_survives_recovery_of_another_package() {
+        // Add A 成功 → 用户卸载 Y（Remove 标记已写、CLI 中途崩溃，无
+        // finish_cli）→ 启动错误点名 A：恢复 A 时必须先把 Y 的卸载意图
+        // 落盘再清标记，否则 Y 的 market_user_removed_ 永不写入，下次
+        // 引导会把它当缺失依赖装回。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-batch-intent-crash-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.join("app");
+        config.dsh_home = root.join("home");
+        let profile = config.dsh_home.join("profiles/web");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"dshmarket":"1","dsh-file-upload":"1"},"dsh":{"profile":{"bundles":["dshmarket","dsh-file-upload"]}}}"#,
+        )
+        .unwrap();
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .unwrap();
+        transaction::finish_cli(&config).unwrap();
+        save_install_marker(
+            &config,
+            "dsh-file-upload",
+            Some("dsh-file-upload"),
+            PluginMutationKind::Remove,
+            true,
+            None,
+        )
+        .unwrap();
+        // 崩溃：Remove 的 finish_cli 未执行，标记停留在 ready:false
+        assert!(!install_marker(&config).unwrap().ready_for_next);
+        assert!(recover_interrupted_plugin_mutation(&config, "dshmarket", None).unwrap());
+        assert!(maintenance::market_user_removed(&config, "dsh-file-upload"));
+        assert!(install_marker(&config).is_none(), "批次收敛后标记应清理");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn restart_backoff_grows_exponentially_with_cap() {
         assert_eq!(restart_backoff_secs(1), 30);
         assert_eq!(restart_backoff_secs(2), 60);
@@ -941,6 +1007,46 @@ mod tests {
             "missing original file remains missing"
         );
         assert!(!batch.ready_for_next);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completed_non_registry_add_marker_does_not_block_next_operation() {
+        // git/URL spec 的安装解析不出包名（package=None），CLI 成功后留下
+        // {Add, None, ready:true} 标记——属正常批次流转，不得阻断后续操作
+        // （曾误拦导致同会话所有插件操作永久报「请重启应用」）。
+        let root = std::env::temp_dir().join(format!(
+            "dshbox-plugin-marker-git-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut config = crate::app_state::Config::load();
+        config.root = root.clone();
+        save_install_marker(
+            &config,
+            "git+https://example.com/plugin.git",
+            None,
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .unwrap();
+        transaction::finish_cli(&config).unwrap();
+        assert!(install_marker(&config).unwrap().ready_for_next);
+        // 后续操作（registry 安装）应正常写入新标记
+        save_install_marker(
+            &config,
+            "dshmarket",
+            Some("dshmarket"),
+            PluginMutationKind::Add,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(install_marker(&config).unwrap().spec, "dshmarket");
         let _ = std::fs::remove_dir_all(root);
     }
 
