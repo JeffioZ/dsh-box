@@ -99,14 +99,15 @@ fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     if let Some(rx) = rx {
         // 排空积压的陈旧信号：服务重启成功（插件维护收敛、更新后恢复）都会
         // signal_retry，彼时无人等待（boot_loop 在看门狗/引导中），滞留信号
-        // 会把刚进入的 Error 页立即假唤醒，绕过用户「重试」自行重跑引导。
+        // 会把刚进入的等待页立即假唤醒，绕过用户操作自行重跑引导。
         while rx.try_recv().is_ok() {}
-        // 排空与阻塞之间存在极窄窗口：恰在其中被吞的信号靠阶段轮询兜底
-        // ——「改用本地服务」「重启成功」类信号都伴随阶段改离 Error（
-        // SwitchingService / Ready），引导权已被外部接管，最长 500ms 内
-        // 退出等待重入引导，不会卡死在启动页。（纯用户点击「重试」不伴随
-        // 阶段变化，落进该窗口时需再点一次，窗口为微秒级。）
-        while app.state::<AppState>().phase() == BootPhase::Error {
+        // 按进入时的等待阶段轮询（Error=引导失败等重试；Cancelled=安装取消
+        // 等重装）：阶段被外部流程改离（重启成功置 Ready、切换服务置
+        // SwitchingService）即引导权已被接管，最长 500ms 内退出重入引导——
+        // 既兜底排空窗口里被吞的接管类信号，也保持取消页等待语义不变
+        //（取消页唤醒只来自用户点击，不伴随阶段变化）。
+        let wait_phase = app.state::<AppState>().phase();
+        while app.state::<AppState>().phase() == wait_phase {
             if rx.recv_timeout(Duration::from_millis(500)).is_ok() {
                 break;
             }

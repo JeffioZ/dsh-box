@@ -649,14 +649,15 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
         Err(e) => return fail(format!("{e}")),
     };
     let mut text = String::new();
-    // releases.atom 正常仅数十 KB：截断读取防御异常超大响应（与 app 更新
-    // 下载路径的 take 上限口径一致）
+    // releases.atom 正常仅数十 KB：限量读取防御异常超大响应；恰超上限按
+    // 读取失败报错（静默截断的 XML 只会在解析处报出与真实原因无关的错误）
     if resp
         .into_body()
         .into_reader()
-        .take(256 * 1024)
+        .take(256 * 1024 + 1)
         .read_to_string(&mut text)
         .is_err()
+        || text.len() > 256 * 1024
     {
         return fail("读取响应失败".into());
     }

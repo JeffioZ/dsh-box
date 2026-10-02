@@ -422,12 +422,6 @@
   overflow: auto;
 }
 
-/* 系统“减弱动态效果”：关闭 hover 过渡与开关滑块位移 */
-@media (prefers-reduced-motion: reduce) {
-  .dshd-row, .dshd-btn, .dshd-x, .dshd-input { transition: none; }
-  .sswitch, .sswitch::before { transition: none; }
-}
-
 /* 分隔线用 border-top 而非填充背景：Skia 对边框做确定性的整设备像素
    吸附——实测 125%~200% 缩放下同屏多条线恒定同粗（150% 恒 1 行、200%
    恒 2 行）；height+background 技法在 ≥150% 时随落点相位漂移成 1~3 行
@@ -606,6 +600,15 @@
 .dshd-x svg {
   width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* 系统“减弱动态效果”：关闭 hover 过渡与开关滑块位移。此块必须在全部
+   目标的基础 transition 规则（.dshd-row/.dshd-btn/.dshd-input/.sswitch/
+   .dshd-x，散布于本文件上文）之后——同特异性按源序后者胜，前置会沦为
+   死规则（曾因前置只对 .dshd-row 生效，.sswitch 覆盖搬入时同踩此坑）。 */
+@media (prefers-reduced-motion: reduce) {
+  .dshd-row, .dshd-btn, .dshd-x, .dshd-input,
+  .sswitch, .sswitch::before { transition: none; }
 }
 
 /* —— 通用 toast（common.js dshdToast）——

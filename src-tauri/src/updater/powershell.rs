@@ -99,13 +99,21 @@ fn github_latest_stable() -> Result<String, String> {
         .call()
         .map_err(|e| format!("GitHub Releases: {e}"))?;
     let mut text = String::new();
-    // atom 正常仅数十 KB：截断读取防御异常超大响应（与 check.rs 口径一致）
+    // atom 正常仅数十 KB：限量读取防御异常超大响应，恰超上限按读取失败
+    // 报错（与 check.rs 口径一致）
     response
         .into_body()
         .into_reader()
-        .take(256 * 1024)
+        .take(256 * 1024 + 1)
         .read_to_string(&mut text)
         .map_err(|e| format!("GitHub Releases: {e}"))?;
+    if text.len() > 256 * 1024 {
+        return Err(crate::locale::text(
+            "GitHub Releases 响应超过大小上限。",
+            "The GitHub Releases response exceeds the size limit.",
+        )
+        .to_string());
+    }
     latest_stable_tag(&parse_releases_atom(&text)).ok_or_else(|| {
         crate::locale::text(
             "GitHub Releases 中未找到稳定版本。",
