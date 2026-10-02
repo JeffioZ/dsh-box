@@ -97,11 +97,20 @@ pub fn boot_loop(app: AppHandle) {
 /// 信号通道缺失时（不应发生）退化为延时自动重试，避免空转热循环。
 fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     if let Some(rx) = rx {
-        // 先排空积压信号：重启成功（插件维护收敛、看门狗恢复）都会
-        // signal_retry，滞留信号会把刚进入的 Error 页立即假唤醒，绕过
-        // 用户的「重试」自行重跑一轮引导
+        // 排空积压的陈旧信号：服务重启成功（插件维护收敛、更新后恢复）都会
+        // signal_retry，彼时无人等待（boot_loop 在看门狗/引导中），滞留信号
+        // 会把刚进入的 Error 页立即假唤醒，绕过用户「重试」自行重跑引导。
         while rx.try_recv().is_ok() {}
-        let _ = rx.recv();
+        // 排空与阻塞之间存在极窄窗口：恰在其中被吞的信号靠阶段轮询兜底
+        // ——「改用本地服务」「重启成功」类信号都伴随阶段改离 Error（
+        // SwitchingService / Ready），引导权已被外部接管，最长 500ms 内
+        // 退出等待重入引导，不会卡死在启动页。（纯用户点击「重试」不伴随
+        // 阶段变化，落进该窗口时需再点一次，窗口为微秒级。）
+        while app.state::<AppState>().phase() == BootPhase::Error {
+            if rx.recv_timeout(Duration::from_millis(500)).is_ok() {
+                break;
+            }
+        }
     } else {
         std::thread::sleep(Duration::from_secs(3));
     }
