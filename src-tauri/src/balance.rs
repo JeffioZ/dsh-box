@@ -252,24 +252,7 @@ pub(crate) fn refresh_once(app: AppHandle) {
     });
 }
 
-#[tauri::command]
-pub async fn api_balance(app: AppHandle, webview: tauri::Webview) -> BalancePayload {
-    if let Err(error) = crate::commands::ensure_local_origin(&webview) {
-        return denied_payload(error);
-    }
-    if app.state::<AppState>().service_ownership().is_external() {
-        return denied_payload(
-            crate::locale::text(
-                "余额使用外部 dsh 的凭据，请在原服务环境中查询。",
-                        "The external dsh service manages the credentials used for balance queries. Check the balance in that service's environment.",
-            )
-            .into(),
-        );
-    }
-    run_balance_query(app).await
-}
-
-fn denied_payload(error: String) -> BalancePayload {
+pub(crate) fn denied_payload(error: String) -> BalancePayload {
     BalancePayload {
         ok: false,
         is_available: false,
@@ -281,7 +264,7 @@ fn denied_payload(error: String) -> BalancePayload {
 }
 
 /// 公共查询：网络请求放到阻塞线程，避免占用主线程/异步工作线程。
-async fn run_balance_query(app: AppHandle) -> BalancePayload {
+pub(crate) async fn run_balance_query(app: AppHandle) -> BalancePayload {
     let config = app.state::<AppState>().config();
     tauri::async_runtime::spawn_blocking(move || query_balance(&config))
         .await

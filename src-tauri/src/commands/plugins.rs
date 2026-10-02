@@ -47,17 +47,7 @@ pub async fn plugin_search(
     ensure_local_origin(&webview)?;
     ensure_managed_service(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::plugins::search(&query).map(|mut list| {
-            // 标注已安装状态（与 list 结果合并）
-            let installed: std::collections::HashMap<String, String> = crate::plugins::list(&app)
-                .into_iter()
-                .filter_map(|p| p.installed.map(|v| (p.name, v)))
-                .collect();
-            for p in &mut list {
-                p.installed = installed.get(&p.name).cloned();
-            }
-            list
-        })
+        crate::plugins::search_with_installed(&app, &query)
     })
     .await
     .map_err(|e| {
