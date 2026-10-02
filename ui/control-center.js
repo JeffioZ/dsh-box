@@ -179,6 +179,33 @@ function clearUsageLoadDelay() {
   usageLoadTimer = 0;
 }
 
+// 骨架文案原地刷新（语言切换重入时）：用量页骨架只在无 wrap 时构建，
+// 已打开状态下切语言若不重设，标题/导出按钮/占位会残留旧语言。只改
+// 文本节点不重建 DOM，容器几何不变；错误态与空态文案含动态内容，不属
+// 骨架，逐项跳过。
+function localizeUsageSkeleton(wrap) {
+  const heading = wrap.querySelector('#usage-summary-heading');
+  if (heading) heading.textContent = dshdT('usageTokenSection');
+  const exportLb = wrap.querySelector('.usage-export-btn .lb');
+  if (exportLb) exportLb.textContent = dshdT('usageExport');
+  const load = wrap.querySelector('#usage-load');
+  if (load && !load.classList.contains('err')) {
+    load.innerHTML = '<span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading');
+  }
+  const accHeading = wrap.querySelector('#usage-accounts-heading');
+  if (accHeading) accHeading.textContent = dshdT('usageProviders');
+  // 账户区查询占位：仅刷新仍带 spinner 的查询中态（err/空态不属骨架）
+  const empty = wrap.querySelector('.usage-accounts > .usage-empty');
+  if (
+    empty &&
+    !empty.classList.contains('err') &&
+    !empty.classList.contains('empty-state') &&
+    empty.querySelector('.spin')
+  ) {
+    empty.innerHTML = '<span class="spin" aria-hidden="true"></span>' + dshdT('queryingBalance');
+  }
+}
+
 async function renderUsagePage(keep) {
   const seq = ++usageSeq;
   clearUsageLoadDelay();
@@ -206,6 +233,9 @@ async function renderUsagePage(keep) {
       '<div class="usage-load" id="usage-load" role="status" aria-live="polite" hidden><span class="spin" aria-hidden="true"></span>' + dshdT('usageLoading') + '</div>' +
       '</div>';
     setupUsageExportMenu();
+  } else {
+    // 语言切换重入：骨架已在位，原地刷新其文案（不重建、无布局跳动）
+    localizeUsageSkeleton(wrap);
   }
   if (!summaryFilled) showUsageLoadDelayed();
   try {
