@@ -170,14 +170,20 @@ pub fn fold_log(state: &mut FoldState, path: &std::path::Path) -> Result<(), Str
 fn refold_full(state: &mut FoldState, path: &std::path::Path, file_len: u64) -> Result<(), String> {
     state.reset_fold();
     let text = log::read_full(path)?;
-    let fresh: Vec<aggregate::Event> = text
-        .lines()
-        .filter_map(aggregate::Event::parse)
-        .filter(|e| e.seq > state.consumed)
-        .collect();
-    aggregate::apply_delta(state, &fresh);
-    if let Some(last) = fresh.last() {
-        state.consumed = last.seq;
+    // 逐行流式折叠而非先收集进 Vec：Event 持有完整 data 对象的副本，
+    // 全量收集会在 512MB 解压文本之上再叠一整层事件副本（峰值 GB 级）。
+    // 逐事件 apply 与批处理语义等价——apply_delta 内部本就按序逐事件处理。
+    let mut last_seq: Option<u64> = None;
+    for line in text.lines() {
+        if let Some(event) = aggregate::Event::parse(line) {
+            if event.seq > state.consumed {
+                aggregate::apply_delta(state, std::slice::from_ref(&event));
+                last_seq = Some(event.seq);
+            }
+        }
+    }
+    if let Some(seq) = last_seq {
+        state.consumed = seq;
     }
     state.kind = aggregate::FoldKind::Persisted;
     state.byte_offset = file_len;
