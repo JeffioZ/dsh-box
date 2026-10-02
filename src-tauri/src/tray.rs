@@ -518,50 +518,60 @@ pub fn start_follow_icon_context(app: AppHandle) {
 }
 
 fn open_browser(app: &AppHandle) {
+    // 健康检查最坏 ~2.8s（连接 800ms + 读写 2s）；托盘事件与同步 IPC 命令
+    // 都在主线程执行，原地探测会冻结全部 UI——挪后台线程探测与打开浏览器；
+    // 提示弹窗涉及 webview 创建，经 run_on_main_thread 回主线程。
     let config = app.state::<AppState>().config();
-    if !crate::dsh::health_check(config.port, config.auth_token.as_deref()) {
-        crate::control_center::open_notice(
-            app,
-            crate::locale::text("在浏览器中打开", "Open in browser"),
-            crate::locale::text(
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if !crate::dsh::health_check(config.port, config.auth_token.as_deref()) {
+            let message = crate::locale::text(
                 "dsh 服务当前未运行，无法在浏览器中打开。",
                 "The dsh service is not running, so it cannot be opened in a browser.",
             )
-            .into(),
-            "warn",
-        );
-        return;
-    }
-    // 带 token 打开：浏览器首个请求完成交换后由会话 cookie（30 天）接管
-    let url = config.web_page_url();
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/c", "start", "", &url]);
-        processes::hide_console(&mut cmd);
-        let _ = cmd.spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut cmd = std::process::Command::new("open");
-        cmd.arg(&url);
-        // spawn 后不 wait，子进程退出会留 zombie，起线程回收
-        if let Ok(mut child) = cmd.spawn() {
-            std::thread::spawn(move || {
-                let _ = child.wait();
+            .into();
+            let notice = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                crate::control_center::open_notice(
+                    &notice,
+                    crate::locale::text("在浏览器中打开", "Open in browser"),
+                    message,
+                    "warn",
+                );
             });
+            return;
         }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let mut cmd = std::process::Command::new("xdg-open");
-        cmd.arg(&url);
-        if let Ok(mut child) = cmd.spawn() {
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+        // 带 token 打开：浏览器首个请求完成交换后由会话 cookie（30 天）接管
+        let url = config.web_page_url();
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/c", "start", "", &url]);
+            processes::hide_console(&mut cmd);
+            let _ = cmd.spawn();
         }
-    }
+        #[cfg(target_os = "macos")]
+        {
+            let mut cmd = std::process::Command::new("open");
+            cmd.arg(&url);
+            // spawn 后不 wait，子进程退出会留 zombie，起线程回收
+            if let Ok(mut child) = cmd.spawn() {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let mut cmd = std::process::Command::new("xdg-open");
+            cmd.arg(&url);
+            if let Ok(mut child) = cmd.spawn() {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+        }
+    });
 }
 
 /// 托盘“重启服务”：启动/安装进行中拒绝，并反馈结果。
