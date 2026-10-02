@@ -97,6 +97,10 @@ pub fn boot_loop(app: AppHandle) {
 /// 信号通道缺失时（不应发生）退化为延时自动重试，避免空转热循环。
 fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     if let Some(rx) = rx {
+        // 先排空积压信号：重启成功（插件维护收敛、看门狗恢复）都会
+        // signal_retry，滞留信号会把刚进入的 Error 页立即假唤醒，绕过
+        // 用户的「重试」自行重跑一轮引导
+        while rx.try_recv().is_ok() {}
         let _ = rx.recv();
     } else {
         std::thread::sleep(Duration::from_secs(3));
@@ -432,7 +436,6 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         );
         emit_status(app, BootPhase::Starting, message, "");
     } else {
-        config.port = requested_port;
         state.set_port(requested_port);
     }
     let starting_server = crate::locale::text("正在启动 dsh 服务…", "Starting the dsh service…");
