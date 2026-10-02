@@ -113,11 +113,12 @@ impl Drop for TreeGuard {
         }
         #[cfg(unix)]
         {
-            // 终止整个进程组（含 dsh 子进程）；已退出的组为无害错误
+            // 终止整个进程组（含 dsh 子进程）；已退出的组为无害错误。
+            // status() 等待 kill 退出：spawn 后不管会留僵尸进程（macOS/Linux）
             let _ = Command::new("kill")
                 .arg("-TERM")
                 .arg(format!("-{}", self.pgid))
-                .spawn();
+                .status();
         }
     }
 }
@@ -294,7 +295,8 @@ pub fn kill_tree(pid: u32) {
     {
         let mut cmd = Command::new("kill");
         cmd.arg("-TERM").arg(format!("-{pid}"));
-        let _ = cmd.spawn();
+        // status() 回收子进程：spawn 后不管会留僵尸（macOS/Linux）
+        let _ = cmd.status();
     }
 }
 
@@ -309,7 +311,7 @@ pub fn kill_tree_force(pid: u32) {
     {
         let mut cmd = Command::new("kill");
         cmd.arg("-KILL").arg(format!("-{pid}"));
-        let _ = cmd.spawn();
+        let _ = cmd.status();
     }
 }
 

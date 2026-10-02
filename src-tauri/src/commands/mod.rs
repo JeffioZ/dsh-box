@@ -218,7 +218,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         plugins::plugin_apply_status,
         plugins::plugin_apply_changes,
         plugins::plugin_resolve_update_conflict,
-        crate::balance::api_balance,
+        balance::api_balance,
         window_menu::titlebar_minimize,
         window_menu::titlebar_toggle_maximize,
         window_menu::titlebar_close,
@@ -253,6 +253,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         settings::set_usage_token_limit,
     ]
 }
+mod balance;
 mod control_center;
 mod onboarding;
 mod plugins;

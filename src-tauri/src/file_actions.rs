@@ -45,6 +45,23 @@ pub fn normalize_user_path(path: &str) -> Option<PathBuf> {
     path.is_absolute().then_some(path)
 }
 
+/// Windows：拒绝含引号的路径。reveal / open_with_app 把路径拼进
+/// ShellExecuteW 参数字符串（`/select,"…"` / `"…"`），内嵌引号会提前闭合
+/// 实参、向 explorer.exe 等注入附加参数；右键路径源自 dsh 页面文本
+/// （LLM 输出，可被提示注入），必须当不可信输入对待。`"` 是 Windows
+/// 文件名非法字符，真实路径不可能包含，拒绝无副作用。
+#[cfg(windows)]
+fn ensure_no_embedded_quote(path: &Path) -> Result<(), String> {
+    if path.to_str().is_some_and(|p| p.contains('"')) {
+        return Err(crate::locale::text(
+            "不支持包含引号的路径。",
+            "Paths containing quotes are not supported.",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn current_platform() -> &'static str {
     #[cfg(windows)]
     return "windows";
@@ -146,6 +163,7 @@ pub fn open_default(path: &Path) -> Result<(), String> {
 pub fn reveal(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
+        ensure_no_embedded_quote(path)?;
         // explorer /select,<path>：即使文件不存在也能定位到其所在目录
         let params = format!("/select,\"{}\"", path.display());
         shell_execute("open", Path::new("explorer.exe"), Some(&params))
@@ -271,6 +289,7 @@ pub fn open_browser(url: &str) -> Result<(), String> {
 pub fn open_with_app(app: &str, path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
+        ensure_no_embedded_quote(path)?;
         let exe = match app {
             "code" => vscode_exe().ok_or_else(|| {
                 crate::locale::text("未找到 VS Code", "VS Code was not found").to_string()
@@ -453,6 +472,9 @@ fn shell_execute(verb: &str, path: &Path, params: Option<&str>) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::{dangerous_extension, is_potentially_executable, normalize_user_path};
+    // 引号拒绝测试仅 Windows 编译：导入随测试一起门控，非 Windows 不悬空
+    #[cfg(windows)]
+    use super::{open_with_app, reveal};
     use std::path::Path;
 
     #[test]
@@ -502,5 +524,16 @@ mod tests {
             normalize_user_path("/c/work/file.txt").unwrap(),
             std::path::PathBuf::from(r"C:\work\file.txt")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn quoted_paths_are_rejected_before_windows_param_splicing() {
+        // 引号是 Windows 文件名非法字符：reveal / open_with_app 拼接
+        // ShellExecuteW 参数串前必须拒绝内嵌引号，防止实参提前闭合、
+        // 向 explorer.exe 等注入附加参数（右键路径源自 dsh 页面文本）
+        let bad = std::path::Path::new(r#"C:\x" --evil"#);
+        assert!(reveal(bad).is_err());
+        assert!(open_with_app("notepad", bad).is_err());
     }
 }

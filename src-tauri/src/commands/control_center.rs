@@ -113,54 +113,7 @@ pub async fn usage_export(
         .into());
     }
     let config = app.state::<AppState>().config();
-    tauri::async_runtime::spawn_blocking(move || {
-        let report = crate::usage::report(&config)?;
-        let today = crate::usage::day_key_now();
-        let (content, file_name) = match format.as_str() {
-            "csv" => (
-                crate::usage::export::daily_csv(&report),
-                format!("dshbox-usage-daily-{today}.csv"),
-            ),
-            "json" => (
-                crate::usage::export::export_json(&report),
-                format!("dshbox-usage-export-{today}.json"),
-            ),
-            other => {
-                return Err(crate::locale::owned(
-                    format!("未知的导出格式：{other}"),
-                    format!("Unknown export format: {other}"),
-                ))
-            }
-        };
-        use tauri_plugin_dialog::DialogExt;
-        let mut builder = app.dialog().file().set_file_name(&file_name);
-        if let Some(window) = crate::main_window(&app) {
-            if window.is_visible().unwrap_or(false) {
-                builder = builder.set_parent(&window);
-            }
-        }
-        let Some(dest) = builder
-            .blocking_save_file()
-            .and_then(|d| d.into_path().ok())
-        else {
-            return Ok(false); // 用户取消，没有导出文件
-        };
-        std::fs::write(&dest, content.as_bytes()).map_err(|e| {
-            crate::locale::owned(
-                format!("写入导出文件失败：{e}"),
-                format!("Failed to write the export file: {e}"),
-            )
-        })?;
-        crate::logging::log(&format!("usage: 已导出 {file_name} → {}", dest.display()));
-        Ok(true)
-    })
-    .await
-    .map_err(|e| {
-        crate::locale::owned(
-            format!("导出任务异常结束：{e}"),
-            format!("The export task ended unexpectedly: {e}"),
-        )
-    })?
+    crate::control_center::export_usage(app, config, format).await
 }
 
 /// 今日用量消耗速度预测（缓存优先；预警后台任务每 10 分钟刷新一次）。

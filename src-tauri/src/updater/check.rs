@@ -344,9 +344,10 @@ pub(crate) fn apply_dsh_update(app: &AppHandle) {
                 .state::<AppState>()
                 .set_update_done(true, Some(done_msg.into()));
             handle.state::<AppState>().set_check_progress(None);
-            let mut result = check(&handle);
-            // 真实检查完成：写入完成时刻并按结果记录手动冷却戳
+            // 通道定格在检查发起前读取：复核检查耗时数秒，期间切通道会把
+            // 冷却戳盖到新通道（与 run_check_forced 的「发起时定格」约定一致）
             let channel = handle.state::<AppState>().config().dsh_update_channel;
+            let mut result = check(&handle);
             crate::control_center::commit_check_result(
                 &handle.state::<AppState>(),
                 &mut result,
@@ -518,11 +519,13 @@ pub fn check(app: &AppHandle) -> CheckResult {
             }
             Err(e) => {
                 crate::logging::log(&format!("updater: npm 最新版本查询失败：{e}"));
-                // 检查失败仍显示已装版本（若无则整行不显示，与 dsh 策略一致）
+                // 检查失败仍显示已装版本（若无则整行不显示，与 dsh 策略一致）；
+                // portable_node 用真实探测而非硬编码 false——否则便携 Node 用户
+                // 在网络抖动时会看到必失败的「改用内置 Node」入口
                 if installed.is_some() {
                     (
                         Some(VersionInfo {
-                            portable_node: false,
+                            portable_node: runtime::inspect_runtime(npm_cfg.node_exe()).is_some(),
                             installed: installed.unwrap_or_default(),
                             latest: String::new(),
                             update_available: false,
@@ -646,11 +649,15 @@ pub(super) fn check_app_update() -> Option<VersionInfo> {
         Err(e) => return fail(format!("{e}")),
     };
     let mut text = String::new();
+    // releases.atom 正常仅数十 KB：限量读取防御异常超大响应；恰超上限按
+    // 读取失败报错（静默截断的 XML 只会在解析处报出与真实原因无关的错误）
     if resp
         .into_body()
         .into_reader()
+        .take(256 * 1024 + 1)
         .read_to_string(&mut text)
         .is_err()
+        || text.len() > 256 * 1024
     {
         return fail("读取响应失败".into());
     }

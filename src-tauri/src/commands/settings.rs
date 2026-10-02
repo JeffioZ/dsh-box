@@ -15,7 +15,7 @@ pub struct SettingsState {
     pub task_notifications: bool,
     /// 每日用量提醒阈值（百万 token；None = 关闭）。
     pub usage_token_limit_m: Option<u64>,
-    /// dsh 更新通道："latest" 或 "next"
+    /// dsh 更新通道："latest" / "next" / "alpha"
     pub dsh_update_channel: String,
     pub close_behavior: String,
     pub launch_behavior: String,

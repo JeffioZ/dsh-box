@@ -85,9 +85,11 @@ pub(super) fn save_install_marker(
     original_manifest: Option<&str>,
 ) -> Result<(), String> {
     let previous = install_marker(config);
-    if let Some(marker) = previous.as_ref().filter(|m| {
-        !m.ready_for_next || (matches!(m.kind, PluginMutationKind::Add) && m.package.is_none())
-    }) {
+    // 只拦未完成事务（ready_for_next=false）。已完成的非 registry 安装
+    // （git/URL spec，package 为 None）留下的 {Add, None, ready:true} 标记
+    // 属正常批次流转，不得阻断——曾以「Add 且 package 为 None」一并拦截，
+    // 会让该会话内所有后续插件操作永久报「请重启应用」。
+    if let Some(marker) = previous.as_ref().filter(|m| !m.ready_for_next) {
         return Err(crate::locale::owned(
             format!(
                 "上次插件操作尚未完成（{}），请先重启应用完成恢复后再试。",
@@ -335,12 +337,14 @@ pub(crate) fn recover_interrupted_plugin_mutation(
         return Ok(false);
     }
     let removed = prune_manifest_package_locked(config, name)?;
-    if matches!(marker.kind, PluginMutationKind::Remove)
-        && marker.user_removal
-        && marker.package.as_deref() == Some(name)
-        && is_market_pkg(name)
-    {
-        try_mark_user_removed(config, name)?;
+    // 用户卸载意图跟随 marker 自身的包（最后一笔操作），而非启动错误点名
+    // 的包：点名批次里其他包（如某笔未完成的 Add）时，卸载意图同样必须
+    // 先落盘——否则下方清理标记后该包的 market_user_removed_ 永不写入，
+    // 下次引导会把它当缺失依赖装回，违背用户的主动卸载。
+    if matches!(marker.kind, PluginMutationKind::Remove) && marker.user_removal {
+        if let Some(package) = marker.package.as_deref().filter(|p| is_market_pkg(p)) {
+            try_mark_user_removed(config, package)?;
+        }
     }
     // 保留同批次其余插件的恢复依据，待服务真正就绪后整体清理。
     let mut remaining = marker;

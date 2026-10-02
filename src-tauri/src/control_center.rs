@@ -821,7 +821,9 @@ pub(crate) fn cooldown_remaining(
 }
 
 /// 检查结果是否计入手动冷却（纯逻辑，供单测）：整体失败（携带 error 或未
-/// 产出任何组件行）不冷却——失败后应允许立即重试。
+/// 产出任何组件行）不冷却——失败后应允许立即重试。组件级查询失败
+/// （latest_error）仍计入：整体结果依然有效，逐组件重试不是豁免场景
+/// （既有测试 `failed_check_result_does_not_start_cooldown` 钉住此语义）。
 fn check_counts_for_cooldown(result: &crate::updater::CheckResult) -> bool {
     result.error.is_none()
         && (result.dsh.is_some()
@@ -1089,6 +1091,64 @@ pub fn open_notice(app: &AppHandle, title: &str, message: String, severity: &str
         "notice",
         serde_json::json!({ "message": message, "severity": if info { "info" } else { "warn" } }),
     );
+}
+
+/// 用量导出工作流（`usage_export` 命令的实现）：生成当日报表 → 保存
+/// 对话框选路径 → 写文件；用户取消对话框视为成功（返回 `Ok(false)`）。
+/// 报表生成是重 IO，经 spawn_blocking 执行避免占用异步运行体。
+pub async fn export_usage(
+    app: AppHandle,
+    config: crate::app_state::Config,
+    format: String,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = crate::usage::report(&config)?;
+        let today = crate::usage::day_key_now();
+        let (content, file_name) = match format.as_str() {
+            "csv" => (
+                crate::usage::export::daily_csv(&report),
+                format!("dshbox-usage-daily-{today}.csv"),
+            ),
+            "json" => (
+                crate::usage::export::export_json(&report),
+                format!("dshbox-usage-export-{today}.json"),
+            ),
+            other => {
+                return Err(crate::locale::owned(
+                    format!("未知的导出格式：{other}"),
+                    format!("Unknown export format: {other}"),
+                ))
+            }
+        };
+        use tauri_plugin_dialog::DialogExt;
+        let mut builder = app.dialog().file().set_file_name(&file_name);
+        if let Some(window) = crate::main_window(&app) {
+            if window.is_visible().unwrap_or(false) {
+                builder = builder.set_parent(&window);
+            }
+        }
+        let Some(dest) = builder
+            .blocking_save_file()
+            .and_then(|d| d.into_path().ok())
+        else {
+            return Ok(false); // 用户取消，没有导出文件
+        };
+        std::fs::write(&dest, content.as_bytes()).map_err(|e| {
+            crate::locale::owned(
+                format!("写入导出文件失败：{e}"),
+                format!("Failed to write the export file: {e}"),
+            )
+        })?;
+        crate::logging::log(&format!("usage: 已导出 {file_name} → {}", dest.display()));
+        Ok(true)
+    })
+    .await
+    .map_err(|e| {
+        crate::locale::owned(
+            format!("导出任务异常结束：{e}"),
+            format!("The export task ended unexpectedly: {e}"),
+        )
+    })?
 }
 
 /// dev 效果预览：依序弹出自绘弹窗的各视图（均带模拟数据标记），每弹一个

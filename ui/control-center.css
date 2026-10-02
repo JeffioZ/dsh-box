@@ -370,7 +370,7 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 .usage-model-cost { font-size: var(--dshd-fs-xs); color: var(--dshd-text-dim); font-variant-numeric: tabular-nums; text-align: right; min-width: 56px; cursor: default; }
 .usage-model-cost:has(.usage-cost-unknown) { cursor: help; }
 .usage-cost-unknown { cursor: inherit; }
-.usage-model-bar { grid-column: 1 / -1; height: 5px; border-radius: 2px; background: var(--dshd-fill, var(--dshd-hover)); overflow: hidden; }
+.usage-model-bar { grid-column: 1 / -1; height: 5px; border-radius: 2px; background: var(--dshd-hover); overflow: hidden; }
 .usage-model-bar span { display: block; height: 100%; background: var(--dshd-accent); border-radius: 2px; }
 .usage-recent-date { font-variant-numeric: tabular-nums; }
 
@@ -578,9 +578,6 @@ body.fade-out { animation: none; opacity: 0; transition: opacity var(--dshd-menu
 #settings-usage-limit::placeholder { position: relative; top: -1px; }
 .usage-limit-unit { font-size: var(--dshd-fs-sm); color: var(--dshd-text-dim); white-space: nowrap; }
 #settings-usage-limit[aria-invalid='true'] { border-color: var(--dshd-error-text); }
-@media (prefers-reduced-motion: reduce) {
-  .sswitch, .sswitch::before { transition: none; }
-}
 .pcount { font-weight: 400; color: var(--dshd-text-dim); font-size: var(--dshd-fs-xs); }
 .plist { list-style: none; display: flex; flex-direction: column; gap: 6px; padding: 0; margin: 0; }
 .pitem {

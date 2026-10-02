@@ -582,6 +582,29 @@ mod tests {
             "i18n loading 键与遮罩文案需逐字一致"
         );
         assert!(mask.contains("'正在加载…'") && mask.contains("'Loading…'"));
+
+        // 副标题文案逐字一致（i18n.js tagline 键 ↔ 遮罩字面量手抄点）：
+        // 标题「DSHBox」为产品名不在 i18n 表内，副标题是逐字手抄
+        assert!(
+            I18N_JS
+                .contains("tagline: ['DeepSeek Harness 桌面端', 'DeepSeek Harness for desktop']"),
+            "i18n tagline 键与遮罩副标题需逐字一致"
+        );
+        assert!(
+            mask.contains("'DeepSeek Harness 桌面端'")
+                && mask.contains("'DeepSeek Harness for desktop'"),
+            "遮罩副标题字面量漂移，需与 i18n tagline 同步"
+        );
+
+        // 字体栈逐字一致（common.css --dshd-font ↔ 遮罩 font 字面量，跨源
+        // 文档无法引用本壳令牌，只能手抄）：遮罩侧为两行 JS 字符串拼接，
+        // 先去掉拼接符 `+'` 与字符串定界单引号后对账
+        let font = nospace(&css_var(COMMON_CSS, "dshd-font"));
+        let mask_font_n = mask_n.replace("+'", "").replace('\'', "");
+        assert!(
+            mask_font_n.contains(&font),
+            "遮罩字体栈与 common.css --dshd-font 漂移：{font}"
+        );
     }
 
     #[test]

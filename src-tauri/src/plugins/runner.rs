@@ -197,8 +197,23 @@ fn run_dsh_plugin_auto_with_intent(
     let mutation_spec = mutation.and_then(|_| args.get(1)).copied();
     let mutation_package = mutation_spec.and_then(super::spec_package_name);
     let manifest_path = config.dsh_home().join("profiles/web/package.json");
-    let original_manifest =
-        mutation_spec.and_then(|_| std::fs::read_to_string(&manifest_path).ok());
+    // 快照读失败区分两种：文件不存在（合法——批次语义保留「原本就没有」）
+    // 与瞬时 IO 错误（如杀软占用）。后者若也当 None 走下去，失败分支会既不
+    // 回滚也不清事务标记，标记滞留 ready_for_next=false 锁死本会话的全部
+    // 插件操作——直接拒绝本次操作，不留任何状态。
+    let mut original_manifest: Option<String> = None;
+    if mutation_spec.is_some() {
+        original_manifest = match std::fs::read_to_string(&manifest_path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(crate::locale::owned(
+                    format!("读取 package.json 失败：{e}"),
+                    format!("Failed to read package.json: {e}"),
+                ));
+            }
+        };
+    }
     let previous_marker = super::transaction::install_marker(&config);
     if let (Some(kind), Some(spec)) = (mutation, mutation_spec) {
         super::save_install_marker(

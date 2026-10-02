@@ -49,8 +49,8 @@ fn read_full_limited(path: &Path, max_total: usize) -> Result<String, String> {
             // 自描述的：`zstd::bulk::decompress` 只解一个完整帧，返回帧消耗。
             // 但该 API 不解码到「剩余字节偏移」。这里改用流式解码器以获得
             // 精确帧边界。
-            match decode_one_frame(&raw[cursor..]) {
-                Some((text, consumed)) => {
+            match decode_one_frame(&raw[cursor..], MAX_FRAME_DECOMPRESSED) {
+                FrameOutcome::Frame(text, consumed) => {
                     if out.len() + text.len() > max_total {
                         return Err(format!(
                             "会话日志解压总量超过上限（{} MiB）",
@@ -63,7 +63,16 @@ fn read_full_limited(path: &Path, max_total: usize) -> Result<String, String> {
                     cursor += consumed;
                     continue;
                 }
-                None => cursor += 1, // 伪 magic，当作帧内字节
+                FrameOutcome::NotFrame => cursor += 1, // 伪 magic，当作帧内字节
+                FrameOutcome::Oversized => {
+                    // 帧边界未知（超限时未解完），逐字节重扫找到下一帧起点
+                    log_dropped_frame(path, cursor, "解压超过单帧上限");
+                    cursor += 1;
+                }
+                FrameOutcome::BadUtf8(consumed) => {
+                    log_dropped_frame(path, cursor, "不是有效的 UTF-8");
+                    cursor += consumed;
+                }
             }
         } else {
             cursor += 1;
@@ -72,14 +81,30 @@ fn read_full_limited(path: &Path, max_total: usize) -> Result<String, String> {
     Ok(out)
 }
 
-/// 解码从 `bytes` 起始的一个 zstd 帧，返回 (解压文本, 该帧字节长度)。
-/// 使用流式解码器并置于 single_frame 模式，读到帧尾即停，可拿到精确
-/// 帧边界（`Decoder` 底层 Cursor 的位置就是消耗的原始字节数）。
-fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
+/// 单帧解码结果。
+///
+/// `Frame`：成功（解压文本 + 帧字节长度）。`NotFrame`：伪 magic / 撕裂
+/// 尾帧 / 解码错误——候选不是可解码帧起点，按帧内字节跳过，非数据损失。
+/// `Oversized` / `BadUtf8`：候选是合法帧但内容无法纳入统计（解压超上限 /
+/// 非 UTF-8），是真实数据损失，调用方必须留痕后跳过，不得静默吞掉。
+#[derive(Debug)]
+enum FrameOutcome {
+    Frame(String, usize),
+    NotFrame,
+    Oversized,
+    BadUtf8(usize),
+}
+
+/// 解码从 `bytes` 起始的一个 zstd 帧。使用流式解码器并置于 single_frame
+/// 模式，读到帧尾即停，可拿到精确帧边界（`Decoder` 底层 Cursor 的位置
+/// 就是消耗的原始字节数）。`max_frame` 为单帧解压上限（生产用
+/// [`MAX_FRAME_DECOMPRESSED`]，注入小值便于测试）。
+fn decode_one_frame(bytes: &[u8], max_frame: usize) -> FrameOutcome {
     let mut cursor = std::io::Cursor::new(bytes);
-    let mut decoder = zstd::stream::read::Decoder::with_buffer(&mut cursor)
-        .ok()?
-        .single_frame();
+    let mut decoder = match zstd::stream::read::Decoder::with_buffer(&mut cursor) {
+        Ok(decoder) => decoder.single_frame(),
+        Err(_) => return FrameOutcome::NotFrame,
+    };
     // 整帧解码为字节后一次性 from_utf8（对照 session_log.rs 的整帧范式）：
     // 逐块 from_utf8_lossy 会把跨 64KB 块边界的多字节字符拆成 U+FFFD。
     let mut decoded = Vec::new();
@@ -89,20 +114,30 @@ fn decode_one_frame(bytes: &[u8]) -> Option<(String, usize)> {
             Ok(0) => break,
             Ok(n) => {
                 decoded.extend_from_slice(&buf[..n]);
-                if decoded.len() > MAX_FRAME_DECOMPRESSED {
-                    return None;
+                if decoded.len() > max_frame {
+                    return FrameOutcome::Oversized;
                 }
             }
-            Err(_) => return None,
+            Err(_) => return FrameOutcome::NotFrame,
         }
     }
     // 读取结束（帧尾），cursor 停留在该帧之后。
     let consumed = cursor.position() as usize;
     if consumed == 0 {
-        return None;
+        return FrameOutcome::NotFrame;
     }
-    let text = String::from_utf8(decoded).ok()?;
-    Some((text, consumed))
+    match String::from_utf8(decoded) {
+        Ok(text) => FrameOutcome::Frame(text, consumed),
+        Err(_) => FrameOutcome::BadUtf8(consumed),
+    }
+}
+
+/// 数据损失类帧（超限/坏 UTF-8）留痕：静默跳过会让用量无声少计且无从排查。
+fn log_dropped_frame(path: &Path, offset: usize, reason: &str) {
+    crate::logging::log(&format!(
+        "usage: 会话日志 {} 偏移 {offset} 处的 zstd 帧{reason}，该帧未计入统计",
+        path.display()
+    ));
 }
 
 /// 从字节偏移起增量解码：只处理 `offset` 之后的**完整** zstd 帧，返回
@@ -135,8 +170,8 @@ pub(crate) fn read_frames_from(path: &Path, offset: u64) -> Result<(String, u64)
     let mut safe = 0usize;
     while cursor + 4 <= raw.len() {
         if raw[cursor..cursor + 4] == ZSTD_MAGIC {
-            match decode_one_frame(&raw[cursor..]) {
-                Some((text, consumed)) => {
+            match decode_one_frame(&raw[cursor..], MAX_FRAME_DECOMPRESSED) {
+                FrameOutcome::Frame(text, consumed) => {
                     if out.len() + text.len() > MAX_TOTAL_DECOMPRESSED {
                         return Err(format!(
                             "会话日志解压总量超过上限（{} MiB）",
@@ -149,7 +184,17 @@ pub(crate) fn read_frames_from(path: &Path, offset: u64) -> Result<(String, u64)
                     safe = cursor;
                     continue;
                 }
-                None => cursor += 1, // 伪 magic 或撕裂尾帧
+                FrameOutcome::NotFrame => cursor += 1, // 伪 magic 或撕裂尾帧
+                FrameOutcome::Oversized => {
+                    log_dropped_frame(path, offset as usize + cursor, "解压超过单帧上限");
+                    cursor += 1;
+                }
+                FrameOutcome::BadUtf8(consumed) => {
+                    log_dropped_frame(path, offset as usize + cursor, "不是有效的 UTF-8");
+                    // 坏帧本身是完整帧：越过它并推进安全偏移，下一轮不再重读
+                    cursor += consumed;
+                    safe = cursor;
+                }
             }
         } else {
             cursor += 1;
@@ -402,10 +447,52 @@ two
         let path = temp_log("cap");
         let mut stream = zstd::encode_all("one\n".as_bytes(), 3).unwrap();
         stream.extend_from_slice(&zstd::encode_all("two\n".as_bytes(), 3).unwrap());
-        std::fs::write(&path, stream).unwrap();
+        std::fs::write(&path, &stream).unwrap();
         // 两帧各 4 字节：上限 6 时第二帧触发报错，上限 8 时完整读出。
         assert!(read_full_limited(&path, 6).is_err());
         assert_eq!(read_full_limited(&path, 8).unwrap(), "one\ntwo\n");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn decode_one_frame_classifies_data_loss_variants() {
+        use super::{decode_one_frame, FrameOutcome};
+        let frame = zstd::encode_all("one\n".as_bytes(), 3).unwrap();
+        // 单帧上限压到 3：4 字节文本帧判 Oversized；正常上限判 Frame
+        assert!(matches!(
+            decode_one_frame(&frame, 3),
+            FrameOutcome::Oversized
+        ));
+        assert!(matches!(
+            decode_one_frame(&frame, 16),
+            FrameOutcome::Frame(..)
+        ));
+        // 解压成功但非 UTF-8：BadUtf8 且携带完整帧边界
+        let bad = zstd::encode_all([0xFF, 0xFE].as_slice(), 3).unwrap();
+        match decode_one_frame(&bad, 16) {
+            FrameOutcome::BadUtf8(consumed) => assert_eq!(consumed, bad.len()),
+            other => panic!("应为 BadUtf8，实际 {other:?}"),
+        }
+        // 伪 magic / 乱字节：非帧起点，不属数据损失
+        assert!(matches!(
+            decode_one_frame(&[0x28, 0xB5, 0x2F, 0xFD, 0x00], 16),
+            FrameOutcome::NotFrame
+        ));
+    }
+
+    #[test]
+    fn bad_utf8_frame_is_skipped_whole_and_neighbors_kept() {
+        let path = temp_log("badframe");
+        let mut stream = zstd::encode_all("one\n".as_bytes(), 3).unwrap();
+        stream.extend_from_slice(&zstd::encode_all([0xFF, 0xFE].as_slice(), 3).unwrap());
+        stream.extend_from_slice(&zstd::encode_all("two\n".as_bytes(), 3).unwrap());
+        std::fs::write(&path, &stream).unwrap();
+        // 全量与增量路径：坏帧整帧跳过，前后正常帧全部保留
+        assert_eq!(read_full(&path).unwrap(), "one\ntwo\n");
+        let (text, off) = super::read_frames_from(&path, 0).unwrap();
+        assert_eq!(text, "one\ntwo\n");
+        // 坏帧是完整帧：安全偏移越过它推进到文件尾
+        assert_eq!(off as usize, stream.len());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

@@ -529,12 +529,14 @@ pub(crate) fn run() {
                 // 标题栏失焦样式跟随主窗口焦点：子 webview 的 window
                 // focus/blur 事件与主窗口焦点并不同步（WebView2 行为），
                 // 由 Rust 侧统一广播，页面侧按此切换样式
-                for label in [crate::titlebar::TITLEBAR_LABEL] {
-                    if let Some(wv) = window.webviews().into_iter().find(|w| w.label() == label) {
-                        let _ = wv.eval(format!(
-                            "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
-                        ));
-                    }
+                if let Some(wv) = window
+                    .webviews()
+                    .into_iter()
+                    .find(|w| w.label() == crate::titlebar::TITLEBAR_LABEL)
+                {
+                    let _ = wv.eval(format!(
+                        "window.__dshdSetWindowActive && window.__dshdSetWindowActive({focused})"
+                    ));
                 }
                 if focused {
                     // 获焦时触发重绘脉冲：合成层失效导致的标题栏空白

@@ -361,9 +361,11 @@ impl AppState {
         *RETRY_RX.lock().unwrap_or_else(|e| e.into_inner()) = Some(retry_rx);
         let config = Config::load();
         // 清理上次进程中断可能残留的原子写临时文件（仅匹配 `.dshbox-*.tmp`
-        // 命名，dsh 自有文件不受影响）；配置目录与 dsh 主目录都有写操作。
+        // 命名，dsh 自有文件不受影响）；配置目录、dsh 主目录与 profile 目录
+        // （package.json / cordis.patch.yml 的原子写落点）都有写操作。
         managed_file::cleanup_stale_temp_files(&config.root);
         managed_file::cleanup_stale_temp_files(config.dsh_home());
+        managed_file::cleanup_stale_temp_files(&config.dsh_home().join("profiles/web"));
         let language_override = std::env::var("DSHD_LANG").ok();
         // 语言解析优先级：DSHD_LANG 环境变量 > dsh 设置的 locale 偏好
         // > config.json 的 language > 系统界面语言。dsh 偏好放在 config 之前，
@@ -816,6 +818,9 @@ impl AppState {
     pub fn set_external_service(&self, service: ExternalServiceCandidate) {
         let mut g = self.lock_inner();
         g.config.port = service.port;
+        // 外部服务的鉴权 token 由其原环境持有：清掉本地托管服务残留的
+        // token，防止导航/浏览器打开的 URL 拼上陈旧 token
+        g.config.auth_token = None;
         g.service_ownership = ServiceOwnership::External;
         g.external_service = Some(service);
     }

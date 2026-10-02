@@ -97,7 +97,21 @@ pub fn boot_loop(app: AppHandle) {
 /// 信号通道缺失时（不应发生）退化为延时自动重试，避免空转热循环。
 fn wait_retry(app: &AppHandle, rx: Option<&std::sync::mpsc::Receiver<()>>) {
     if let Some(rx) = rx {
-        let _ = rx.recv();
+        // 排空积压的陈旧信号：服务重启成功（插件维护收敛、更新后恢复）都会
+        // signal_retry，彼时无人等待（boot_loop 在看门狗/引导中），滞留信号
+        // 会把刚进入的等待页立即假唤醒，绕过用户操作自行重跑引导。
+        while rx.try_recv().is_ok() {}
+        // 按进入时的等待阶段轮询（Error=引导失败等重试；Cancelled=安装取消
+        // 等重装）：阶段被外部流程改离（重启成功置 Ready、切换服务置
+        // SwitchingService）即引导权已被接管，最长 500ms 内退出重入引导——
+        // 既兜底排空窗口里被吞的接管类信号，也保持取消页等待语义不变
+        //（取消页唤醒只来自用户点击，不伴随阶段变化）。
+        let wait_phase = app.state::<AppState>().phase();
+        while app.state::<AppState>().phase() == wait_phase {
+            if rx.recv_timeout(Duration::from_millis(500)).is_ok() {
+                break;
+            }
+        }
     } else {
         std::thread::sleep(Duration::from_secs(3));
     }
@@ -432,7 +446,6 @@ fn boot_inner(app: &AppHandle) -> Result<(), String> {
         );
         emit_status(app, BootPhase::Starting, message, "");
     } else {
-        config.port = requested_port;
         state.set_port(requested_port);
     }
     let starting_server = crate::locale::text("正在启动 dsh 服务…", "Starting the dsh service…");

@@ -126,21 +126,35 @@ pub(crate) fn download_client() -> ureq::Agent {
 }
 
 /// 读取一个小 URL 到字符串（供版本检查等使用；短超时快速失败）。
+/// 限量 8MB：Node 索引约 1MB、DSH_PACKAGE_META 全量包元数据可达 MB 级，
+/// 超限响应按错误处理（防御异常超大响应；静默截断的 JSON 只会在解析处
+/// 报出与真实原因无关的错误）。
 fn get_text(url: &str) -> Result<String, String> {
+    const BODY_LIMIT: usize = 8 * 1024 * 1024;
     let resp = check_client().get(url).call().map_err(|e| {
         format!(
             "{}: {e}",
             crate::locale::text("网络请求失败", "Network request failed")
         )
     })?;
-    let mut reader = resp.into_body().into_reader();
+    let reader = resp.into_body().into_reader();
     let mut s = String::new();
-    reader.read_to_string(&mut s).map_err(|e| {
-        format!(
-            "{}: {e}",
-            crate::locale::text("读取响应失败", "Failed to read the response")
+    reader
+        .take(BODY_LIMIT as u64 + 1)
+        .read_to_string(&mut s)
+        .map_err(|e| {
+            format!(
+                "{}: {e}",
+                crate::locale::text("读取响应失败", "Failed to read the response")
+            )
+        })?;
+    if s.len() > BODY_LIMIT {
+        return Err(crate::locale::text(
+            "响应超过大小上限。",
+            "The response exceeds the size limit.",
         )
-    })?;
+        .to_string());
+    }
     Ok(s)
 }
 
