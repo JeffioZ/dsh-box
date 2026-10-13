@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **The official desktop app is out — DSHBox has served its purpose.** This project started because DeepSeek Harness only had a Web UI and a CLI; now that an official desktop app exists, we recommend using it instead: **[https://www.deepseek.com/harness/](https://www.deepseek.com/harness/)**
+>
+> Existing releases still work and remain available for download, but no new features are planned. Thanks for riding along.
+
 # DSHBox
 
 <p align="center">

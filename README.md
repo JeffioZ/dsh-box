@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **DeepSeek 官方桌面版已发布，DSHBox 使命完成。** 当初做这个项目，是因为 dsh 只有 Web 和 CLI；现在官方有了桌面版，推荐直接使用：**[https://www.deepseek.com/harness/](https://www.deepseek.com/harness/)**
+>
+> 已发布的版本仍可正常使用与下载，但不会再开发新功能。谢谢大家。
+
 # DSHBox
 
 <p align="center">
