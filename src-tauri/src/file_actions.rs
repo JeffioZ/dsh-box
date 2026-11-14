@@ -122,16 +122,19 @@ pub fn is_potentially_executable(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if dangerous_extension(&ext, current_platform()) {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
+    dangerous_extension(&ext, current_platform()) || has_executable_bit(path)
+}
+
+/// Unix 上按可执行位判定；非 Unix 平台扩展名检查已是全部依据。
+#[cfg(unix)]
+fn has_executable_bit(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn has_executable_bit(_path: &Path) -> bool {
     false
 }
 
