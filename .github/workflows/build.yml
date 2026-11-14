@@ -68,9 +68,9 @@ jobs:
             target: x86_64-pc-windows-msvc
             cross: ""
             timeout: 45
-          # macos-14 为 Apple Silicon runner；x86_64 在其上交叉编译（不再依赖
-          # 濒临退役、排队极慢的 macos-13 Intel runner）
-          - os: macos-14
+          # macos-15 为 Apple Silicon runner；x86_64 在其上交叉编译（macos-14
+          # 镜像 2026-11-02 退役，收尾期就近平移、不跟随 latest）
+          - os: macos-15
             name: macos-arm64
             asset: macos-arm64
             target: aarch64-apple-darwin
